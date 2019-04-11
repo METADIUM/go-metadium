@@ -1,24 +1,22 @@
 // Copyright 2018 The go-ethereum Authors
-// This file is part of go-ethereum.
+// This file is part of the go-ethereum library.
 //
-// go-ethereum is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// The go-ethereum library is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// go-ethereum is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
+// GNU Lesser General Public License for more details.
 //
-// You should have received a copy of the GNU General Public License
-// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
+// You should have received a copy of the GNU Lesser General Public License
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-package core
+package fourbyte
 
 import (
-	"fmt"
-	"io/ioutil"
 	"math/big"
 	"reflect"
 	"strings"
@@ -29,7 +27,6 @@ import (
 )
 
 func verify(t *testing.T, jsondata, calldata string, exp []interface{}) {
-
 	abispec, err := abi.JSON(strings.NewReader(jsondata))
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +50,7 @@ func verify(t *testing.T, jsondata, calldata string, exp []interface{}) {
 		}
 	}
 }
+
 func TestNewUnpacker(t *testing.T) {
 	type unpackTest struct {
 		jsondata string
@@ -96,11 +94,9 @@ func TestNewUnpacker(t *testing.T) {
 	for _, c := range testcases {
 		verify(t, c.jsondata, c.calldata, c.exp)
 	}
-
 }
 
 func TestCalldataDecoding(t *testing.T) {
-
 	// send(uint256)                              : a52c101e
 	// compareAndApprove(address,uint256,uint256) : 751e1079
 	// issue(address[],uint256)                   : 42958b54
@@ -111,7 +107,7 @@ func TestCalldataDecoding(t *testing.T) {
 	{"type":"function","name":"issue","inputs":[{"name":"a","type":"address[]"},{"name":"a","type":"uint256"}]},
 	{"type":"function","name":"sam","inputs":[{"name":"a","type":"bytes"},{"name":"a","type":"bool"},{"name":"a","type":"uint256[]"}]}
 ]`
-	//Expected failures
+	// Expected failures
 	for i, hexdata := range []string{
 		"a52c101e00000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000042",
 		"a52c101e000000000000000000000000000000000000000000000000000000000000001200",
@@ -122,9 +118,9 @@ func TestCalldataDecoding(t *testing.T) {
 		// Too short
 		"751e10790000000000000000000000000000000000000000000000000000000000000012",
 		"751e1079FFffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-		//Not valid multiple of 32
+		// Not valid multiple of 32
 		"deadbeef00000000000000000000000000000000000000000000000000000000000000",
-		//Too short 'issue'
+		// Too short 'issue'
 		"42958b5400000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000042",
 		// Too short compareAndApprove
 		"a52c101e00ff0000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000042",
@@ -137,7 +133,7 @@ func TestCalldataDecoding(t *testing.T) {
 			t.Errorf("test %d: expected decoding to fail: %s", i, hexdata)
 		}
 	}
-	//Expected success
+	// Expected success
 	for i, hexdata := range []string{
 		// From https://github.com/ethereum/wiki/wiki/Ethereum-Contract-ABI
 		"a5643bf20000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000464617665000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000003",
@@ -147,7 +143,7 @@ func TestCalldataDecoding(t *testing.T) {
 		"42958b54" +
 			// start of dynamic type
 			"0000000000000000000000000000000000000000000000000000000000000040" +
-			//uint256
+			// uint256
 			"0000000000000000000000000000000000000000000000000000000000000001" +
 			// length of  array
 			"0000000000000000000000000000000000000000000000000000000000000002" +
@@ -162,79 +158,7 @@ func TestCalldataDecoding(t *testing.T) {
 	}
 }
 
-func TestSelectorUnmarshalling(t *testing.T) {
-	var (
-		db        *AbiDb
-		err       error
-		abistring []byte
-		abistruct abi.ABI
-	)
-
-	db, err = NewAbiDBFromFile("../../cmd/clef/4byte.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("DB size %v\n", db.Size())
-	for id, selector := range db.db {
-
-		abistring, err = MethodSelectorToAbi(selector)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		abistruct, err = abi.JSON(strings.NewReader(string(abistring)))
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		m, err := abistruct.MethodById(common.Hex2Bytes(id[2:]))
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		if m.Sig() != selector {
-			t.Errorf("Expected equality: %v != %v", m.Sig(), selector)
-		}
-	}
-
-}
-
-func TestCustomABI(t *testing.T) {
-	d, err := ioutil.TempDir("", "signer-4byte-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	filename := fmt.Sprintf("%s/4byte_custom.json", d)
-	abidb, err := NewAbiDBFromFiles([]byte(""), filename)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Now we'll remove all existing signatures
-	abidb.db = make(map[string]string)
-	calldata := common.Hex2Bytes("a52c101edeadbeef")
-	_, err = abidb.LookupMethodSelector(calldata)
-	if err == nil {
-		t.Fatalf("Should not find a match on empty db")
-	}
-	if err = abidb.AddSignature("send(uint256)", calldata); err != nil {
-		t.Fatalf("Failed to save file: %v", err)
-	}
-	_, err = abidb.LookupMethodSelector(calldata)
-	if err != nil {
-		t.Fatalf("Should find a match for abi signature, got: %v", err)
-	}
-	//Check that it wrote to file
-	abidb2, err := NewAbiDBFromFile(filename)
-	if err != nil {
-		t.Fatalf("Failed to create new abidb: %v", err)
-	}
-	_, err = abidb2.LookupMethodSelector(calldata)
-	if err != nil {
-		t.Fatalf("Save failed: should find a match for abi signature after loading from disk")
-	}
-}
-
-func TestMaliciousAbiStrings(t *testing.T) {
+func TestMaliciousABIStrings(t *testing.T) {
 	tests := []string{
 		"func(uint256,uint256,[]uint256)",
 		"func(uint256,uint256,uint256,)",
@@ -242,7 +166,7 @@ func TestMaliciousAbiStrings(t *testing.T) {
 	}
 	data := common.Hex2Bytes("4401a6e40000000000000000000000000000000000000000000000000000000000000012")
 	for i, tt := range tests {
-		_, err := testSelector(tt, data)
+		_, err := verifySelector(tt, data)
 		if err == nil {
 			t.Errorf("test %d: expected error for selector '%v'", i, tt)
 		}
