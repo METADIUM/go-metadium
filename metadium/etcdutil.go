@@ -444,6 +444,21 @@ func (ma *metaAdmin) etcdLeader(locked bool) (uint64, *metaNode) {
 	return 0, nil
 }
 
+func (ma *metaAdmin) etcdCompact(rev int64) error {
+	if !ma.etcdIsRunning() {
+		return ErrNotRunning
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(),
+		ma.etcd.Server.Cfg.ReqTimeout())
+	defer cancel()
+	_, err := ma.etcdCli.Compact(ctx, rev)
+	// TODO
+	// * go-routine at admin.go#L1096
+	// * options: physical true? false?
+	return err
+}
+
 func (ma *metaAdmin) etcdPut(key, value string) error {
 	if !ma.etcdIsRunning() {
 		return ErrNotRunning

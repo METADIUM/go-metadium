@@ -1101,6 +1101,10 @@ func LogBlock(height int64, hash common.Hash) {
 			"height", height, "hash", hash, "took", time.Since(tstart))
 	}
 
+	//
+	// TODO: etcd_compact
+	//
+
 	admin.blocksMined++
 	height++
 	if admin.blocksMined >= admin.blocksPer &&
