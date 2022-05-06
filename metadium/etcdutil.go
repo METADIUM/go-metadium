@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coreos/etcd/clientv3"
 	"github.com/coreos/etcd/embed"
 	"github.com/coreos/etcd/etcdserver/api/membership"
 	"github.com/coreos/etcd/etcdserver/api/v3client"
@@ -452,23 +453,23 @@ func (ma *metaAdmin) etcdCompact(rev int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(),
 		ma.etcd.Server.Cfg.ReqTimeout())
 	defer cancel()
-	_, err := ma.etcdCli.Compact(ctx, rev)
-	// TODO
-	// * go-routine at admin.go#L1096
-	// * options: physical true? false?
+	_, err := ma.etcdCli.Compact(ctx, rev, clientv3.WithCompactPhysical())
+	// WithCompactPhysical makes Compact wait until all compacted entries are
+	// removed from the etcd server's storage.
 	return err
 }
 
-func (ma *metaAdmin) etcdPut(key, value string) error {
+func (ma *metaAdmin) etcdPut(key, value string) (int64, error) {
 	if !ma.etcdIsRunning() {
-		return ErrNotRunning
+		return 0, ErrNotRunning
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(),
 		ma.etcd.Server.Cfg.ReqTimeout())
 	defer cancel()
-	_, err := ma.etcdCli.Put(ctx, key, value)
-	return err
+	// _, err := ma.etcdCli.Put(ctx, key, value)
+	resp, err := ma.etcdCli.Put(ctx, key, value)
+	return resp.Header.Revision, err
 }
 
 func (ma *metaAdmin) etcdGet(key string) (string, error) {

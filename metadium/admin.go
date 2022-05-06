@@ -1093,17 +1093,21 @@ func LogBlock(height int64, hash common.Hash) {
 	}
 
 	tstart := time.Now()
-	if err := admin.etcdPut("metadium-work", string(work)); err != nil {
+	rev, err := admin.etcdPut("metadium-work", string(work))
+	if err != nil {
 		log.Error("Metadium - failed to log the latest block",
 			"height", height, "hash", hash, "took", time.Since(tstart))
 	} else {
 		log.Info("Metadium - logged the latest block",
 			"height", height, "hash", hash, "took", time.Since(tstart))
-	}
 
-	//
-	// TODO: etcd_compact
-	//
+		if rev%100 == 0 {
+			if err := admin.etcdCompact(rev); err != nil {
+				log.Error("Metadium - failed to compact",
+					"rev", rev, "took", time.Since(tstart))
+			}
+		}
+	}
 
 	admin.blocksMined++
 	height++
