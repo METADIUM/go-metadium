@@ -104,6 +104,7 @@ var (
 	ErrInvalidEnode   = errors.New("invalid enode")
 
 	etcdCompactFrequency = int64(100)
+	etcdCompactWindow    = int64(100)
 )
 
 func (n *metaNode) eq(m *metaNode) bool {
@@ -1094,7 +1095,7 @@ func LogBlock(height int64, hash common.Hash) {
 		log.Info("Metadium - logged the latest block",
 			"height", height, "hash", hash, "took", time.Since(tstart))
 
-		if (rev%etcdCompactFrequency == 0) && (rev > 100) {
+		if (rev%etcdCompactFrequency == 0) && (rev > etcdCompactWindow) {
 			go func() {
 				if err := admin.etcdCompact(rev); err != nil {
 					log.Error("Metadium - failed to compact",
