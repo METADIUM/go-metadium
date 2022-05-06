@@ -1104,10 +1104,12 @@ func LogBlock(height int64, hash common.Hash) {
 			"height", height, "hash", hash, "took", time.Since(tstart))
 
 		if rev%etcdCompactFrequency == 0 {
-			if err := admin.etcdCompact(rev); err != nil {
-				log.Error("Metadium - failed to compact",
-					"rev", rev, "took", time.Since(tstart))
-			}
+			go func() {
+				if err := admin.etcdCompact(rev); err != nil {
+					log.Error("Metadium - failed to compact",
+						"rev", rev, "took", time.Since(tstart))
+				}
+			}()
 		}
 	}
 
