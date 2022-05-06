@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coreos/etcd/clientv3"
 	"github.com/coreos/etcd/embed"
 	"github.com/coreos/etcd/etcdserver/api/membership"
 	"github.com/coreos/etcd/etcdserver/api/v3client"
@@ -442,16 +443,16 @@ func (ma *metaAdmin) etcdLeader(locked bool) (uint64, *metaNode) {
 	return 0, nil
 }
 
-func (ma *metaAdmin) etcdPut(key, value string) error {
+func (ma *metaAdmin) etcdPut(key, value string) (int64, error) {
 	if !ma.etcdIsRunning() {
-		return ErrNotRunning
+		return 0, ErrNotRunning
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(),
 		ma.etcd.Server.Cfg.ReqTimeout())
 	defer cancel()
-	_, err := ma.etcdCli.Put(ctx, key, value)
-	return err
+	resp, err := ma.etcdCli.Put(ctx, key, value)
+	return resp.Header.Revision, err
 }
 
 func (ma *metaAdmin) etcdGet(key string) (string, error) {
@@ -484,6 +485,20 @@ func (ma *metaAdmin) etcdDelete(key string) error {
 		ma.etcd.Server.Cfg.ReqTimeout())
 	defer cancel()
 	_, err := ma.etcdCli.Delete(ctx, key)
+	return err
+}
+
+func (ma *metaAdmin) etcdCompact(rev int64) error {
+	if !ma.etcdIsRunning() {
+		return ErrNotRunning
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(),
+		ma.etcd.Server.Cfg.ReqTimeout())
+	defer cancel()
+	_, err := ma.etcdCli.Compact(ctx, rev, clientv3.WithCompactPhysical())
+	// WithCompactPhysical makes Compact wait until all compacted entries are
+	// removed from the etcd server's storage.
 	return err
 }
 
