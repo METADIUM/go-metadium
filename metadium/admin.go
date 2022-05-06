@@ -103,6 +103,8 @@ var (
 
 	ErrNotRunning     = errors.New("Not Running")
 	ErrAlreadyRunning = errors.New("Already Running")
+
+	etcdCompactFrequency = int64(100)
 )
 
 func (n *metaNode) eq(m *metaNode) bool {
@@ -1101,7 +1103,7 @@ func LogBlock(height int64, hash common.Hash) {
 		log.Info("Metadium - logged the latest block",
 			"height", height, "hash", hash, "took", time.Since(tstart))
 
-		if rev%100 == 0 {
+		if rev%etcdCompactFrequency == 0 {
 			if err := admin.etcdCompact(rev); err != nil {
 				log.Error("Metadium - failed to compact",
 					"rev", rev, "took", time.Since(tstart))
