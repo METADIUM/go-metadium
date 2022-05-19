@@ -16,7 +16,9 @@
 
 package params
 
-import "math/big"
+import (
+	"math/big"
+)
 
 const (
 	GasLimitBoundDivisor uint64 = 1024               // The bound divisor of the gas limit, used in update calculations.
@@ -191,5 +193,8 @@ var (
 	UseRocksDb     int    = 1    // LevelDB (0) or RocksDB (1)
 	PrefetchCount  int    = 0    // Transaction Prefetch count for faster db read
 	MaxTxsPerBlock int    = 5000 // Max # of transactions in a block
-	Hub            string = ""   // Hub's id
+
+	// Hub       string          = "" // Hub's id
+	RegionHubs []string      // Multi-region hub's id (1~) (default: nil, equivalent to a zero-length slice)
+	RegionHub  string   = "" // Region hub's id where I am connected
 )
