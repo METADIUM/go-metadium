@@ -231,7 +231,9 @@ var AppHelpFlagGroups = []flags.FlagGroup{
 			utils.PrefetchCount,
 			utils.LogFlag,
 			utils.MaxTxsPerBlock,
-			utils.Hub,
+			// utils.Hub,
+			utils.RegionHubs,
+			utils.RegionHub,
 		},
 	},
 	{

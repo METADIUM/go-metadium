@@ -846,10 +846,20 @@ var (
 		Usage: "Max # of transactions in a block",
 		Value: params.MaxTxsPerBlock,
 	}
-	Hub = cli.StringFlag{
-		Name:  "hub",
-		Usage: "Id of message hub",
-		Value: params.Hub,
+	// Hub = cli.StringFlag{
+	// 	Name:  "hub",
+	// 	Usage: "Id of message hub",
+	// 	Value: params.Hub,
+	// }
+	RegionHubs = cli.StringSliceFlag{
+		Name:  "regionhubs",
+		Usage: "Id of message hub (region)",
+		// Value: nil,
+	}
+	RegionHub = cli.StringFlag{
+		Name:  "regionhub",
+		Usage: "Id of message hub (region) where I am connected",
+		Value: params.RegionHub,
 	}
 )
 
@@ -1804,8 +1814,14 @@ func SetMetadiumConfig(ctx *cli.Context, stack *node.Node, cfg *eth.Config) {
 	if ctx.GlobalIsSet(MaxTxsPerBlock.Name) {
 		params.MaxTxsPerBlock = ctx.GlobalInt(MaxTxsPerBlock.Name)
 	}
-	if ctx.GlobalIsSet(Hub.Name) {
-		params.Hub = ctx.GlobalString(Hub.Name)
+	// if ctx.GlobalIsSet(Hub.Name) {
+	// 	params.Hub = ctx.GlobalString(Hub.Name)
+	// }
+	if ctx.GlobalIsSet(RegionHubs.Name) {
+		params.RegionHubs = ctx.GlobalStringSlice(RegionHubs.Name)
+	}
+	if ctx.GlobalIsSet(RegionHub.Name) {
+		params.RegionHub = ctx.GlobalString(RegionHub.Name)
 	}
 
 	if params.ConsensusMethod == params.ConsensusInvalid {

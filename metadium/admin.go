@@ -1038,18 +1038,35 @@ func IsPartner(id string) bool {
 }
 
 // id is v4 id
-func AmHub(id string) int {
+// func AmHub(id string) int {
+// 	if admin == nil || admin.self == nil {
+// 		return -1
+// 	}
+//
+// 	admin.lock.Lock()
+// 	defer admin.lock.Unlock()
+//
+// 	if strings.HasPrefix(strings.ToUpper(admin.self.Id), strings.ToUpper(id)) {
+// 		return 1
+// 	} else {
+// 		return 0
+// 	}
+// }
+
+func AmRegionHub(ids []string) int {
 	if admin == nil || admin.self == nil {
 		return -1
 	}
 
 	admin.lock.Lock()
 	defer admin.lock.Unlock()
-	if strings.HasPrefix(strings.ToUpper(admin.self.Id), strings.ToUpper(id)) {
-		return 1
-	} else {
-		return 0
+
+	for index, id := range ids {
+		if strings.HasPrefix(strings.ToUpper(admin.self.Id), strings.ToUpper(id)) {
+			return index + 1 // start from 1
+		}
 	}
+	return 0
 }
 
 func (ma *metaAdmin) pendingEmpty() bool {
@@ -1444,7 +1461,8 @@ func init() {
 	metaminer.IsMinerFunc = IsMiner
 	metaminer.AmPartnerFunc = AmPartner
 	metaminer.IsPartnerFunc = IsPartner
-	metaminer.AmHubFunc = AmHub
+	// metaminer.AmHubFunc = AmHub
+	metaminer.AmRegionHubFunc = AmRegionHub
 	metaminer.LogBlockFunc = LogBlock
 	metaminer.SuggestGasPriceFunc = suggestGasPrice
 	metaminer.CalculateRewardsFunc = calculateRewards

@@ -273,7 +273,7 @@ func (ps *peerSet) peerList() []*ethPeer {
 
 // hub subsystem
 var (
-	isHub int = -1 //  -1: unset, 1: hub, 0: not hub
+	isHub int = -1 //  -1: unset, 0: not hub, 1~: region hub
 )
 
 // peersWithoutTransaction2 retrieves a list of peers that do not have a given
@@ -283,24 +283,41 @@ func (ps *peerSet) peersWithoutTransaction2(hash common.Hash) []*ethPeer {
 		return ps.peersWithoutTransaction(hash)
 	}
 
+	// if unset
 	if isHub == -1 {
-		isHub = metaminer.AmHub(params.Hub)
+		// isHub = metaminer.AmHub(params.Hub)
+		isHub = metaminer.AmRegionHub(params.RegionHubs)
 	}
 
-	if isHub == 0 {
-		// send it to the hub if it did not come from there
-		ps.lock.RLock()
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	if isHub == 0 { // if not hub
+		// send it to the region hub if it did not come from there
+		var list []*ethPeer
 		for _, p := range ps.peers {
-			if p.ID() == params.Hub {
-				var list []*ethPeer
+			if p.ID() == params.RegionHub {
 				if !p.KnownTransaction(hash) {
 					list = append(list, p)
 				}
-				ps.lock.RUnlock()
-				return list
+				break
 			}
 		}
-		ps.lock.RUnlock()
+		return list
+	} else if isHub > 0 { // region hub
+		// send it to the other region hubs if it did not come from there
+		var list []*ethPeer
+		for _, p := range ps.peers {
+			for _, regionHub := range params.RegionHubs {
+				if p.ID() == regionHub {
+					if !p.KnownTransaction(hash) {
+						list = append(list, p)
+					}
+					break
+				}
+			}
+		}
+		return list
 	}
 
 	// fall back
