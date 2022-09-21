@@ -356,14 +356,18 @@ func (ma *metaAdmin) getRewardAccounts(ctx context.Context, block *big.Int) (rew
 
 	input = []interface{}{metclient.ToBytes32("RewardPool")}
 	err = metclient.CallContract(ctx, ma.registry, "getContractAddress", input, &addr, block)
-	if err == nil {
+	if err != nil {
+		return
+	} else {
 		rewardPoolAccount = &common.Address{}
 		rewardPoolAccount.SetBytes(addr.Bytes())
 	}
 
 	input = []interface{}{metclient.ToBytes32("Maintenance")}
 	err = metclient.CallContract(ctx, ma.registry, "getContractAddress", input, &addr, block)
-	if err == nil {
+	if err != nil {
+		return
+	} else {
 		maintenanceAccount = &common.Address{}
 		maintenanceAccount.SetBytes(addr.Bytes())
 	}
@@ -877,7 +881,7 @@ func (ma *metaAdmin) calculateRewards(num, blockReward, fees *big.Int, addBalanc
 	rewardPoolAccount, maintenanceAccount, members, err := ma.getRewardAccounts(ctx, big.NewInt(num.Int64()-1))
 	if err != nil {
 		// all goes to the coinbase
-		return
+		return nil, nil, err
 	}
 
 	if rewardPoolAccount == nil && maintenanceAccount == nil && len(members) == 0 {
