@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"math/big"
 	"path"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -31,7 +30,6 @@ import (
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
-	"github.com/ethereum/go-ethereum/p2p/discv5"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -101,8 +99,12 @@ var (
 	nilAddress      = common.Address{}
 	admin           *metaAdmin
 
-	ErrNotRunning     = errors.New("Not Running")
-	ErrAlreadyRunning = errors.New("Already Running")
+	ErrNotRunning     = errors.New("not running")
+	ErrAlreadyRunning = errors.New("already running")
+	ErrInvalidEnode   = errors.New("invalid enode")
+
+	etcdCompactFrequency = int64(100)
+	etcdCompactWindow    = int64(100)
 )
 
 func (n *metaNode) eq(m *metaNode) bool {
@@ -165,15 +167,19 @@ func (ma *metaAdmin) getAdminAddresses() (registry, gov, staking, envStorage *co
 		Cli: ma.cli,
 		Abi: ma.registry.Abi,
 	}
-	for i := uint64(0); i < 10; i++ {
-		addr := crypto.CreateAddress(ma.bootAccount, i)
-		contract.To = &addr
+	if ma.registry != nil && ma.registry.To != nil {
+		registry = ma.registry.To
+	} else {
+		for i := uint64(0); i < 10; i++ {
+			addr := crypto.CreateAddress(ma.bootAccount, i)
+			contract.To = &addr
 
-		var v *big.Int
-		err = metclient.CallContract(ctx, contract, "magic", nil, &v, nil)
-		if err == nil && v.Cmp(magic) == 0 {
-			registry = &addr
-			break
+			var v *big.Int
+			err = metclient.CallContract(ctx, contract, "magic", nil, &v, nil)
+			if err == nil && v.Cmp(magic) == 0 {
+				registry = &addr
+				break
+			}
 		}
 	}
 
@@ -291,21 +297,6 @@ func (ma *metaAdmin) getMinerNodes(height int, locked bool) (*metaNode, *metaNod
 	return miner, next, nodes
 }
 
-func isArray(x interface{}) bool {
-	if x == nil {
-		return false
-	}
-	y := reflect.TypeOf(x)
-	switch y.Kind() {
-	case reflect.Slice:
-		return true
-	case reflect.Array:
-		return true
-	default:
-		return false
-	}
-}
-
 // get nodes from the Governance contract
 func (ma *metaAdmin) getMetaNodes(ctx context.Context, block *big.Int) ([]*metaNode, error) {
 	var (
@@ -332,7 +323,7 @@ func (ma *metaAdmin) getMetaNodes(ctx context.Context, block *big.Int) ([]*metaN
 
 		sid := hex.EncodeToString(enode)
 		if len(sid) != 128 {
-			return nil, errors.New("Invalid enode")
+			return nil, ErrInvalidEnode
 		}
 		idv4, _ := toIdv4(sid)
 		nodes = append(nodes, &metaNode{
@@ -358,16 +349,25 @@ func (ma *metaAdmin) getRewardAccounts(ctx context.Context, block *big.Int) (rew
 		input []interface{}
 	)
 
+	if ma.registry == nil || ma.registry.To == nil {
+		err = metaminer.ErrNotInitialized
+		return
+	}
+
 	input = []interface{}{metclient.ToBytes32("RewardPool")}
 	err = metclient.CallContract(ctx, ma.registry, "getContractAddress", input, &addr, block)
-	if err == nil {
+	if err != nil {
+		return
+	} else {
 		rewardPoolAccount = &common.Address{}
 		rewardPoolAccount.SetBytes(addr.Bytes())
 	}
 
 	input = []interface{}{metclient.ToBytes32("Maintenance")}
 	err = metclient.CallContract(ctx, ma.registry, "getContractAddress", input, &addr, block)
-	if err == nil {
+	if err != nil {
+		return
+	} else {
 		maintenanceAccount = &common.Address{}
 		maintenanceAccount.SetBytes(addr.Bytes())
 	}
@@ -620,20 +620,20 @@ func (ma *metaAdmin) update() {
 		ma.nodes = _nodes
 
 		if len(data.addedNodes) > 0 {
-			log.Debug(fmt.Sprintf("Added:\n"))
+			log.Debug("Added:\n")
 			for _, i := range data.addedNodes {
 				log.Debug(fmt.Sprintf("%v\n", i))
 				ma.addPeer(i)
 			}
 		}
 		if len(data.addedNodes) > 0 {
-			log.Debug(fmt.Sprintf("Updated:\n"))
+			log.Debug("Updated:\n")
 			for _, i := range data.updatedNodes {
 				log.Debug(fmt.Sprintf("%v\n", i))
 			}
 		}
 		if len(data.addedNodes) > 0 {
-			log.Debug(fmt.Sprintf("Deleted:\n"))
+			log.Debug("Deleted:\n")
 			for _, i := range data.deletedNodes {
 				log.Debug(fmt.Sprintf("%v\n", i))
 			}
@@ -871,7 +871,6 @@ func distributeRewards(six int, rewardPoolAccount, maintenanceAccount *common.Ad
 	if maintenanceAccount != nil {
 		rewards[n].Addr = *maintenanceAccount
 		rewards[n].Reward = maintAmount
-		n++
 	}
 }
 
@@ -882,11 +881,11 @@ func (ma *metaAdmin) calculateRewards(num, blockReward, fees *big.Int, addBalanc
 	rewardPoolAccount, maintenanceAccount, members, err := ma.getRewardAccounts(ctx, big.NewInt(num.Int64()-1))
 	if err != nil {
 		// all goes to the coinbase
-		return
+		return nil, nil, err
 	}
 
 	if rewardPoolAccount == nil && maintenanceAccount == nil && len(members) == 0 {
-		err = fmt.Errorf("Not initialized")
+		err = metaminer.ErrNotInitialized
 		return
 	}
 
@@ -960,14 +959,13 @@ func verifyRewards(num *big.Int, rewards string) error {
 
 func signBlock(hash common.Hash) (nodeId, sig []byte, err error) {
 	if admin == nil {
-		err = errors.New("Not initialized")
+		err = metaminer.ErrNotInitialized
 		return
 	}
 
 	prvKey := admin.stack.Server().PrivateKey
 	sig, err = crypto.Sign(hash.Bytes(), prvKey)
-	v5id := discv5.PubkeyID(&prvKey.PublicKey)
-	nodeId = v5id[:]
+	nodeId = crypto.FromECDSAPub(&prvKey.PublicKey)[1:]
 	return
 }
 
@@ -1093,12 +1091,22 @@ func LogBlock(height int64, hash common.Hash) {
 	}
 
 	tstart := time.Now()
-	if err := admin.etcdPut("metadium-work", string(work)); err != nil {
+	rev, err := admin.etcdPut("metadium-work", string(work))
+	if err != nil {
 		log.Error("Metadium - failed to log the latest block",
 			"height", height, "hash", hash, "took", time.Since(tstart))
 	} else {
 		log.Info("Metadium - logged the latest block",
 			"height", height, "hash", hash, "took", time.Since(tstart))
+
+		if ((rev%etcdCompactFrequency == 0) && (rev > etcdCompactFrequency)) && (rev > etcdCompactWindow) {
+			go func() {
+				if err := admin.etcdCompact(rev - etcdCompactWindow + 1); err != nil {
+					log.Error("Metadium - failed to compact",
+						"rev", rev, "took", time.Since(tstart))
+				}
+			}()
+		}
 	}
 
 	admin.blocksMined++
@@ -1143,7 +1151,7 @@ func (ma *metaAdmin) toMiningPeers(nodes []*metaNode) string {
 			bb.Write([]byte("/*"))
 		}
 	}
-	return string(bb.Bytes())
+	return bb.String()
 }
 
 func (ma *metaAdmin) miners() string {
@@ -1211,7 +1219,7 @@ func getMinerStatus() *metaapi.MetadiumMinerStatus {
 	defer admin.lock.Unlock()
 
 	return &metaapi.MetadiumMinerStatus{
-		Name:              admin.self.Name,
+		NodeName:          admin.self.Name,
 		Enode:             admin.self.Enode,
 		Id:                admin.self.Id,
 		Addr:              fmt.Sprintf("%s:%d", admin.self.Ip, admin.self.Port),
@@ -1252,12 +1260,12 @@ func getMiners(id string, timeout int) []*metaapi.MetadiumMinerStatus {
 
 	getDownStatus := func(node *metaNode) *metaapi.MetadiumMinerStatus {
 		return &metaapi.MetadiumMinerStatus{
-			Name:   node.Name,
-			Enode:  node.Enode,
-			Id:     node.Id,
-			Addr:   fmt.Sprintf("%s:%d", node.Ip, node.Port),
-			Status: "down",
-			RttMs:  big0,
+			NodeName: node.Name,
+			Enode:    node.Enode,
+			Id:       node.Id,
+			Addr:     fmt.Sprintf("%s:%d", node.Ip, node.Port),
+			Status:   "down",
+			RttMs:    big0,
 		}
 	}
 
@@ -1331,11 +1339,11 @@ func getMiners(id string, timeout int) []*metaapi.MetadiumMinerStatus {
 			if !ok {
 				continue
 			}
-			if n, exists := peers[s.Name]; exists {
+			if n, exists := peers[s.NodeName]; exists {
 				s.RttMs = big.NewInt((time.Now().UnixNano() - startTime) / 1000000)
 				miners = append(miners, s)
 				if n != nil {
-					peers[s.Name] = nil
+					peers[s.NodeName] = nil
 					count--
 					if count <= 0 {
 						done = true
@@ -1357,7 +1365,7 @@ func getMiners(id string, timeout int) []*metaapi.MetadiumMinerStatus {
 
 	if len(miners) > 1 {
 		sort.Slice(miners, func(i, j int) bool {
-			return miners[i].Name < miners[j].Name
+			return miners[i].NodeName < miners[j].NodeName
 		})
 	}
 	return miners
