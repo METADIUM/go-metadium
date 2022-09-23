@@ -55,6 +55,8 @@ func init() {
 	eip1559Config = &cpy
 	eip1559Config.BerlinBlock = common.Big0
 	eip1559Config.LondonBlock = common.Big0
+
+	params.DropUnderpriced = false
 }
 
 type testBlockChain struct {
