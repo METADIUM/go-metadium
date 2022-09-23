@@ -115,7 +115,7 @@ function wipe ()
 
     cd $d
     /bin/rm -rf geth/LOCK geth/chaindata geth/ethash geth/lightchaindata \
-	geth/transactions.rlp geth/nodes geth.ipc logs/* etcd
+	geth/transactions.rlp geth/nodes geth/triecache geth.ipc logs/* etcd
 }
 
 function wipe_all ()
@@ -165,18 +165,30 @@ function start ()
     [ -f "$d/.rc" ] && source "$d/.rc"
     [ "$COINBASE" = "" ] && COINBASE="" || COINBASE="--miner.etherbase $COINBASE"
 
-    RPCOPT="--rpc --rpcaddr 0.0.0.0"
-    [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --rpcport ${PORT}"
+    RPCOPT="--http --http.addr 0.0.0.0"
+    [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --http.port ${PORT}"
+    RPCOPT="${RPCOPT} --ws --ws.addr 0.0.0.0"
+    [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --ws.port $((${PORT}+4))"
     [ "$NONCE_LIMIT" = "" ] || NONCE_LIMIT="--noncelimit $NONCE_LIMIT"
     [ "$BOOT_NODES" = "" ] || BOOT_NODES="--bootnodes $BOOT_NODES"
-    [ "$TESTNET" = "1" ] && TESTNET=--testnet
+    [ "$TESTNET" = "1" ] && TESTNET=--meta-testnet
     if [ "$DISCOVER" = "0" ]; then
 	DISCOVER=--nodiscover
     else
 	DISCOVER=
     fi
+    case $SYNC_MODE in
+    "full")
+	SYNC_MODE="--syncmode full";;
+    "fast")
+	SYNC_MODE="--syncmode fast";;
+    "snap")
+	SYNC_MODE="--syncmode snap";;
+    *)
+	SYNC_MODE="--syncmode full --gcmode archive";;
+    esac
 
-    OPTS="$COINBASE $DISCOVER $RPCOPT $BOOT_NODES $NONCE_LIMIT $TESTNET ${GMET_OPTS}"
+    OPTS="$COINBASE $DISCOVER $RPCOPT $BOOT_NODES $NONCE_LIMIT $TESTNET $SYNC_MODE ${GMET_OPTS}"
     [ "$PORT" = "" ] || OPTS="${OPTS} --port $(($PORT + 1))"
     [ "$HUB" = "" ] || OPTS="${OPTS} --hub ${HUB}"
     [ "$MAX_TXS_PER_BLOCK" = "" ] || OPTS="${OPTS} --maxtxsperblock ${MAX_TXS_PER_BLOCK}"
@@ -185,15 +197,14 @@ function start ()
 
     cd $d
     if [ ! "$2" = "inner" ]; then
-	$GMET --datadir ${PWD} --syncmode full --gcmode archive --metrics \
-	    $OPTS 2>&1 | ${d}/bin/logrot ${d}/logs/log 10M 5 &
+	$GMET --datadir ${PWD} --metrics $OPTS 2>&1 |   \
+	    ${d}/bin/logrot ${d}/logs/log 10M 5 &
     else
 	if [ -x "$d/bin/logrot" ]; then
 	    exec > >($d/bin/logrot $d/logs/log 10M 5)
 	    exec 2>&1
 	fi
-	exec $GMET --datadir ${PWD} --syncmode full --gcmode archive	\
-	    --metrics $OPTS
+	exec $GMET --datadir ${PWD} --metrics $OPTS
     fi
 }
 
@@ -296,6 +307,14 @@ case "$1" in
     PIDS=`get_gmet_pids`
     if [ ! "$PIDS" = "" ]; then
 	echo $PIDS | xargs -L1 kill -9
+    fi
+    # wait until geth/chaindata is free
+    if [ ! "$NODE" = "" ]; then
+        d=$(get_data_dir "$1")
+        for i in {1..200}; do
+            lsof ${d}/geth/chaindata/LOG 2>&1 | grep -q gmet > /dev/null 2>&1 || break
+            sleep 1
+        done
     fi
     echo "done."
     ;;
