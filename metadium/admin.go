@@ -357,7 +357,7 @@ func (ma *metaAdmin) getRewardAccounts(ctx context.Context, block *big.Int) (rew
 	input = []interface{}{metclient.ToBytes32("RewardPool")}
 	err = metclient.CallContract(ctx, ma.registry, "getContractAddress", input, &addr, block)
 	if err != nil {
-		return
+		rewardPoolAccount = nil
 	} else {
 		rewardPoolAccount = &common.Address{}
 		rewardPoolAccount.SetBytes(addr.Bytes())
@@ -366,7 +366,7 @@ func (ma *metaAdmin) getRewardAccounts(ctx context.Context, block *big.Int) (rew
 	input = []interface{}{metclient.ToBytes32("Maintenance")}
 	err = metclient.CallContract(ctx, ma.registry, "getContractAddress", input, &addr, block)
 	if err != nil {
-		return
+		maintenanceAccount = nil
 	} else {
 		maintenanceAccount = &common.Address{}
 		maintenanceAccount.SetBytes(addr.Bytes())
