@@ -452,7 +452,11 @@ func (ma *metaAdmin) etcdPut(key, value string) (int64, error) {
 		ma.etcd.Server.Cfg.ReqTimeout())
 	defer cancel()
 	resp, err := ma.etcdCli.Put(ctx, key, value)
-	return resp.Header.Revision, err
+	if err == nil {
+		return resp.Header.Revision, err
+	} else {
+		return 0, err
+	}
 }
 
 func (ma *metaAdmin) etcdGet(key string) (string, error) {
