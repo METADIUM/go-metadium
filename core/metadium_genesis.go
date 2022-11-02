@@ -12288,7 +12288,7 @@ var (
   },
   "coinbase": "0x880a74d68b09418136c4442D1eA0f5cC72E5325A",
   "config": {
-    "berlinBlock": 80000000,
+    "berlinBlock": 51960000,
     "chainId": 11,
     "homesteadBlock": 0,
     "eip150Block": 11441000,
@@ -12297,7 +12297,7 @@ var (
     "byzantiumBlock": 0,
     "constantinopleBlock": 11441000,
     "istanbulBlock": 11441000,
-    "londonBlock": 80000000,
+    "londonBlock": 51960000,
     "muirGlacierBlock": 11441000 
   },
   "difficulty": "0x1",

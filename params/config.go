@@ -153,8 +153,8 @@ var (
 		PetersburgBlock:     big.NewInt(11441000),
 		IstanbulBlock:       big.NewInt(11441000),
 		MuirGlacierBlock:    big.NewInt(11441000),
-		BerlinBlock:         big.NewInt(80000000),
-		LondonBlock:         big.NewInt(80000000),
+		BerlinBlock:         big.NewInt(51960000),
+		LondonBlock:         big.NewInt(51960000),
 		Ethash:              new(EthashConfig),
 	}
 
