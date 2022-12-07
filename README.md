@@ -44,11 +44,11 @@ One can use the following command lines to join the Metadium networks. Note that
 
 ### Metadium Mainnet
 
-    gmet --syncmode full --datadir {data_folder} --rpc --rpcaddr 0.0.0.0
+    gmet --syncmode full --datadir {data_folder} --http --http.addr 0.0.0.0
     
 ### Metadium Testnet
 
-    gmet --testnet</b> --syncmode full --datadir {data_folder} --rpc --rpcaddr 0.0.0.0
+    gmet --meta-testnet</b> --syncmode full --datadir {data_folder} --http --http.addr 0.0.0.0
 
 ## Setting Up a New Network
 
@@ -164,7 +164,7 @@ First download genesis.json from existing nodes to a data directory.
 
 After getting enodes of mining nodes, run gmet as follows.
 
-    bin/gmet --syncmode full --datadir <data-directory> --bootnodes <enodes> --rpc --rpcaddr 0.0.0.0
+    bin/gmet --syncmode full --datadir <data-directory> --bootnodes <enodes> --http --http.addr 0.0.0.0
 
 ### The original go-ethereum README follows...
 
