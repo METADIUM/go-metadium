@@ -48,7 +48,7 @@ One can use the following command lines to join the Metadium networks. Note that
     
 ### Metadium Testnet
 
-    gmet --meta-testnet</b> --syncmode full --datadir {data_folder} --http --http.addr 0.0.0.0
+    gmet --meta-testnet --syncmode full --datadir {data_folder} --http --http.addr 0.0.0.0
 
 ## Setting Up a New Network
 
