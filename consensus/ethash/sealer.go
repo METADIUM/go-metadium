@@ -64,7 +64,7 @@ func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block
 		ethash.lock.Unlock()
 		abort := make(chan struct{})
 		found := make(chan *types.Block)
-		go ethash.mine(block, 0, uint64(ethash.rand.Int63()), abort, found)
+		go ethash.mine(block, 0, uint64(ethash.rand.Int63()), abort, found, chain.Config().IsAvocado(block.Number()))
 		result := <-found
 		select {
 		case results <- result:
@@ -121,7 +121,7 @@ func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block
 		pend.Add(1)
 		go func(id int, nonce uint64) {
 			defer pend.Done()
-			ethash.mine(block, id, nonce, abort, locals)
+			ethash.mine(block, id, nonce, abort, locals, chain.Config().IsAvocado(block.Number()))
 		}(i, uint64(ethash.rand.Int63()))
 	}
 	// Wait until sealing is terminated or a nonce is found
@@ -154,14 +154,15 @@ func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block
 
 // mine is the actual proof-of-work miner that searches for a nonce starting from
 // seed that results in correct final block difficulty.
-func (ethash *Ethash) mine(block *types.Block, id int, seed uint64, abort chan struct{}, found chan *types.Block) {
+func (ethash *Ethash) mine(block *types.Block, id int, seed uint64, abort chan struct{}, found chan *types.Block, nodag bool) {
 	// Extract some data from the header
 	var (
-		header  = block.Header()
-		hash    = ethash.SealHash(header).Bytes()
-		target  = new(big.Int).Div(two256, header.Difficulty)
-		number  = header.Number.Uint64()
-		dataset = ethash.dataset(number, false)
+		header = block.Header()
+		hash   = ethash.SealHash(header).Bytes()
+		target = new(big.Int).Div(two256, header.Difficulty)
+		number = header.Number.Uint64()
+		cache  *cache
+		size   uint64
 	)
 	// Start generating random nonces until we abort or find a good one
 	var (
@@ -188,7 +189,16 @@ search:
 				attempts = 0
 			}
 			// Compute the PoW value of this nonce
-			digest, result := hashimotoFull(dataset.dataset, hash, nonce)
+			var digest, result []byte
+			if !nodag {
+				if cache == nil {
+					cache = ethash.cache(number)
+					size = datasetSize(number)
+				}
+				digest, result = hashimotoLight(size, cache.cache, hash, nonce)
+			} else {
+				digest, result = hashimeta(hash, nonce)
+			}
 			if powBuffer.SetBytes(result).Cmp(target) <= 0 {
 				// Correct nonce found, create a new header with it
 				header = types.CopyHeader(header)
@@ -209,7 +219,9 @@ search:
 	}
 	// Datasets are unmapped in a finalizer. Ensure that the dataset stays live
 	// during sealing so it's not unmapped while being read.
-	runtime.KeepAlive(dataset)
+	if cache != nil {
+		runtime.KeepAlive(cache)
+	}
 }
 
 // This is the timeout for HTTP requests to notify external miners.
