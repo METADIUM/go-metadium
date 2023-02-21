@@ -176,7 +176,7 @@ var (
 		MuirGlacierBlock:    big.NewInt(5623000),
 		BerlinBlock:         big.NewInt(38067000),
 		LondonBlock:         big.NewInt(38067000),
-		AvocadoBlock:        big.NewInt(1_000_000_000_000),
+		AvocadoBlock:        big.NewInt(40_759_810),
 		Ethash:              new(EthashConfig),
 	}
 
