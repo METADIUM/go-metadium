@@ -118,6 +118,7 @@ gmet-linux: etcd
 		docker build -t meta/builder:local			\
 			-f Dockerfile.metadium . &&			\
 		docker run -e HOME=/tmp --rm -v $(shell pwd):/data	\
+			-u $(shell id -u):$(shell id -g)		\
 			-w /data meta/builder:local			\
 			make USE_ROCKSDB=$(USE_ROCKSDB);		\
 	fi
@@ -127,7 +128,7 @@ rocksdb:
 else
 rocksdb:
 	@[ ! -e rocksdb/.git ] && git submodule update --init rocksdb;	\
-	cd $(ROCKSDB_DIR) && make -j8 static_lib;
+	cd $(ROCKSDB_DIR) && PORTABLE=1 make -j8 static_lib;
 endif
 
 etcd:
