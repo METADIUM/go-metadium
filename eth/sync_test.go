@@ -35,6 +35,10 @@ func TestSnapSyncDisabling66(t *testing.T) { testSnapSyncDisabling(t, eth.ETH66,
 // Tests that snap sync gets disabled as soon as a real block is successfully
 // imported into the blockchain.
 func testSnapSyncDisabling(t *testing.T, ethVer uint, snapVer uint) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	t.Parallel()
 
 	// Create an empty handler and ensure it's in snap sync mode
@@ -51,8 +55,8 @@ func testSnapSyncDisabling(t *testing.T, ethVer uint, snapVer uint) {
 	}
 	defer full.close()
 
-	// Sync up the two handlers via both `eth` and `snap`
-	caps := []p2p.Cap{{Name: "eth", Version: ethVer}, {Name: "snap", Version: snapVer}}
+	// Sync up the two handlers via both `meta` and `snap`
+	caps := []p2p.Cap{{Name: "meta", Version: ethVer}, {Name: "snap", Version: snapVer}}
 
 	emptyPipeEth, fullPipeEth := p2p.MsgPipe()
 	defer emptyPipeEth.Close()

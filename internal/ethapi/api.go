@@ -20,8 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math/big"
+	"os"
 	"strings"
 	"time"
 
@@ -33,7 +33,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/math"
-	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core"
@@ -41,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/vrf"
 	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -272,7 +272,7 @@ func (s *PublicAccountAPI) Accounts() []common.Address {
 
 // return genesis.json if available
 func (s *PublicAccountAPI) Genesis() (string, error) {
-	genesis, err := ioutil.ReadFile(params.MetadiumGenesisFile)
+	genesis, err := os.ReadFile(params.MetadiumGenesisFile)
 	if err != nil {
 		return "", err
 	} else {
@@ -448,6 +448,11 @@ func (s *PrivateAccountAPI) LockAccount(addr common.Address) bool {
 func (s *PrivateAccountAPI) signTransaction(ctx context.Context, args *TransactionArgs, passwd string) (*types.Transaction, error) {
 	// Look up the wallet containing the requested signer
 	account := accounts.Account{Address: args.from()}
+	// fee delegation
+	if args.FeePayer != nil {
+		account = accounts.Account{Address: *args.FeePayer}
+	}
+
 	wallet, err := s.am.Find(account)
 	if err != nil {
 		return nil, err
@@ -602,6 +607,57 @@ func (s *PrivateAccountAPI) InitializeWallet(ctx context.Context, url string) (s
 	}
 }
 
+// Get ED25519 Public Key from address (same private key)
+func (s *PrivateAccountAPI) EdPubKey(ctx context.Context, addr common.Address, passwd string) (hexutil.Bytes, error) {
+	// Look up the wallet containing the requested signer
+	account := accounts.Account{Address: addr}
+
+	wallet, err := s.b.AccountManager().Find(account)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get
+	pubkey, err := wallet.EdPubKeyWithPassphrase(account, passwd)
+	if err != nil {
+		log.Warn("Failed Get ED25519 Public Key", "address", addr, "err", err)
+		return nil, err
+	}
+	return pubkey, nil
+}
+
+// VRF Prove
+func (s *PrivateAccountAPI) Prove(ctx context.Context, addr common.Address, passwd string, msg hexutil.Bytes) (hexutil.Bytes, error) {
+	// Look up the wallet containing the requested signer
+	account := accounts.Account{Address: addr}
+
+	wallet, err := s.b.AccountManager().Find(account)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get
+	prove, err := wallet.ProveWithPassphrase(account, passwd, msg)
+	if err != nil {
+		log.Warn("Failed to VRF Prove", "address", addr, "msg", msg, "err", err)
+		return nil, err
+	}
+	return prove, nil
+}
+
+// VRF Verify
+func (s *PrivateAccountAPI) Verify(ctx context.Context, pk, pi, msg hexutil.Bytes) (bool, error) {
+	// Look up the wallet containing the requested signer
+
+	// Get
+	res, err := vrf.Verify(pk, pi, msg[:])
+	if err != nil {
+		log.Warn("Failed to VRF Verify", "pubkey", pk, "pi", pi, "msg", msg, "err", err)
+		return false, err
+	}
+	return res, nil
+}
+
 // Unpair deletes a pairing between wallet and geth.
 func (s *PrivateAccountAPI) Unpair(ctx context.Context, url string, pin string) error {
 	wallet, err := s.am.Wallet(url)
@@ -641,6 +697,80 @@ func (api *PublicBlockChainAPI) ChainId() (*hexutil.Big, error) {
 func (s *PublicBlockChainAPI) BlockNumber() hexutil.Uint64 {
 	header, _ := s.b.HeaderByNumber(context.Background(), rpc.LatestBlockNumber) // latest header should always be available
 	return hexutil.Uint64(header.Number.Uint64())
+}
+
+// GetBlockReceipts returns all the transaction receipts for the given block hash.
+func (s *PublicBlockChainAPI) GetReceiptsByHash(ctx context.Context, blockHash common.Hash) ([]map[string]interface{}, error) {
+
+	block, err1 := s.b.BlockByHash(ctx, blockHash)
+	if block == nil && err1 == nil {
+		return nil, nil
+	} else if err1 != nil {
+		return nil, err1
+	}
+
+	receipts, err2 := s.b.GetReceipts(ctx, blockHash)
+	if receipts == nil && err2 == nil {
+		return make([]map[string]interface{}, 0), nil
+	} else if err2 != nil {
+		return nil, err2
+	}
+
+	txs := block.Transactions()
+	if receipts.Len() != txs.Len() {
+		return nil, fmt.Errorf("the size of transactions and receipts is different in the block (%s)", blockHash.String())
+	}
+	fieldsList := make([]map[string]interface{}, 0, len(receipts))
+
+	for index, receipt := range receipts {
+
+		bigblock := new(big.Int).SetUint64(block.NumberU64())
+		signer := types.MakeSigner(s.b.ChainConfig(), bigblock)
+		from, _ := types.Sender(signer, txs[index])
+
+		fields := map[string]interface{}{
+			"blockHash":         blockHash,
+			"blockNumber":       hexutil.Uint64(block.NumberU64()),
+			"transactionHash":   receipt.TxHash,
+			"transactionIndex":  hexutil.Uint64(index),
+			"from":              from,
+			"to":                txs[index].To(),
+			"gasUsed":           hexutil.Uint64(receipt.GasUsed),
+			"cumulativeGasUsed": hexutil.Uint64(receipt.CumulativeGasUsed),
+			"contractAddress":   nil,
+			"logs":              receipt.Logs,
+			"logsBloom":         receipt.Bloom,
+			"type":              hexutil.Uint(txs[index].Type()),
+		}
+
+		// Assign the effective gas price paid
+		if !s.b.ChainConfig().IsLondon(bigblock) {
+			fields["effectiveGasPrice"] = (*hexutil.Big)(txs[index].GasPrice())
+		} else {
+			header, err := s.b.HeaderByHash(ctx, blockHash)
+			if err != nil {
+				return nil, err
+			}
+			gasPrice := new(big.Int).Add(header.BaseFee, txs[index].EffectiveGasTipValue(header.BaseFee))
+			fields["effectiveGasPrice"] = (*hexutil.Big)(gasPrice)
+		}
+		// Assign receipt status or post state.
+		if len(receipt.PostState) > 0 {
+			fields["root"] = hexutil.Bytes(receipt.PostState)
+		} else {
+			fields["status"] = hexutil.Uint(receipt.Status)
+		}
+		if receipt.Logs == nil {
+			fields["logs"] = []*types.Log{}
+		}
+		// If the ContractAddress is 20 0x0 bytes, assume it is not a contract creation
+		if receipt.ContractAddress != (common.Address{}) {
+			fields["contractAddress"] = receipt.ContractAddress
+		}
+
+		fieldsList = append(fieldsList, fields)
+	}
+	return fieldsList, nil
 }
 
 // GetBalance returns the amount of wei for the given address in the state of the
@@ -749,10 +879,10 @@ func (s *PublicBlockChainAPI) GetHeaderByHash(ctx context.Context, hash common.H
 }
 
 // GetBlockByNumber returns the requested canonical block.
-// * When blockNr is -1 the chain head is returned.
-// * When blockNr is -2 the pending chain head is returned.
-// * When fullTx is true all transactions in the block are returned, otherwise
-//   only the transaction hash is returned.
+//   - When blockNr is -1 the chain head is returned.
+//   - When blockNr is -2 the pending chain head is returned.
+//   - When fullTx is true all transactions in the block are returned, otherwise
+//     only the transaction hash is returned.
 func (s *PublicBlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.BlockNumber, fullTx bool) (map[string]interface{}, error) {
 	block, err := s.b.BlockByNumber(ctx, number)
 	if block != nil && err == nil {
@@ -1133,67 +1263,6 @@ func (s *PublicBlockChainAPI) EstimateGas(ctx context.Context, args TransactionA
 	return DoEstimateGas(ctx, s.b, args, bNrOrHash, s.b.RPCGasCap())
 }
 
-// ExecutionResult groups all structured logs emitted by the EVM
-// while replaying a transaction in debug mode as well as transaction
-// execution status, the amount of gas used and the return value
-type ExecutionResult struct {
-	Gas         uint64         `json:"gas"`
-	Failed      bool           `json:"failed"`
-	ReturnValue string         `json:"returnValue"`
-	StructLogs  []StructLogRes `json:"structLogs"`
-}
-
-// StructLogRes stores a structured log emitted by the EVM while replaying a
-// transaction in debug mode
-type StructLogRes struct {
-	Pc      uint64             `json:"pc"`
-	Op      string             `json:"op"`
-	Gas     uint64             `json:"gas"`
-	GasCost uint64             `json:"gasCost"`
-	Depth   int                `json:"depth"`
-	Error   string             `json:"error,omitempty"`
-	Stack   *[]string          `json:"stack,omitempty"`
-	Memory  *[]string          `json:"memory,omitempty"`
-	Storage *map[string]string `json:"storage,omitempty"`
-}
-
-// FormatLogs formats EVM returned structured logs for json output
-func FormatLogs(logs []logger.StructLog) []StructLogRes {
-	formatted := make([]StructLogRes, len(logs))
-	for index, trace := range logs {
-		formatted[index] = StructLogRes{
-			Pc:      trace.Pc,
-			Op:      trace.Op.String(),
-			Gas:     trace.Gas,
-			GasCost: trace.GasCost,
-			Depth:   trace.Depth,
-			Error:   trace.ErrorString(),
-		}
-		if trace.Stack != nil {
-			stack := make([]string, len(trace.Stack))
-			for i, stackValue := range trace.Stack {
-				stack[i] = stackValue.Hex()
-			}
-			formatted[index].Stack = &stack
-		}
-		if trace.Memory != nil {
-			memory := make([]string, 0, (len(trace.Memory)+31)/32)
-			for i := 0; i+32 <= len(trace.Memory); i += 32 {
-				memory = append(memory, fmt.Sprintf("%x", trace.Memory[i:i+32]))
-			}
-			formatted[index].Memory = &memory
-		}
-		if trace.Storage != nil {
-			storage := make(map[string]string)
-			for i, storageValue := range trace.Storage {
-				storage[fmt.Sprintf("%x", i)] = fmt.Sprintf("%x", storageValue)
-			}
-			formatted[index].Storage = &storage
-		}
-	}
-	return formatted
-}
-
 // RPCMarshalHeader converts the given header to the RPC output .
 func RPCMarshalHeader(head *types.Header) map[string]interface{} {
 	result := map[string]interface{}{
@@ -1305,6 +1374,11 @@ type RPCTransaction struct {
 	V                *hexutil.Big      `json:"v"`
 	R                *hexutil.Big      `json:"r"`
 	S                *hexutil.Big      `json:"s"`
+	// fee delegation
+	FeePayer *common.Address `json:"feePayer,omitempty"`
+	FV       *hexutil.Big    `json:"fv,omitempty"`
+	FR       *hexutil.Big    `json:"fr,omitempty"`
+	FS       *hexutil.Big    `json:"fs,omitempty"`
 }
 
 // newRPCTransaction returns a transaction that will serialize to the RPC
@@ -1351,6 +1425,26 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		} else {
 			result.GasPrice = (*hexutil.Big)(tx.GasFeeCap())
 		}
+		// fee delegation
+	case types.FeeDelegateDynamicFeeTxType:
+		al := tx.AccessList()
+		result.Accesses = &al
+		result.ChainID = (*hexutil.Big)(tx.ChainId())
+		result.GasFeeCap = (*hexutil.Big)(tx.GasFeeCap())
+		result.GasTipCap = (*hexutil.Big)(tx.GasTipCap())
+		// if the transaction has been mined, compute the effective gas price
+		if baseFee != nil && blockHash != (common.Hash{}) {
+			// price = min(tip, gasFeeCap - baseFee) + baseFee
+			price := math.BigMin(new(big.Int).Add(tx.GasTipCap(), baseFee), tx.GasFeeCap())
+			result.GasPrice = (*hexutil.Big)(price)
+		} else {
+			result.GasPrice = (*hexutil.Big)(tx.GasFeeCap())
+		}
+		result.FeePayer = tx.FeePayer()
+		fv, fr, fs := tx.RawFeePayerSignatureValues()
+		result.FV = (*hexutil.Big)(fv)
+		result.FR = (*hexutil.Big)(fr)
+		result.FS = (*hexutil.Big)(fs)
 	}
 	return result
 }
@@ -1655,14 +1749,14 @@ func (s *PublicTransactionPoolAPI) GetTransactionReceipt(ctx context.Context, ha
 	}
 	// Assign the effective gas price paid
 	if !s.b.ChainConfig().IsLondon(bigblock) {
-		fields["effectiveGasPrice"] = hexutil.Uint64(tx.GasPrice().Uint64())
+		fields["effectiveGasPrice"] = (*hexutil.Big)(tx.GasPrice())
 	} else {
 		header, err := s.b.HeaderByHash(ctx, blockHash)
 		if err != nil {
 			return nil, err
 		}
 		gasPrice := new(big.Int).Add(header.BaseFee, tx.EffectiveGasTipValue(header.BaseFee))
-		fields["effectiveGasPrice"] = hexutil.Uint64(gasPrice.Uint64())
+		fields["effectiveGasPrice"] = (*hexutil.Big)(gasPrice)
 	}
 	// Assign receipt status or post state.
 	if len(receipt.PostState) > 0 {
@@ -1704,6 +1798,10 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 		// Ensure only eip155 signed transactions are submitted if EIP155Required is set.
 		return common.Hash{}, errors.New("only replay-protected (EIP-155) transactions allowed over RPC")
 	}
+	// fee delegation
+	if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() == nil {
+		return common.Hash{}, errors.New("FeePayer address is null")
+	}
 	if err := b.SendTx(ctx, tx); err != nil {
 		return common.Hash{}, err
 	}
@@ -1712,6 +1810,16 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 	from, err := types.Sender(signer, tx)
 	if err != nil {
 		return common.Hash{}, err
+	}
+	// fee delegation
+	if tx.Type() == types.FeeDelegateDynamicFeeTxType {
+		feePayer, err := types.FeePayer(types.NewFeeDelegateSigner(b.ChainConfig().ChainID), tx)
+		if err != nil {
+			return common.Hash{}, err
+		}
+		if feePayer != *tx.FeePayer() {
+			return common.Hash{}, errors.New("FeePayer Signature error")
+		}
 	}
 
 	if tx.To() == nil {
@@ -1854,6 +1962,19 @@ func (s *PublicTransactionPoolAPI) SignTransaction(ctx context.Context, args Tra
 	if err := checkTxFee(tx.GasPrice(), tx.Gas(), s.b.RPCTxFeeCap()); err != nil {
 		return nil, err
 	}
+	// fee delegation
+	if args.FeePayer != nil {
+		log.Info("SignTransaction", "FeePayer", args.FeePayer)
+		signed, err := s.sign(*args.FeePayer, tx)
+		if err != nil {
+			return nil, err
+		}
+		data, err := signed.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		return &SignTransactionResult{data, signed}, nil
+	}
 	signed, err := s.sign(args.from(), tx)
 	if err != nil {
 		return nil, err
@@ -1971,43 +2092,31 @@ func (api *PublicDebugAPI) GetBlockRlp(ctx context.Context, number uint64) (hexu
 	return rlp.EncodeToBytes(block)
 }
 
-// TestSignCliqueBlock fetches the given block number, and attempts to sign it as a clique header with the
-// given address, returning the address of the recovered signature
-//
-// This is a temporary method to debug the externalsigner integration,
-// TODO: Remove this method when the integration is mature
-func (api *PublicDebugAPI) TestSignCliqueBlock(ctx context.Context, address common.Address, number uint64) (common.Address, error) {
-	block, _ := api.b.BlockByNumber(ctx, rpc.BlockNumber(number))
-	if block == nil {
-		return common.Address{}, fmt.Errorf("block #%d not found", number)
+// GetRawReceipts retrieves the binary-encoded raw receipts of a single block.
+func (api *PublicDebugAPI) GetRawReceipts(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) ([]hexutil.Bytes, error) {
+	var hash common.Hash
+	if h, ok := blockNrOrHash.Hash(); ok {
+		hash = h
+	} else {
+		block, err := api.b.BlockByNumberOrHash(ctx, blockNrOrHash)
+		if err != nil {
+			return nil, err
+		}
+		hash = block.Hash()
 	}
-	header := block.Header()
-	header.Extra = make([]byte, 32+65)
-	encoded := clique.CliqueRLP(header)
-
-	// Look up the wallet containing the requested signer
-	account := accounts.Account{Address: address}
-	wallet, err := api.b.AccountManager().Find(account)
+	receipts, err := api.b.GetReceipts(ctx, hash)
 	if err != nil {
-		return common.Address{}, err
+		return nil, err
 	}
-
-	signature, err := wallet.SignData(account, accounts.MimetypeClique, encoded)
-	if err != nil {
-		return common.Address{}, err
+	result := make([]hexutil.Bytes, len(receipts))
+	for i, receipt := range receipts {
+		b, err := receipt.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		result[i] = b
 	}
-	sealHash := clique.SealHash(header).Bytes()
-	log.Info("test signing of clique block",
-		"Sealhash", fmt.Sprintf("%x", sealHash),
-		"signature", fmt.Sprintf("%x", signature))
-	pubkey, err := crypto.Ecrecover(sealHash, signature)
-	if err != nil {
-		return common.Address{}, err
-	}
-	var signer common.Address
-	copy(signer[:], crypto.Keccak256(pubkey[1:])[12:])
-
-	return signer, nil
+	return result, nil
 }
 
 // PrintBlock retrieves a block and returns its pretty printed form.
@@ -2116,4 +2225,119 @@ func toHexSlice(b [][]byte) []string {
 		r[i] = hexutil.Encode(b[i])
 	}
 	return r
+}
+
+// fee delegation
+// SignRawFeeDelegateTransaction will create a transaction from the given arguments and
+// tries to sign it with the key associated with args.feePayer. If the given passwd isn't
+// able to decrypt the key it fails. The transaction is returned in RLP-form, not broadcast
+// to other nodes
+func (s *PrivateAccountAPI) SignRawFeeDelegateTransaction(ctx context.Context, args TransactionArgs, input hexutil.Bytes, passwd string) (*SignTransactionResult, error) {
+	if args.FeePayer == nil {
+		return nil, fmt.Errorf("missing FeePayer")
+	}
+
+	// Look up the wallet containing the requested signer
+	account := accounts.Account{Address: *args.FeePayer}
+
+	wallet, err := s.am.Find(account)
+	if err != nil {
+		return nil, err
+	}
+
+	rawTx := new(types.Transaction)
+	if err := rawTx.UnmarshalBinary(input); err != nil {
+		return nil, err
+	}
+
+	V, R, S := rawTx.RawSignatureValues()
+	if rawTx.Type() == types.DynamicFeeTxType {
+		SenderTx := types.DynamicFeeTx{
+			To:         rawTx.To(),
+			ChainID:    rawTx.ChainId(),
+			Nonce:      rawTx.Nonce(),
+			Gas:        rawTx.Gas(),
+			GasFeeCap:  rawTx.GasFeeCap(),
+			GasTipCap:  rawTx.GasTipCap(),
+			Value:      rawTx.Value(),
+			Data:       rawTx.Data(),
+			AccessList: rawTx.AccessList(),
+			V:          V,
+			R:          R,
+			S:          S,
+		}
+
+		FeeDelegateDynamicFeeTx := &types.FeeDelegateDynamicFeeTx{
+			FeePayer: args.FeePayer,
+		}
+
+		FeeDelegateDynamicFeeTx.SetSenderTx(SenderTx)
+		tx := types.NewTx(FeeDelegateDynamicFeeTx)
+
+		signed, err := wallet.SignTxWithPassphrase(account, passwd, tx, s.b.ChainConfig().ChainID)
+
+		if err != nil {
+			return nil, err
+		}
+		data, err := signed.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+
+		return &SignTransactionResult{data, signed}, nil
+	}
+
+	return nil, fmt.Errorf("senderTx type error")
+}
+
+// fee delegation
+// SignRawFeeDelegateTransaction will sign the given feeDelegate transaction with the feePayer account.
+// The node needs to have the private key of the account corresponding with
+// the given from address and it needs to be unlocked.
+func (s *PublicTransactionPoolAPI) SignRawFeeDelegateTransaction(ctx context.Context, args TransactionArgs, input hexutil.Bytes) (*SignTransactionResult, error) {
+	if args.FeePayer == nil {
+		return nil, fmt.Errorf("missing FeePayer")
+	}
+
+	rawTx := new(types.Transaction)
+	if err := rawTx.UnmarshalBinary(input); err != nil {
+		return nil, err
+	}
+
+	V, R, S := rawTx.RawSignatureValues()
+	if rawTx.Type() == types.DynamicFeeTxType {
+		SenderTx := types.DynamicFeeTx{
+			To:         rawTx.To(),
+			ChainID:    rawTx.ChainId(),
+			Nonce:      rawTx.Nonce(),
+			Gas:        rawTx.Gas(),
+			GasFeeCap:  rawTx.GasFeeCap(),
+			GasTipCap:  rawTx.GasTipCap(),
+			Value:      rawTx.Value(),
+			Data:       rawTx.Data(),
+			AccessList: rawTx.AccessList(),
+			V:          V,
+			R:          R,
+			S:          S,
+		}
+
+		FeeDelegateDynamicFeeTx := &types.FeeDelegateDynamicFeeTx{
+			FeePayer: args.FeePayer,
+		}
+
+		FeeDelegateDynamicFeeTx.SetSenderTx(SenderTx)
+		tx := types.NewTx(FeeDelegateDynamicFeeTx)
+
+		signed, err := s.sign(*args.FeePayer, tx)
+		if err != nil {
+			return nil, err
+		}
+		data, err := signed.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+
+		return &SignTransactionResult{data, signed}, nil
+	}
+	return nil, fmt.Errorf("senderTx type error")
 }

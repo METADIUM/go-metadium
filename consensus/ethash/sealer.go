@@ -121,7 +121,7 @@ func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block
 		pend.Add(1)
 		go func(id int, nonce uint64) {
 			defer pend.Done()
-			ethash.mine(block, id, nonce, abort, locals, chain.Config().IsAvocado(block.Number()))
+			ethash.mine(block, id, nonce, abort, locals, chain != nil && chain.Config().IsAvocado(block.Number()))
 		}(i, uint64(ethash.rand.Int63()))
 	}
 	// Wait until sealing is terminated or a nonce is found
@@ -194,6 +194,9 @@ search:
 				if cache == nil {
 					cache = ethash.cache(number)
 					size = datasetSize(number)
+					if ethash.config.PowMode == ModeTest {
+						size = 32 * 1024
+					}
 				}
 				digest, result = hashimotoLight(size, cache.cache, hash, nonce)
 			} else {
@@ -376,10 +379,11 @@ func (s *remoteSealer) loop() {
 // makeWork creates a work package for external miner.
 //
 // The work package consists of 3 strings:
-//   result[0], 32 bytes hex encoded current block header pow-hash
-//   result[1], 32 bytes hex encoded seed hash used for DAG
-//   result[2], 32 bytes hex encoded boundary condition ("target"), 2^256/difficulty
-//   result[3], hex encoded block number
+//
+//	result[0], 32 bytes hex encoded current block header pow-hash
+//	result[1], 32 bytes hex encoded seed hash used for DAG
+//	result[2], 32 bytes hex encoded boundary condition ("target"), 2^256/difficulty
+//	result[3], hex encoded block number
 func (s *remoteSealer) makeWork(block *types.Block) {
 	hash := s.ethash.SealHash(block.Header())
 	s.currentWork[0] = hash.Hex()

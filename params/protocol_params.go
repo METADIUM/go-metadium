@@ -154,6 +154,8 @@ const (
 	Bls12381MapG1Gas          uint64 = 5500   // Gas price for BLS12-381 mapping field element to G1 operation
 	Bls12381MapG2Gas          uint64 = 110000 // Gas price for BLS12-381 mapping field element to G2 operation
 
+	VrfVerifyGas uint64 = 50000 // @lukepark327: VRF Verify gas price
+
 	// The Refund Quotient is the cap on how much of the used gas can be refunded. Before EIP-3529,
 	// up to half the consumed gas could be refunded. Redefined as 1/5th in EIP-3529
 	RefundQuotient        uint64 = 2
@@ -181,16 +183,23 @@ const (
 
 // metadium parameters
 var (
-	ConsensusMethod      int    = ConsensusPoA // consensus method
+	ConsensusMethod      int    = ConsensusPoW // consensus method
 	FixedDifficulty      uint64 = 1            // 0 means no fixed difficulty
-	FixedGasLimit        uint64 = 0x10000000   // 0 means no fixed gas limit
+	FixedGasLimit        uint64 = 0            // 0 means no fixed gas limit,
 	MaxIdleBlockInterval uint64 = 600          // in seconds
 	BlocksPerTurn        uint64 = 100
-	DropUnderPriced      bool = true // drop underpriced transactions
+	DropUnderPriced      bool   = true // drop underpriced transactions
 
 	NonceLimit     uint64 = 0    // nonce limit for non-governing accounts
 	UseRocksDb     int    = 1    // LevelDB (0) or RocksDB (1)
 	PrefetchCount  int    = 0    // Transaction Prefetch count for faster db read
 	MaxTxsPerBlock int    = 5000 // Max # of transactions in a block
 	Hub            string = ""   // Hub's id
+
+	BlockInterval        int64 = 1    // Block generation interval in seconds
+	BlockTimeAdjBlocks   int64 = 120  // Block interval to adjust timestamp
+	BlockTimeAdjMultiple int64 = 4    // How many of block intervals to consider
+	BlockMinBuildTime    int64 = 300  // Minimum block generation time in ms
+	BlockMinBuildTxs     int64 = 2500 // Minimum txs in a block with pending txs
+	BlockTrailTime       int64 = 300  // Time to leave for block data transfer transfer in ms
 )

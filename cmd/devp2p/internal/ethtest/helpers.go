@@ -1,18 +1,18 @@
-// Copyright 2020 The go-ethereum Authors
-// This file is part of the go-ethereum library.
+// Copyright 2021 The go-ethereum Authors
+// This file is part of go-ethereum.
 //
-// The go-ethereum library is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Lesser General Public License as published by
+// go-ethereum is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The go-ethereum library is distributed in the hope that it will be useful,
+// go-ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Lesser General Public License for more details.
+// GNU General Public License for more details.
 //
-// You should have received a copy of the GNU Lesser General Public License
-// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
+// You should have received a copy of the GNU General Public License
+// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
 
 package ethtest
 
@@ -76,8 +76,8 @@ func (s *Suite) dial() (*Conn, error) {
 	}
 	// set default p2p capabilities
 	conn.caps = []p2p.Cap{
-		{Name: "eth", Version: 64},
-		{Name: "eth", Version: 65},
+		{Name: "meta", Version: 64},
+		{Name: "meta", Version: 65},
 	}
 	conn.ourHighestProtoVersion = 65
 	return &conn, nil
@@ -91,7 +91,7 @@ func (s *Suite) dial66() (*Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial failed: %v", err)
 	}
-	conn.caps = append(conn.caps, p2p.Cap{Name: "eth", Version: 66})
+	conn.caps = append(conn.caps, p2p.Cap{Name: "meta", Version: 66})
 	conn.ourHighestProtoVersion = 66
 	return conn, nil
 }
@@ -163,7 +163,7 @@ func (c *Conn) negotiateEthProtocol(caps []p2p.Cap) {
 	var highestSnapVersion uint
 	for _, capability := range caps {
 		switch capability.Name {
-		case "eth":
+		case "meta":
 			if capability.Version > highestEthVersion && capability.Version <= c.ourHighestProtoVersion {
 				highestEthVersion = capability.Version
 			}
@@ -580,24 +580,24 @@ func (s *Suite) maliciousHandshakes(t *utesting.T, isEth66 bool) error {
 		{
 			Version: 5,
 			Caps: []p2p.Cap{
-				{Name: "eth", Version: 64},
-				{Name: "eth", Version: 65},
+				{Name: "meta", Version: 64},
+				{Name: "meta", Version: 65},
 			},
 			ID: append(pub0, byte(0)),
 		},
 		{
 			Version: 5,
 			Caps: []p2p.Cap{
-				{Name: "eth", Version: 64},
-				{Name: "eth", Version: 65},
+				{Name: "meta", Version: 64},
+				{Name: "meta", Version: 65},
 			},
 			ID: append(pub0, pub0...),
 		},
 		{
 			Version: 5,
 			Caps: []p2p.Cap{
-				{Name: "eth", Version: 64},
-				{Name: "eth", Version: 65},
+				{Name: "meta", Version: 64},
+				{Name: "meta", Version: 65},
 			},
 			ID: largeBuffer(2),
 		},

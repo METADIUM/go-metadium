@@ -1,4 +1,4 @@
-// Copyright 2014 The go-ethereum Authors
+// Copyright 2020 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -296,7 +296,6 @@ func testRecvTransactions(t *testing.T, protocol uint) {
 }
 
 // This test checks that pending transactions are sent.
-func TestSendTransactions65(t *testing.T) { testSendTransactions(t, eth.ETH65) }
 func TestSendTransactions66(t *testing.T) { testSendTransactions(t, eth.ETH66) }
 
 func testSendTransactions(t *testing.T, protocol uint) {
@@ -458,6 +457,10 @@ func testTransactionPropagation(t *testing.T, protocol uint) {
 // challenge to validate each other's chains. Hash mismatches, or missing ones
 // during a fast sync should lead to the peer getting dropped.
 func TestCheckpointChallenge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	tests := []struct {
 		syncmode   downloader.SyncMode
 		checkpoint bool
@@ -574,7 +577,7 @@ func testCheckpointChallenge(t *testing.T, syncmode downloader.SyncMode, checkpo
 					t.Fatalf("failed to answer challenge: %v", err)
 				}
 			} else {
-				responseRlp, _ := rlp.EncodeToBytes(types.Header{Number: response.Number})
+				responseRlp, _ := rlp.EncodeToBytes(&types.Header{Number: response.Number})
 				if err := remote.ReplyBlockHeadersRLP(request.RequestId, []rlp.RawValue{responseRlp}); err != nil {
 					t.Fatalf("failed to answer challenge: %v", err)
 				}

@@ -1,4 +1,4 @@
-// Copyright 2020 The go-ethereum Authors
+// Copyright 2021 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -66,9 +66,9 @@ var (
 // Pruner is an offline tool to prune the stale state with the
 // help of the snapshot. The workflow of pruner is very simple:
 //
-// - iterate the snapshot, reconstruct the relevant state
-// - iterate the database, delete all other state entries which
-//   don't belong to the target state and the genesis state
+//   - iterate the snapshot, reconstruct the relevant state
+//   - iterate the database, delete all other state entries which
+//     don't belong to the target state and the genesis state
 //
 // It can take several hours(around 2 hours for mainnet) to finish
 // the whole pruning work. It's recommended to run this offline tool
@@ -265,7 +265,7 @@ func (p *Pruner) Prune(root common.Hash) error {
 	// Ensure the root is really present. The weak assumption
 	// is the presence of root can indicate the presence of the
 	// entire trie.
-	if blob := rawdb.ReadTrieNode(p.db, root); len(blob) == 0 {
+	if !rawdb.HasTrieNode(p.db, root) {
 		// The special case is for clique based networks(rinkeby, goerli
 		// and some other private networks), it's possible that two
 		// consecutive blocks will have same root. In this case snapshot
@@ -279,7 +279,7 @@ func (p *Pruner) Prune(root common.Hash) error {
 		// as the pruning target.
 		var found bool
 		for i := len(layers) - 2; i >= 2; i-- {
-			if blob := rawdb.ReadTrieNode(p.db, layers[i].Root()); len(blob) != 0 {
+			if rawdb.HasTrieNode(p.db, layers[i].Root()) {
 				root = layers[i].Root()
 				found = true
 				log.Info("Selecting middle-layer as the pruning target", "root", root, "depth", i)
@@ -497,7 +497,7 @@ Check the command description "geth snapshot prune-state --help" for more detail
 `
 
 func deleteCleanTrieCache(path string) {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	if !common.FileExist(path) {
 		log.Warn(warningLog)
 		return
 	}

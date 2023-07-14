@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"testing"
 	"time"
 
@@ -65,6 +65,7 @@ var allPrecompiles = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{16}):   &bls12381Pairing{},
 	common.BytesToAddress([]byte{17}):   &bls12381MapG1{},
 	common.BytesToAddress([]byte{18}):   &bls12381MapG2{},
+	common.BytesToAddress([]byte{19}):   &vrfVerify{},
 }
 
 // EIP-152 test vectors
@@ -185,7 +186,7 @@ func benchmarkPrecompiled(addr string, test precompiledTest, bench *testing.B) {
 			return
 		}
 		if common.Bytes2Hex(res) != test.Expected {
-			bench.Error(fmt.Sprintf("Expected %v, got %v", test.Expected, common.Bytes2Hex(res)))
+			bench.Errorf("Expected %v, got %v", test.Expected, common.Bytes2Hex(res))
 			return
 		}
 	})
@@ -334,7 +335,7 @@ func TestPrecompiledBLS12381MapG1Fail(t *testing.T)      { testJsonFail("blsMapG
 func TestPrecompiledBLS12381MapG2Fail(t *testing.T)      { testJsonFail("blsMapG2", "12", t) }
 
 func loadJson(name string) ([]precompiledTest, error) {
-	data, err := ioutil.ReadFile(fmt.Sprintf("testdata/precompiles/%v.json", name))
+	data, err := os.ReadFile(fmt.Sprintf("testdata/precompiles/%v.json", name))
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +345,7 @@ func loadJson(name string) ([]precompiledTest, error) {
 }
 
 func loadJsonFail(name string) ([]precompiledFailureTest, error) {
-	data, err := ioutil.ReadFile(fmt.Sprintf("testdata/precompiles/fail-%v.json", name))
+	data, err := os.ReadFile(fmt.Sprintf("testdata/precompiles/fail-%v.json", name))
 	if err != nil {
 		return nil, err
 	}
@@ -391,3 +392,7 @@ func BenchmarkPrecompiledBLS12381G2MultiExpWorstCase(b *testing.B) {
 	}
 	benchmarkPrecompiled("0f", testcase, b)
 }
+
+func TestPrecompiledVRF(t *testing.T) { testJson("vrf", "13", t) }
+
+func BenchmarkPrecompiledVRF(b *testing.B) { benchJson("vrf", "13", b) }

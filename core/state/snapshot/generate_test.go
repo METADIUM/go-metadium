@@ -1,4 +1,4 @@
-// Copyright 2020 The go-ethereum Authors
+// Copyright 2019 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -148,8 +148,10 @@ func TestGenerateExistentState(t *testing.T) {
 
 func checkSnapRoot(t *testing.T, snap *diskLayer, trieRoot common.Hash) {
 	t.Helper()
+
 	accIt := snap.AccountIterator(common.Hash{})
 	defer accIt.Release()
+
 	snapRoot, err := generateTrieRoot(nil, accIt, common.Hash{}, stackTrieGenerate,
 		func(db ethdb.KeyValueWriter, accountHash, codeHash common.Hash, stat *generateStats) (common.Hash, error) {
 			storageIt, _ := snap.StorageIterator(accountHash, common.Hash{})
@@ -167,6 +169,9 @@ func checkSnapRoot(t *testing.T, snap *diskLayer, trieRoot common.Hash) {
 	}
 	if snapRoot != trieRoot {
 		t.Fatalf("snaproot: %#x != trieroot #%x", snapRoot, trieRoot)
+	}
+	if err := CheckDanglingStorage(snap.diskdb); err != nil {
+		t.Fatalf("Detected dangling storages %v", err)
 	}
 }
 
@@ -234,10 +239,12 @@ func (t *testHelper) Generate() (common.Hash, *diskLayer) {
 //   - miss in the beginning
 //   - miss in the middle
 //   - miss in the end
+//
 // - the contract(non-empty storage) has wrong storage slots
 //   - wrong slots in the beginning
 //   - wrong slots in the middle
 //   - wrong slots in the end
+//
 // - the contract(non-empty storage) has extra storage slots
 //   - extra slots in the beginning
 //   - extra slots in the middle
@@ -375,6 +382,10 @@ func TestGenerateExistentStateWithWrongAccounts(t *testing.T) {
 // Tests that snapshot generation errors out correctly in case of a missing trie
 // node in the account trie.
 func TestGenerateCorruptAccountTrie(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	// We can't use statedb to make a test trie (circular dependency), so make
 	// a fake one manually. We're going with a small account trie of 3 accounts,
 	// without any storage slots to keep the test smaller.
@@ -419,6 +430,10 @@ func TestGenerateCorruptAccountTrie(t *testing.T) {
 // trie node for a storage trie. It's similar to internal corruption but it is
 // handled differently inside the generator.
 func TestGenerateMissingStorageTrie(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	// We can't use statedb to make a test trie (circular dependency), so make
 	// a fake one manually. We're going with a small account trie of 3 accounts,
 	// two of which also has the same 3-slot storage trie attached.
@@ -478,6 +493,10 @@ func TestGenerateMissingStorageTrie(t *testing.T) {
 // Tests that snapshot generation errors out correctly in case of a missing trie
 // node in a storage trie.
 func TestGenerateCorruptStorageTrie(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	// We can't use statedb to make a test trie (circular dependency), so make
 	// a fake one manually. We're going with a small account trie of 3 accounts,
 	// two of which also has the same 3-slot storage trie attached.
@@ -826,6 +845,125 @@ func TestGenerateWithIncompleteStorage(t *testing.T) {
 		t.Errorf("Snapshot generation failed")
 	}
 	checkSnapRoot(t, snap, root)
+	// Signal abortion to the generator and wait for it to tear down
+	stop := make(chan *generatorStats)
+	snap.genAbort <- stop
+	<-stop
+}
+
+func incKey(key []byte) []byte {
+	for i := len(key) - 1; i >= 0; i-- {
+		key[i]++
+		if key[i] != 0x0 {
+			break
+		}
+	}
+	return key
+}
+
+func decKey(key []byte) []byte {
+	for i := len(key) - 1; i >= 0; i-- {
+		key[i]--
+		if key[i] != 0xff {
+			break
+		}
+	}
+	return key
+}
+
+func populateDangling(disk ethdb.KeyValueStore) {
+	populate := func(accountHash common.Hash, keys []string, vals []string) {
+		for i, key := range keys {
+			rawdb.WriteStorageSnapshot(disk, accountHash, hashData([]byte(key)), []byte(vals[i]))
+		}
+	}
+	// Dangling storages of the "first" account
+	populate(common.Hash{}, []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+
+	// Dangling storages of the "last" account
+	populate(common.HexToHash("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+
+	// Dangling storages around the account 1
+	hash := decKey(hashData([]byte("acc-1")).Bytes())
+	populate(common.BytesToHash(hash), []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+	hash = incKey(hashData([]byte("acc-1")).Bytes())
+	populate(common.BytesToHash(hash), []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+
+	// Dangling storages around the account 2
+	hash = decKey(hashData([]byte("acc-2")).Bytes())
+	populate(common.BytesToHash(hash), []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+	hash = incKey(hashData([]byte("acc-2")).Bytes())
+	populate(common.BytesToHash(hash), []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+
+	// Dangling storages around the account 3
+	hash = decKey(hashData([]byte("acc-3")).Bytes())
+	populate(common.BytesToHash(hash), []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+	hash = incKey(hashData([]byte("acc-3")).Bytes())
+	populate(common.BytesToHash(hash), []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+
+	// Dangling storages of the random account
+	populate(randomHash(), []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+	populate(randomHash(), []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+	populate(randomHash(), []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+}
+
+// Tests that snapshot generation with dangling storages. Dangling storage means
+// the storage data is existent while the corresponding account data is missing.
+//
+// This test will populate some dangling storages to see if they can be cleaned up.
+func TestGenerateCompleteSnapshotWithDanglingStorage(t *testing.T) {
+	var helper = newHelper()
+	stRoot := helper.makeStorageTrie([]string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+
+	helper.addAccount("acc-1", &Account{Balance: big.NewInt(1), Root: stRoot, CodeHash: emptyCode.Bytes()})
+	helper.addAccount("acc-2", &Account{Balance: big.NewInt(1), Root: emptyRoot.Bytes(), CodeHash: emptyCode.Bytes()})
+	helper.addAccount("acc-3", &Account{Balance: big.NewInt(1), Root: stRoot, CodeHash: emptyCode.Bytes()})
+
+	helper.addSnapStorage("acc-1", []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+	helper.addSnapStorage("acc-3", []string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+
+	populateDangling(helper.diskdb)
+
+	root, snap := helper.Generate()
+	select {
+	case <-snap.genPending:
+		// Snapshot generation succeeded
+
+	case <-time.After(3 * time.Second):
+		t.Errorf("Snapshot generation failed")
+	}
+	checkSnapRoot(t, snap, root)
+
+	// Signal abortion to the generator and wait for it to tear down
+	stop := make(chan *generatorStats)
+	snap.genAbort <- stop
+	<-stop
+}
+
+// Tests that snapshot generation with dangling storages. Dangling storage means
+// the storage data is existent while the corresponding account data is missing.
+//
+// This test will populate some dangling storages to see if they can be cleaned up.
+func TestGenerateBrokenSnapshotWithDanglingStorage(t *testing.T) {
+	var helper = newHelper()
+	stRoot := helper.makeStorageTrie([]string{"key-1", "key-2", "key-3"}, []string{"val-1", "val-2", "val-3"})
+
+	helper.addTrieAccount("acc-1", &Account{Balance: big.NewInt(1), Root: stRoot, CodeHash: emptyCode.Bytes()})
+	helper.addTrieAccount("acc-2", &Account{Balance: big.NewInt(2), Root: emptyRoot.Bytes(), CodeHash: emptyCode.Bytes()})
+	helper.addTrieAccount("acc-3", &Account{Balance: big.NewInt(3), Root: stRoot, CodeHash: emptyCode.Bytes()})
+
+	populateDangling(helper.diskdb)
+
+	root, snap := helper.Generate()
+	select {
+	case <-snap.genPending:
+		// Snapshot generation succeeded
+
+	case <-time.After(3 * time.Second):
+		t.Errorf("Snapshot generation failed")
+	}
+	checkSnapRoot(t, snap, root)
+
 	// Signal abortion to the generator and wait for it to tear down
 	stop := make(chan *generatorStats)
 	snap.genAbort <- stop

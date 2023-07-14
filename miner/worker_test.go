@@ -37,6 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -216,6 +217,10 @@ func TestGenerateBlockAndImportClique(t *testing.T) {
 }
 
 func testGenerateBlockAndImport(t *testing.T, isClique bool) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	var (
 		engine      consensus.Engine
 		chainConfig *params.ChainConfig
@@ -323,6 +328,10 @@ func testEmptyWork(t *testing.T, chainConfig *params.ChainConfig, engine consens
 }
 
 func TestStreamUncleBlock(t *testing.T) {
+	if metaminer.IsPoW() {
+		// metadium: no uncle block handling
+		return
+	}
 	ethash := ethash.NewFaker()
 	defer ethash.Close()
 
@@ -382,6 +391,10 @@ func TestRegenerateMiningBlockClique(t *testing.T) {
 }
 
 func testRegenerateMiningBlock(t *testing.T, chainConfig *params.ChainConfig, engine consensus.Engine) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	defer engine.Close()
 
 	w, b := newTestWorker(t, chainConfig, engine, rawdb.NewMemoryDatabase(), 0)
@@ -442,6 +455,10 @@ func TestAdjustIntervalClique(t *testing.T) {
 }
 
 func testAdjustInterval(t *testing.T, chainConfig *params.ChainConfig, engine consensus.Engine) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	defer engine.Close()
 
 	w, _ := newTestWorker(t, chainConfig, engine, rawdb.NewMemoryDatabase(), 0)
@@ -638,7 +655,9 @@ func testGetSealingWork(t *testing.T, chainConfig *params.ChainConfig, engine co
 
 	// This API should work even when the automatic sealing is not enabled
 	for _, c := range cases {
-		block, err := w.getSealingBlock(c.parent, timestamp, c.coinbase, c.random)
+		resChan, errChan, _ := w.getSealingBlock(c.parent, timestamp, c.coinbase, c.random, false)
+		block := <-resChan
+		err := <-errChan
 		if c.expectErr {
 			if err == nil {
 				t.Error("Expect error but get nil")
@@ -654,7 +673,9 @@ func testGetSealingWork(t *testing.T, chainConfig *params.ChainConfig, engine co
 	// This API should work even when the automatic sealing is enabled
 	w.start()
 	for _, c := range cases {
-		block, err := w.getSealingBlock(c.parent, timestamp, c.coinbase, c.random)
+		resChan, errChan, _ := w.getSealingBlock(c.parent, timestamp, c.coinbase, c.random, false)
+		block := <-resChan
+		err := <-errChan
 		if c.expectErr {
 			if err == nil {
 				t.Error("Expect error but get nil")

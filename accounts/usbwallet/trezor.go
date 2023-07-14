@@ -84,15 +84,15 @@ func (w *trezorDriver) Status() (string, error) {
 
 // Open implements usbwallet.driver, attempting to initialize the connection to
 // the Trezor hardware wallet. Initializing the Trezor is a two or three phase operation:
-//  * The first phase is to initialize the connection and read the wallet's
-//    features. This phase is invoked if the provided passphrase is empty. The
-//    device will display the pinpad as a result and will return an appropriate
-//    error to notify the user that a second open phase is needed.
-//  * The second phase is to unlock access to the Trezor, which is done by the
-//    user actually providing a passphrase mapping a keyboard keypad to the pin
-//    number of the user (shuffled according to the pinpad displayed).
-//  * If needed the device will ask for passphrase which will require calling
-//    open again with the actual passphrase (3rd phase)
+//   - The first phase is to initialize the connection and read the wallet's
+//     features. This phase is invoked if the provided passphrase is empty. The
+//     device will display the pinpad as a result and will return an appropriate
+//     error to notify the user that a second open phase is needed.
+//   - The second phase is to unlock access to the Trezor, which is done by the
+//     user actually providing a passphrase mapping a keyboard keypad to the pin
+//     number of the user (shuffled according to the pinpad displayed).
+//   - If needed the device will ask for passphrase which will require calling
+//     open again with the actual passphrase (3rd phase)
 func (w *trezorDriver) Open(device io.ReadWriter, passphrase string) error {
 	w.device, w.failure = device, nil
 
@@ -187,6 +187,22 @@ func (w *trezorDriver) SignTx(path accounts.DerivationPath, tx *types.Transactio
 
 func (w *trezorDriver) SignTypedMessage(path accounts.DerivationPath, domainHash []byte, messageHash []byte) ([]byte, error) {
 	return nil, accounts.ErrNotSupported
+}
+
+func (w *trezorDriver) EdPubKey(a accounts.Account) ([]byte, error) {
+	return nil, accounts.ErrNotSupported // TODO
+}
+
+func (w *trezorDriver) EdPubKeyWithPassphrase(a accounts.Account, passphrase string) ([]byte, error) {
+	return nil, accounts.ErrNotSupported // TODO
+}
+
+func (w *trezorDriver) Prove(a accounts.Account, m []byte) ([]byte, error) {
+	return nil, accounts.ErrNotSupported // TODO
+}
+
+func (w *trezorDriver) ProveWithPassphrase(a accounts.Account, passphrase string, m []byte) ([]byte, error) {
+	return nil, accounts.ErrNotSupported // TODO
 }
 
 // trezorDerive sends a derivation request to the Trezor device and returns the

@@ -179,10 +179,10 @@ type Tree struct {
 // If the memory layers in the journal do not match the disk layer (e.g. there is
 // a gap) or the journal is missing, there are two repair cases:
 //
-// - if the 'recovery' parameter is true, all memory diff-layers will be discarded.
-//   This case happens when the snapshot is 'ahead' of the state trie.
-// - otherwise, the entire snapshot is considered invalid and will be recreated on
-//   a background thread.
+//   - if the 'recovery' parameter is true, all memory diff-layers will be discarded.
+//     This case happens when the snapshot is 'ahead' of the state trie.
+//   - otherwise, the entire snapshot is considered invalid and will be recreated on
+//     a background thread.
 func New(diskdb ethdb.KeyValueStore, triedb *trie.Database, cache int, root common.Hash, async bool, rebuild bool, recovery bool) (*Tree, error) {
 	// Create a new, empty snapshot tree
 	snap := &Tree{
@@ -546,20 +546,19 @@ func diffToDisk(bottom *diffLayer) *diskLayer {
 
 		it := rawdb.IterateStorageSnapshots(base.diskdb, hash)
 		for it.Next() {
-			if key := it.Key(); len(key) == 65 { // TODO(karalabe): Yuck, we should move this into the iterator
-				batch.Delete(key)
-				base.cache.Del(key[1:])
-				snapshotFlushStorageItemMeter.Mark(1)
+			key := it.Key()
+			batch.Delete(key)
+			base.cache.Del(key[1:])
+			snapshotFlushStorageItemMeter.Mark(1)
 
-				// Ensure we don't delete too much data blindly (contract can be
-				// huge). It's ok to flush, the root will go missing in case of a
-				// crash and we'll detect and regenerate the snapshot.
-				if batch.ValueSize() > ethdb.IdealBatchSize {
-					if err := batch.Write(); err != nil {
-						log.Crit("Failed to write storage deletions", "err", err)
-					}
-					batch.Reset()
+			// Ensure we don't delete too much data blindly (contract can be
+			// huge). It's ok to flush, the root will go missing in case of a
+			// crash and we'll detect and regenerate the snapshot.
+			if batch.ValueSize() > ethdb.IdealBatchSize {
+				if err := batch.Write(); err != nil {
+					log.Crit("Failed to write storage deletions", "err", err)
 				}
+				batch.Reset()
 			}
 		}
 		it.Release()

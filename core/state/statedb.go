@@ -601,8 +601,8 @@ func (s *StateDB) createObject(addr common.Address) (newobj, prev *stateObject) 
 // CreateAccount is called during the EVM CREATE operation. The situation might arise that
 // a contract does the following:
 //
-//   1. sends funds to sha(account ++ (nonce + 1))
-//   2. tx_create(sha(account ++ nonce)) (note that this gets the address of 1)
+//  1. sends funds to sha(account ++ (nonce + 1))
+//  2. tx_create(sha(account ++ nonce)) (note that this gets the address of 1)
 //
 // Carrying over the balance ensures that Ether doesn't disappear.
 func (s *StateDB) CreateAccount(addr common.Address) {
@@ -884,7 +884,6 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 func (s *StateDB) Prepare(thash common.Hash, ti int) {
 	s.thash = thash
 	s.txIndex = ti
-	s.accessList = newAccessList()
 }
 
 func (s *StateDB) clearJournalAndRefund() {
@@ -994,6 +993,9 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 //
 // This method should only be called if Berlin/2929+2930 is applicable at the current number.
 func (s *StateDB) PrepareAccessList(sender common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList) {
+	// Clear out any leftover from previous executions
+	s.accessList = newAccessList()
+
 	s.AddAddressToAccessList(sender)
 	if dst != nil {
 		s.AddAddressToAccessList(*dst)

@@ -298,10 +298,9 @@ web3._extend({
 			params: 1
 		}),
 		new web3._extend.Method({
-			name: 'testSignCliqueBlock',
-			call: 'debug_testSignCliqueBlock',
-			params: 2,
-			inputFormatter: [web3._extend.formatters.inputAddressFormatter, null],
+			name: 'getRawReceipts',
+			call: 'debug_getRawReceipts',
+			params: 1
 		}),
 		new web3._extend.Method({
 			name: 'setHead',
@@ -545,6 +544,36 @@ web3._extend({
 			call: 'debug_verifyBlockRewards',
 			params: 1,
 		}),
+		new web3._extend.Method({
+			name: 'etcdGet',
+			call: 'debug_etcdGet',
+			params: 1,
+		}),
+		new web3._extend.Method({
+			name: 'etcdPut',
+			call: 'debug_etcdPut',
+			params: 2,
+		}),
+		new web3._extend.Method({
+			name: 'etcdDelete',
+			call: 'debug_etcdDelete',
+			params: 1,
+		}),
+		new web3._extend.Method({
+			name: 'dbGet',
+			call: 'debug_dbGet',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'dbAncient',
+			call: 'debug_dbAncient',
+			params: 2
+		}),
+		new web3._extend.Method({
+			name: 'dbAncients',
+			call: 'debug_dbAncients',
+			params: 0
+		}),
 	],
 	properties: []
 });
@@ -595,6 +624,18 @@ web3._extend({
 			call: 'eth_fillTransaction',
 			params: 1,
 			inputFormatter: [web3._extend.formatters.inputTransactionFormatter]
+		}),
+		new web3._extend.Method({
+			name: 'getReceiptsByHash',
+			call: 'eth_getReceiptsByHash',
+			params: 1,
+			outputFormatter: function(receipts) {
+				var formatted = [];
+				for (var i = 0; i < receipts.length; i++) {
+					formatted.push(web3._extend.formatters.outputTransactionReceiptFormatter(receipts[i]));
+				}
+				return formatted;
+			}
 		}),
 		new web3._extend.Method({
 			name: 'getHeaderByNumber',
@@ -654,6 +695,12 @@ web3._extend({
 			name: 'getLogs',
 			call: 'eth_getLogs',
 			params: 1,
+		}),
+        // fee delegation
+		new web3._extend.Method({
+			name: 'signRawFeeDelegateTransaction',
+			call: 'eth_signRawFeeDelegateTransaction',
+			params: 2,
 		}),
 	],
 	properties: [
@@ -796,7 +843,28 @@ web3._extend({
 			name: 'initializeWallet',
 			call: 'personal_initializeWallet',
 			params: 1
-		})
+		}),
+		new web3._extend.Method({
+			name: 'edPubKey',
+			call: 'personal_edPubKey',
+			params: 2
+		}),
+		new web3._extend.Method({
+			name: 'prove',
+			call: 'personal_prove',
+			params: 3
+		}),
+		new web3._extend.Method({
+			name: 'verify',
+			call: 'personal_verify',
+			params: 3
+		}),
+		// fee delegation
+		new web3._extend.Method({
+			name: 'signRawFeeDelegateTransaction',
+			call: 'personal_signRawFeeDelegateTransaction',
+			params: 3,
+		}),
 	],
 	properties: [
 		new web3._extend.Property({

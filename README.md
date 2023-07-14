@@ -40,15 +40,15 @@ This is default behavior in non-linux environment, e.g. in MacOS X.
 
 ## Join the Metadium Mainnet or Testnet
 
-One can use the following command lines to join the Metadium networks. Note that the default RPC port for `gmet` is 8588, and p2p port is 8589. As with `geth`, if `--datadir` is missing, ~/.metadium is the data directory. 
+One can use the following command lines to join the Metadium networks. Note that the default HTTP port for `gmet` is 8588, p2p port 8589 and WS port 8598. As with `geth`, if `--datadir` is missing, ~/.metadium is the data directory.
 
 ### Metadium Mainnet
 
-    gmet --syncmode full --datadir {data_folder} --rpc --rpcaddr 0.0.0.0
+    gmet --syncmode full --datadir {data_folder} --http --http.addr 0.0.0.0
     
 ### Metadium Testnet
 
-    gmet --testnet</b> --syncmode full --datadir {data_folder} --rpc --rpcaddr 0.0.0.0
+    gmet --metadium-testnet --syncmode full --datadir {data_folder} --http --http.addr 0.0.0.0
 
 ## Setting Up a New Network
 
@@ -164,7 +164,7 @@ First download genesis.json from existing nodes to a data directory.
 
 After getting enodes of mining nodes, run gmet as follows.
 
-    bin/gmet --syncmode full --datadir <data-directory> --bootnodes <enodes> --rpc --rpcaddr 0.0.0.0
+    bin/gmet --syncmode full --datadir <data-directory> --bootnodes <enodes> --http --http.addr 0.0.0.0
 
 ### The original go-ethereum README follows...
 
@@ -186,7 +186,7 @@ archives are published at https://geth.ethereum.org/downloads/.
 
 For prerequisites and detailed build instructions please read the [Installation Instructions](https://geth.ethereum.org/docs/install-and-build/installing-geth).
 
-Building `geth` requires both a Go (version 1.14 or later) and a C compiler. You can install
+Building `geth` requires both a Go (version 1.16 or later) and a C compiler. You can install
 them using your favourite package manager. Once the dependencies are installed, run
 
 ```shell
@@ -221,6 +221,22 @@ Going through all the possible command line flags is out of scope here (please c
 [CLI Wiki page](https://geth.ethereum.org/docs/interface/command-line-options)),
 but we've enumerated a few common parameter combos to get you up to speed quickly
 on how you can run your own `geth` instance.
+
+### Hardware Requirements
+
+Minimum:
+
+* CPU with 2+ cores
+* 4GB RAM
+* 1TB free storage space to sync the Mainnet
+* 8 MBit/sec download Internet service
+
+Recommended:
+
+* Fast CPU with 4+ cores
+* 16GB+ RAM
+* High Performance SSD with at least 1TB free space
+* 25+ MBit/sec download Internet service
 
 ### Full node on the main Ethereum network
 
