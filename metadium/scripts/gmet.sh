@@ -1,29 +1,27 @@
 #!/bin/bash
 
-[ "$META_DIR" = "" ] && META_DIR=/opt
+META_DIR=${META_DIR:-/opt}
 
-CHAIN_ID=101
-CONSENSUS_METHOD=2
-FIXED_GAS_LIMIT=0x40000000
-GAS_PRICE=1000000000
-MAX_IDLE_BLOCK_INTERVAL=600
-BLOCKS_PER_TURN=10
+function get_script_dir ()
+{
+    OPWD=$(pwd)
+    echo $(cd $(dirname ${BASH_SOURCE[0]}) &> /dev/null && pwd)
+    cd "$OPWD"
+}
 
 function get_data_dir ()
 {
     if [ ! "$1" = "" ]; then
-	d=${META_DIR}/$1
-	if [ -x "$d/bin/gmet" ]; then
-	    echo $d
+	if [ -x "$1/bin/gmet" ]; then
+	    echo $1
+        else
+	    d=${META_DIR}/$1
+	    if [ -x "$d/bin/gmet" ]; then
+		echo $d
+	    fi
 	fi
     else
-	for i in $(/bin/ls -1 ${META_DIR}); do
-	    if [ -x "${META_DIR}/$i/bin/gmet" ]; then
-		echo ${META_DIR}/$i
-		return
-	    fi
-	done
-	echo "$(cd "$(dirname "$0")" && pwd)"
+	echo $(dirname $(get_script_dir))
     fi
 }
 
@@ -40,7 +38,7 @@ function init ()
 
     d=$(get_data_dir "${NODE}")
     if [ -x "$d/bin/gmet" ]; then
-	GMET="$d/bin/gmet"
+    GMET="$d/bin/gmet"
     else
 	echo "Cannot find gmet"
 	return 1
@@ -63,13 +61,13 @@ function init ()
     echo "PORT=8588
 DISCOVER=0" > $d/.rc
     ${GMET} --datadir $d init $d/genesis.json
-    echo "Generating dags for epoch 0 and 1..."
-    ${GMET} makedag 0     $d/.ethash &
-    ${GMET} makedag 30000 $d/.ethash &
+    # echo "Generating dags for epoch 0 and 1..."
+    # ${GMET} makedag 0     $d/.ethash &
+    # ${GMET} makedag 30000 $d/.ethash &
     wait
 }
 
-# void init_gov(String node, String config_json, String account_file)
+# void init_gov(String node, String config_json, String account_file, bool doInitOnce)
 # account_file can be
 #   1. keystore file: "<path>"
 #   2. nano ledger: "ledger:"
@@ -79,6 +77,7 @@ function init_gov ()
     NODE="$1"
     CONFIG="$2"
     ACCT="$3"
+    [ "$4" = "0" ] && INIT_ONCE=false || INIT_ONCE=true
 
     if [ ! -f "$CONFIG" ]; then
 	echo "Cannot find config file: $2"
@@ -101,8 +100,7 @@ function init_gov ()
     PORT=$(grep PORT ${d}/.rc | sed -e 's/PORT=//')
     [ "$PORT" = "" ] && PORT=8588
 
-    exec ${GMET} attach http://localhost:${PORT} --preload "$d/conf/MetadiumGovernance.js,$d/conf/deploy-governance.js" --exec 'GovernanceDeployer.deploy("'${ACCT}'", "", "'${CONFIG}'")'
-#    ${GMET} metadium deploy-governance --url http://localhost:${PORT} --gasprice 1 --gas 0xF000000 "$d/conf/MetadiumGovernance.js" "$CONFIG" "${ACCT}"
+    exec ${GMET} attach http://localhost:${PORT} --preload "$d/conf/MetadiumGovernance.js,$d/conf/deploy-governance.js" --exec 'GovernanceDeployer.deploy("'${ACCT}'", "", "'${CONFIG}'", '${INIT_ONCE}')'
 }
 
 function wipe ()
@@ -115,17 +113,7 @@ function wipe ()
 
     cd $d
     /bin/rm -rf geth/LOCK geth/chaindata geth/ethash geth/lightchaindata \
-	geth/transactions.rlp geth/nodes geth/triecache geth.ipc logs/* etcd
-}
-
-function wipe_all ()
-{
-    for i in `/bin/ls -1 ${META_DIR}/`; do
-	if [ ! -d "${META_DIR}/$i" -o ! -x "${META_DIR}/$i/bin/gmet" ]; then
-	    continue
-	fi
-	wipe $i
-    done
+	geth/transactions.rlp geth/nodes geth/triecache gmet.ipc logs/* etcd
 }
 
 function clean ()
@@ -140,16 +128,6 @@ function clean ()
 
     cd $d
     $GMET --datadir ${PWD} removedb
-}
-
-function clean_all ()
-{
-    for i in `/bin/ls -1 ${META_DIR}/`; do
-	if [ ! -d "${META_DIR}/$i" -o ! -d "${META_DIR}/$i/geth" ]; then
-	    continue
-	fi
-	clean $i
-    done
 }
 
 function start ()
@@ -168,10 +146,10 @@ function start ()
     RPCOPT="--http --http.addr 0.0.0.0"
     [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --http.port ${PORT}"
     RPCOPT="${RPCOPT} --ws --ws.addr 0.0.0.0"
-    [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --ws.port $((${PORT}+4))"
+    [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --ws.port $((${PORT}+10))"
     [ "$NONCE_LIMIT" = "" ] || NONCE_LIMIT="--noncelimit $NONCE_LIMIT"
     [ "$BOOT_NODES" = "" ] || BOOT_NODES="--bootnodes $BOOT_NODES"
-    [ "$TESTNET" = "1" ] && TESTNET=--meta-testnet
+    [ "$TESTNET" = "1" ] && TESTNET=--metadium-testnet
     if [ "$DISCOVER" = "0" ]; then
 	DISCOVER=--nodiscover
     else
@@ -208,23 +186,9 @@ function start ()
     fi
 }
 
-function start_all ()
-{
-    for i in `/bin/ls -1 ${META_DIR}/`; do
-	if [ ! -d "${META_DIR}/$i" -o ! -f "${META_DIR}/$i/bin/gmet" ]; then
-	    continue
-	fi
-	start $i
-	echo "started $i."
-	return
-    done
-
-    echo "Cannot find gmet directory. Check if 'bin/gmet' is present in the data directory";
-}
-
 function get_gmet_pids ()
 {
-    ps axww | grep -v grep | grep "gmet.*datadir.*${NODE}" | awk '{print $1}'
+    ps axww | grep -v grep | grep "gmet.*datadir.*${1}" | awk '{print $1}'
 }
 
 function do_nodes ()
@@ -246,7 +210,7 @@ function do_nodes ()
 function usage ()
 {
     echo "Usage: `basename $0` [init <node> <config.json> |
-	init-gov <node> <config.json> <account-file> |
+	init-gov <node> <config.json> <account-file> <do-init-once>|
 	clean [<node>] | wipe [<node>] | console [<node>] |
 	[re]start [<node>] | stop [<node>] | [re]start-nodes | stop-nodes]
 
@@ -267,65 +231,81 @@ case "$1" in
     if [ $# -lt 4 ]; then
 	usage;
     else
-	init_gov "$2" "$3" "$4"
+	init_gov "$2" "$3" "$4" "$5"
     fi
     ;;
 
 "wipe")
-    if [ ! "$2" = "" ]; then
-	wipe $2
-    else
-	wipe_all
-    fi
+    wipe $2
     ;;
 
 "clean")
-    if [ ! "$2" = "" ]; then
-	clean $2
-    else
-	clean_all
-    fi
+    clean $2
     ;;
 
 "stop")
     echo -n "stopping..."
-    if [ ! "$2" = "" ]; then
-	NODE=$2
-    else
-	NODE=
-    fi
-    PIDS=`get_gmet_pids`
+    dir=$(get_data_dir $2)
+    PIDS=$(get_gmet_pids ${dir})
     if [ ! "$PIDS" = "" ]; then
+        # check if we're the miner or leader
+        CMD='
+function check_if_mining() {
+  for (var i = 0; i < 15; i++) {
+    try {
+      var token = debug.etcdGet("token")
+      eval("token = " + token)
+      // console.log("miner -> " + token.miner)
+      if (token.miner != admin.metadiumInfo.self.name) {
+        break
+      } else {
+        console.log("we are the miner, sleeping...")
+        admin.sleep(0.25)
+      }
+    } catch {
+      admin.sleep(0.25)
+    }
+  }
+}
+if (admin.metadiumInfo != null && admin.metadiumInfo.self != null) {
+  check_if_mining()
+  if (admin.metadiumInfo.etcd.leader.name == admin.metadiumInfo.self.name) {
+    var nodes = admin.metadiumNodes("", 0)
+    for (var n of nodes) {
+      if (admin.metadiumInfo.etcd.leader.name != admin.metadiumInfo.self.name) {
+        break
+      }
+      if (n.status == "up" && n.name != admin.metadiumInfo.self.name) {
+        console.log("moving leader to " + n.name)
+        admin.etcdMoveLeader(n.name)
+      }
+    }
+  }
+  check_if_mining()
+}'
+	${dir}/bin/gmet attach ipc:${dir}/gmet.ipc --exec "$CMD" | grep -v "undefined"
 	echo $PIDS | xargs -L1 kill
     fi
     for i in {1..200}; do
-	PIDS=`get_gmet_pids`
+	PIDS=$(get_gmet_pids ${dir})
 	[ "$PIDS" = "" ] && break
 	echo -n "."
 	sleep 1
     done
-    PIDS=`get_gmet_pids`
+    PIDS=$(get_gmet_pids ${dir})
     if [ ! "$PIDS" = "" ]; then
 	echo $PIDS | xargs -L1 kill -9
     fi
     # wait until geth/chaindata is free
-    if [ ! "$NODE" = "" ]; then
-        d=$(get_data_dir "$1")
-        for i in {1..200}; do
-            lsof ${d}/geth/chaindata/LOG 2>&1 | grep -q gmet > /dev/null 2>&1 || break
-            sleep 1
-        done
-    fi
+    for i in {1..200}; do
+	lsof ${dir}/geth/chaindata/LOG 2>&1 | grep -q gmet > /dev/null 2>&1 || break
+	sleep 1
+    done
     echo "done."
     ;;
 
 "start")
-    if [ ! "$2" = "" ]; then
-	start $2
-	echo "started $2."
-    else
-	start_all
-    fi
+    start $2
     ;;
 
 "start-inner")
@@ -337,13 +317,8 @@ case "$1" in
     ;;
 
 "restart")
-    if [ ! "$2" = "" ]; then
-	$0 stop $2
-	start $2
-    else
-	$0 stop
-	start_all
-    fi
+    $0 stop $2
+    start $2
     ;;
 
 "start-nodes"|"restart-nodes"|"stop-nodes")
@@ -362,7 +337,7 @@ case "$1" in
     if [ -f "$d/rc.js" ]; then
 	RCJS="--preload $d/rc.js"
     fi
-    exec ${d}/bin/gmet ${RCJS} attach ipc:${d}/geth.ipc
+    exec ${d}/bin/gmet ${RCJS} attach ipc:${d}/gmet.ipc
     ;;
 
 *)

@@ -23,6 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 )
@@ -84,7 +85,7 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	if block.GasUsed() != usedGas {
 		return fmt.Errorf("invalid gas used (remote: %d local: %d)", block.GasUsed(), usedGas)
 	}
-	if block.Fees().Cmp(fees) != 0 {
+	if !metaminer.IsPoW() && block.Fees().Cmp(fees) != 0 {
 		return fmt.Errorf("invalid fees collected (remote: %v local: %v)", block.Fees(), fees)
 	}
 
@@ -113,6 +114,11 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 func CalcGasLimit(parentGasLimit, desiredLimit uint64) uint64 {
 	if params.FixedGasLimit != 0 {
 		return params.FixedGasLimit
+	} else if !metaminer.IsPoW() {
+		if desiredLimit == 0 { // Metadium: governance is not initialized yet, inherit parent's gas limit
+			return parentGasLimit
+		}
+		return desiredLimit
 	}
 
 	delta := parentGasLimit/params.GasLimitBoundDivisor - 1

@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -174,8 +175,7 @@ func (b *BlockGen) AddUncle(h *types.Header) {
 	if b.config.IsLondon(h.Number) {
 		h.BaseFee = misc.CalcBaseFee(b.config, parent)
 		if !b.config.IsLondon(parent.Number) {
-			parentGasLimit := parent.GasLimit * params.ElasticityMultiplier
-			h.GasLimit = CalcGasLimit(parentGasLimit, parentGasLimit)
+			h.GasLimit = parent.GasLimit
 		}
 	}
 	b.uncles = append(b.uncles, h)
@@ -309,8 +309,12 @@ func makeHeader(chain consensus.ChainReader, parent *types.Block, state *state.S
 	if chain.Config().IsLondon(header.Number) {
 		header.BaseFee = misc.CalcBaseFee(chain.Config(), parent.Header())
 		if !chain.Config().IsLondon(parent.Number()) {
-			parentGasLimit := parent.GasLimit() * params.ElasticityMultiplier
-			header.GasLimit = CalcGasLimit(parentGasLimit, parentGasLimit)
+			if metaminer.IsPoW() {
+				parentGasLimit := parent.GasLimit() * params.ElasticityMultiplier
+				header.GasLimit = CalcGasLimit(parentGasLimit, parentGasLimit)
+			} else {
+				header.GasLimit = parent.GasLimit()
+			}
 		}
 	}
 	return header

@@ -8,9 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/big"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 
@@ -89,14 +89,14 @@ func loadGethAccount(password, fileName string) (string, *common.Address, error)
 			return "", nil, err
 		}
 	} else if password[0] == '@' {
-		pw, err := ioutil.ReadFile(password[1:])
+		pw, err := os.ReadFile(password[1:])
 		if err != nil {
 			return "", nil, err
 		}
 		password = strings.TrimSpace(string(pw))
 	}
 
-	keyJson, err := ioutil.ReadFile(fileName)
+	keyJson, err := os.ReadFile(fileName)
 	if err != nil {
 		return "", nil, err
 	}
@@ -134,7 +134,7 @@ func (acct *gethAccount) Derive(path accounts.DerivationPath) (common.Address, e
 }
 
 func (acct *gethAccount) SignTx(path accounts.DerivationPath, tx *types.Transaction, chainID *big.Int) (common.Address, *types.Transaction, error) {
-	signer := types.NewEIP155Signer(chainID)
+	signer := types.NewLondonSigner(chainID)
 	stx, err := types.SignTx(tx, signer, acct.key.PrivateKey)
 	return acct.key.Address, stx, err
 }

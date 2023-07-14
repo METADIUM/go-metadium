@@ -2,7 +2,7 @@
 # with Go source code. If you know what GOPATH is then you probably
 # don't need to bother with make.
 
-.PHONY: geth android ios evm all test clean rocksdb etcd
+.PHONY: geth android ios evm all test clean rocksdb
 .PHONY: gmet-linux
 
 GOBIN = ./build/bin
@@ -29,7 +29,7 @@ ROCKSDB_DIR=$(shell pwd)/rocksdb
 ROCKSDB_TAG=-tags rocksdb
 endif
 
-metadium: etcd gmet logrot
+metadium: gmet logrot
 	@[ -d build/conf ] || mkdir -p build/conf
 	@cp -p metadium/scripts/gmet.sh metadium/scripts/solc.sh build/bin/
 	@cp -p metadium/scripts/config.json.example		\
@@ -40,7 +40,7 @@ metadium: etcd gmet logrot
 	@(cd build; tar cfz metadium.tar.gz bin conf)
 	@echo "Done building build/metadium.tar.gz"
 
-gmet: etcd rocksdb metadium/governance_abi.go
+gmet: rocksdb metadium/governance_abi.go
 ifeq ($(USE_ROCKSDB), NO)
 	$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/gmet
 else
@@ -68,7 +68,7 @@ else
 		$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/dbbench
 endif
 
-all:
+all: metadium/governance_abi.go
 	$(GORUN) build/ci.go install
 
 android:
@@ -85,6 +85,9 @@ ios:
 
 test: all
 	$(GORUN) build/ci.go test
+
+test-short: all
+	$(GORUN) build/ci.go test -short
 
 lint: metadium/governance_abi.go ## Run linters.
 	$(GORUN) build/ci.go lint
@@ -103,14 +106,13 @@ clean:
 
 devtools:
 	env GOBIN= go install golang.org/x/tools/cmd/stringer@latest
-	env GOBIN= go install github.com/kevinburke/go-bindata/go-bindata@latest
 	env GOBIN= go install github.com/fjl/gencodec@latest
 	env GOBIN= go install github.com/golang/protobuf/protoc-gen-go@latest
 	env GOBIN= go install ./cmd/abigen
 	@type "solc" 2> /dev/null || echo 'Please install solc'
 	@type "protoc" 2> /dev/null || echo 'Please install protoc'
 
-gmet-linux: etcd
+gmet-linux:
 	@docker --version > /dev/null 2>&1;				\
 	if [ ! $$? = 0 ]; then						\
 		echo "Docker not found.";				\
@@ -130,11 +132,6 @@ rocksdb:
 	@[ ! -e rocksdb/.git ] && git submodule update --init rocksdb;	\
 	cd $(ROCKSDB_DIR) && PORTABLE=1 make -j8 static_lib;
 endif
-
-etcd:
-	@if [ ! -e etcd/.git ]; then			\
-		git submodule update --init etcd;	\
-	fi
 
 AWK_CODE='								\
 BEGIN { print "package metadium"; bin = 0; name = ""; abi = ""; }	\
@@ -162,7 +159,7 @@ BEGIN { print "package metadium\n"; }					     \
   n = "Registry";							     \
   print "var " n "Abi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
 }									     \
-/^var Staking_contract/ {						     \
+/^var StakingImp_contract/ {						     \
   sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
   n = "Staking";							     \
   print "var " n "Abi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
@@ -172,7 +169,7 @@ BEGIN { print "package metadium\n"; }					     \
   n = "EnvStorageImp";							     \
   print "var " n "Abi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
 }									     \
-/^var Gov_contract/ {							     \
+/^var GovImp_contract/ {							     \
   sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
   n = "Gov";								     \
   print "var " n "Abi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \

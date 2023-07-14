@@ -38,6 +38,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
+	metaapi "github.com/ethereum/go-ethereum/metadium/api"
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/hashicorp/go-bexpr"
 )
@@ -212,8 +213,8 @@ func (*HandlerT) Stacks(filter *string) string {
 		// E.g. (eth || snap) && !p2p -> (eth in Value || snap in Value) && p2p not in Value
 		expanded = regexp.MustCompile(`[:/\.A-Za-z0-9_-]+`).ReplaceAllString(expanded, "`$0` in Value")
 		expanded = regexp.MustCompile("!(`[:/\\.A-Za-z0-9_-]+`)").ReplaceAllString(expanded, "$1 not")
-		expanded = strings.Replace(expanded, "||", "or", -1)
-		expanded = strings.Replace(expanded, "&&", "and", -1)
+		expanded = strings.ReplaceAll(expanded, "||", "or")
+		expanded = strings.ReplaceAll(expanded, "&&", "and")
 		log.Info("Expanded filter expression", "filter", *filter, "expanded", expanded)
 
 		expr, err := bexpr.CreateEvaluator(expanded)
@@ -286,4 +287,19 @@ func (*HandlerT) DbStats(device string, b interface{}) []uint64 {
 
 func (*HandlerT) VerifyBlockRewards(block *big.Int) interface{} {
 	return metaminer.VerifyBlockRewards(block)
+}
+
+// Remove an etcd key / value pair
+func (*HandlerT) EtcdPut(key, value string) error {
+	return metaapi.EtcdPut(key, value)
+}
+
+// Get etcd key's value
+func (*HandlerT) EtcdGet(key string) (string, error) {
+	return metaapi.EtcdGet(key)
+}
+
+// Remove an etcd key / value pair
+func (*HandlerT) EtcdDelete(key string) error {
+	return metaapi.EtcdDelete(key)
 }
