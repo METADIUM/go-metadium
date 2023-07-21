@@ -160,6 +160,7 @@ var (
 		AvocadoBlock:        big.NewInt(59_860_000),
 		PangyoBlock:         nil,
 		ApplepieBlock:       nil,
+		BokbunjaBlock:       nil,
 		Ethash:              new(EthashConfig),
 	}
 
@@ -182,6 +183,7 @@ var (
 		AvocadoBlock:        big.NewInt(40_759_810),
 		PangyoBlock:         nil,
 		ApplepieBlock:       nil,
+		BokbunjaBlock:       nil,
 		Ethash:              new(EthashConfig),
 	}
 
@@ -305,16 +307,16 @@ var (
 	//
 	// This configuration is intentionally not using keyed fields to force anyone
 	// adding flags to the config to also have to set these fields.
-	AllEthashProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, new(EthashConfig), nil}
+	AllEthashProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, nil, new(EthashConfig), nil}
 
 	// AllCliqueProtocolChanges contains every protocol change (EIPs) introduced
 	// and accepted by the Ethereum core developers into the Clique consensus.
 	//
 	// This configuration is intentionally not using keyed fields to force anyone
 	// adding flags to the config to also have to set these fields.
-	AllCliqueProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, nil, nil, &CliqueConfig{Period: 0, Epoch: 30000}}
+	AllCliqueProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, nil, nil, nil, &CliqueConfig{Period: 0, Epoch: 30000}}
 
-	TestChainConfig = &ChainConfig{big.NewInt(1), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, new(EthashConfig), nil}
+	TestChainConfig = &ChainConfig{big.NewInt(1), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, nil, new(EthashConfig), nil}
 	TestRules       = TestChainConfig.Rules(new(big.Int), false)
 )
 
@@ -398,6 +400,7 @@ type ChainConfig struct {
 	AvocadoBlock        *big.Int `json:"avocadoBlock,omitempty"`        // Avocado switch block (nil = no fork, 0 = already on avocado)
 	PangyoBlock         *big.Int `json:"pangyoBlock,omitempty"`         // Pangyo switch block (nil = no fork, 0 = already on pangyo)
 	ApplepieBlock       *big.Int `json:"applepieBlock,omitempty"`       // Applepie switch block (nil = no fork, 0 = already on applepie)
+	BokbunjaBlock       *big.Int `json:"bokbunjaBlock,omitempty"`       // Applepie switch block (nil = no fork, 0 = already on applepie)
 
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
@@ -438,7 +441,7 @@ func (c *ChainConfig) String() string {
 	default:
 		engine = "unknown"
 	}
-	return fmt.Sprintf("{ChainID: %v Homestead: %v DAO: %v DAOSupport: %v EIP150: %v EIP155: %v EIP158: %v Byzantium: %v Constantinople: %v Petersburg: %v Istanbul: %v, Muir Glacier: %v, Berlin: %v, London: %v, Arrow Glacier: %v, MergeFork: %v, AvocadoFork: %v, PangyoFork: %v, ApplepieFork: %v, Terminal TD: %v, Engine: %v}",
+	return fmt.Sprintf("{ChainID: %v Homestead: %v DAO: %v DAOSupport: %v EIP150: %v EIP155: %v EIP158: %v Byzantium: %v Constantinople: %v Petersburg: %v Istanbul: %v, Muir Glacier: %v, Berlin: %v, London: %v, Arrow Glacier: %v, MergeFork: %v, AvocadoFork: %v, PangyoFork: %v, ApplepieFork: %v, BokbunjaFork: %v, Terminal TD: %v, Engine: %v}",
 		c.ChainID,
 		c.HomesteadBlock,
 		c.DAOForkBlock,
@@ -458,6 +461,7 @@ func (c *ChainConfig) String() string {
 		c.AvocadoBlock,
 		c.PangyoBlock,
 		c.ApplepieBlock,
+		c.BokbunjaBlock,
 		c.TerminalTotalDifficulty,
 		engine,
 	)
@@ -528,6 +532,11 @@ func (c *ChainConfig) IsLondon(num *big.Int) bool {
 // IsPangyo returns whether num is either equal to the Pangyo fork block or greater.
 func (c *ChainConfig) IsPangyo(num *big.Int) bool {
 	return isForked(c.PangyoBlock, num)
+}
+
+// IsBokbunja returns whether num is either equal to the Bokbunja fork block or greater.
+func (c *ChainConfig) IsBokbunja(num *big.Int) bool {
+	return isForked(c.BokbunjaBlock, num)
 }
 
 // fee delegation
@@ -747,6 +756,7 @@ type Rules struct {
 	IsMerge                                                 bool
 	IsAvocado                                               bool
 	IsPangyo, IsApplepie                                    bool
+	IsBokbunja                                              bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -771,5 +781,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool) Rules {
 		IsAvocado:        c.IsAvocado(num),
 		IsPangyo:         c.IsPangyo(num),
 		IsApplepie:       c.IsApplepie(num),
+		IsBokbunja:       c.IsBokbunja(num),
 	}
 }
