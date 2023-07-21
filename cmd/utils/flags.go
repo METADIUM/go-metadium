@@ -141,12 +141,12 @@ var (
 	}
 	NetworkIdFlag = cli.Uint64Flag{
 		Name:  "networkid",
-		Usage: "Explicitly set network id (integer, 1111=MetadiumMainnet , 1112=MetadiumTestnet)(For testnets: use --metadium-testnet --ropsten, --rinkeby, --goerli instead)",
+		Usage: "Explicitly set network id (integer, 11=MetadiumMainnet , 112=MetadiumTestnet)(For testnets: use --metadium-testnet --ropsten, --rinkeby, --goerli instead)",
 		Value: ethconfig.Defaults.NetworkId,
 	}
 	MainnetFlag = cli.BoolFlag{
 		Name:  "mainnet",
-		Usage: "Ethereum mainnet",
+		Usage: "Metadium mainnet",
 	}
 	MetaTestnetFlag = cli.BoolFlag{
 		Name:  "metadium-testnet",
@@ -268,6 +268,10 @@ var (
 	OverrideTerminalTotalDifficulty = BigFlag{
 		Name:  "override.terminaltotaldifficulty",
 		Usage: "Manually specify TerminalTotalDifficulty, overriding the bundled setting",
+	}
+	OverrideBokbunjaFlag = cli.Uint64Flag{
+		Name:  "override.bokbunja",
+		Usage: "Manually specify Bokbunja fork-block, overriding the bundled setting",
 	}
 	// Light server and client settings
 	LightServeFlag = cli.IntFlag{

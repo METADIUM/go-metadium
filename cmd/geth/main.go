@@ -77,6 +77,7 @@ var (
 		utils.SmartCardDaemonPathFlag,
 		utils.OverrideArrowGlacierFlag,
 		utils.OverrideTerminalTotalDifficulty,
+		utils.OverrideBokbunjaFlag,
 		utils.EthashCacheDirFlag,
 		utils.EthashCachesInMemoryFlag,
 		utils.EthashCachesOnDiskFlag,
