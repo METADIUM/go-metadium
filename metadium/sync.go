@@ -30,7 +30,7 @@ type coinbaseEnodeEntry struct {
 }
 
 const (
-	metaWorkKey       = "work"
+	metaWorkKey       = "metadium-work"
 	metaTokenKey      = "token"
 	MiningTokenTTL    = 10 // seconds
 	SyncIdleThreshold = 30 // seconds
@@ -43,8 +43,9 @@ var (
 	// the latest block info: *core.types.Header
 	latestBlock atomic.Value
 
-	// the latest etcd leader ID: uint64
-	latestEtcdLeader atomic.Value
+	// the previous and the latest etcd leader ID: uint64
+	previousEtcdLeader atomic.Value
+	latestEtcdLeader   atomic.Value
 
 	// the latest mining token info: []byte, json'ed MetaToken
 	latestMiningToken atomic.Value

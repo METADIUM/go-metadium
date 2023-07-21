@@ -78,9 +78,11 @@ type metaAdmin struct {
 	lastBlock     int64
 	modifiedBlock int64
 
+	isLegacyGovernance   bool
 	blockInterval        int64
 	blocksPer            int64
 	blockReward          *big.Int
+	gasPrice             *big.Int
 	maxPriorityFeePerGas *big.Int
 	maxBaseFee           *big.Int
 	gasLimit             *big.Int
@@ -123,7 +125,7 @@ type rewardParameters struct {
 
 var (
 	// "Metadium Registry"
-	magic, _        = big.NewInt(0).SetString("0x57656d6978205265676973747279", 0)
+	magic, _        = big.NewInt(0).SetString("0x4d6574616469756d205265676973747279", 0)
 	etcdClusterName = "Metadium"
 	big0            = big.NewInt(0)
 	nilAddress      = common.Address{}
@@ -144,6 +146,9 @@ var (
 	// cached block build parameters
 	blockBuildParamsLock = &sync.Mutex{}
 	blockBuildParams     *blockBuildParameters
+
+	registryContract, govContract, stakingContract, envStorageImpContract                         *metclient.ContractData
+	registryLegacyContract, govLegacyContract, stakingLegacyContract, envStorageImpLegacyContract *metclient.ContractData
 
 	// testnet block 94 rewards
 	testnetBlock94Rewards       []reward
@@ -626,7 +631,18 @@ func (ma *metaAdmin) getGovData(refresh bool) (data *govdata, err error) {
 		return
 	}
 
-	data.modifiedBlock, err = ma.getInt(ctx, ma.gov, block.Number,
+	env := &metclient.RemoteContract{
+		Cli: ma.cli,
+		Abi: envStorageImpContract.Abi,
+		To:  ma.envStorage.To,
+	}
+	gov := &metclient.RemoteContract{
+		Cli: ma.cli,
+		Abi: govContract.Abi,
+		To:  ma.gov.To,
+	}
+
+	data.modifiedBlock, err = ma.getInt(ctx, gov, block.Number,
 		"modifiedBlock")
 	if err != nil {
 		return
@@ -635,34 +651,31 @@ func (ma *metaAdmin) getGovData(refresh bool) (data *govdata, err error) {
 		return
 	}
 
-	data.blockInterval, err = ma.getInt(ctx, ma.envStorage, block.Number, "getBlockCreationTime")
+	data.blockInterval, err = ma.getInt(ctx, env, block.Number, "getBlockCreationTime")
 	if err != nil {
-		// TODO: ignore this error for now
 		data.blockInterval = ma.blockInterval
-		//return
+		return
 	}
-	data.blocksPer, err = ma.getInt(ctx, ma.envStorage, block.Number, "getBlocksPer")
+	data.blocksPer, err = ma.getInt(ctx, env, block.Number, "getBlocksPer")
 	if err != nil {
-		// TODO: ignore this error for now
 		data.blocksPer = ma.blocksPer
-		//return
+		return
 	}
-	data.maxIdleBlockInterval, err = ma.getInt(ctx, ma.envStorage, block.Number, "getMaxIdleBlockInterval")
+	data.maxIdleBlockInterval, err = ma.getInt(ctx, env, block.Number, "getMaxIdleBlockInterval")
 	if err != nil {
-		// TODO: ignore this error for now
 		data.maxIdleBlockInterval = int64(params.MaxIdleBlockInterval)
-		//return
+		return
 	}
-	err = metclient.CallContract(ctx, ma.envStorage, "getBlockRewardAmount", nil, &data.blockReward, block.Number)
+	err = metclient.CallContract(ctx, env, "getBlockRewardAmount", nil, &data.blockReward, block.Number)
 	if err != nil {
 		return
 	}
-	err = metclient.CallContract(ctx, ma.envStorage, "getMaxPriorityFeePerGas", nil, &data.maxPriorityFeePerGas, block.Number)
+	err = metclient.CallContract(ctx, env, "getMaxPriorityFeePerGas", nil, &data.maxPriorityFeePerGas, block.Number)
 	if err != nil {
 		return
 	}
 	gasLimitAndBaseFee := make([]*big.Int, 3)
-	err = metclient.CallContract(ctx, ma.envStorage, "getGasLimitAndBaseFee", nil, &gasLimitAndBaseFee, block.Number)
+	err = metclient.CallContract(ctx, env, "getGasLimitAndBaseFee", nil, &gasLimitAndBaseFee, block.Number)
 	if err != nil {
 		return
 	}
@@ -670,7 +683,7 @@ func (ma *metaAdmin) getGovData(refresh bool) (data *govdata, err error) {
 	data.baseFeeMaxChangeRate = gasLimitAndBaseFee[1].Int64()
 	data.gasTargetPercentage = gasLimitAndBaseFee[2].Int64()
 
-	err = metclient.CallContract(ctx, ma.envStorage, "getMaxBaseFee", nil, &data.maxBaseFee, block.Number)
+	err = metclient.CallContract(ctx, env, "getMaxBaseFee", nil, &data.maxBaseFee, block.Number)
 	if err != nil {
 		return
 	}
@@ -723,6 +736,171 @@ func (ma *metaAdmin) getGovData(refresh bool) (data *govdata, err error) {
 	return
 }
 
+func (ma *metaAdmin) update() error {
+	if ma.nodeInfo == nil {
+		nodeInfo, err := ma.getNodeInfo()
+		if err != nil {
+			log.Error("Failed to get node info", "error", err)
+			return err
+		} else {
+			ma.nodeInfo = nodeInfo
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if latest, err := admin.cli.HeaderByNumber(ctx, nil); err != nil {
+		return err
+	} else if latest.Number.Int64() == ma.lastBlock {
+		return nil
+	} else if reg, gov, env, staking, err := ma.getRegGovEnvContracts(ctx, latest.Number); err != nil {
+		return err
+	} else {
+		ma.registry, ma.gov, ma.envStorage, ma.staking = reg, gov, env, staking
+	}
+
+	// set coinbase and minimum gas price
+	setGasCoinbase := func(feePerGas *big.Int) {
+		title := "maxPriorityFeePerGas"
+		if ma.isLegacyGovernance {
+			title = "gasPrice"
+		}
+		var v *bool
+		err := ma.rpcCli.CallContext(ctx, &v, "miner_setGasPrice",
+			"0x"+feePerGas.Text(16))
+		if err != nil || !*v {
+			log.Info("Failed to set minimum gas price", title, feePerGas, "error", err)
+		} else {
+			log.Info("Successfully set", title, feePerGas)
+		}
+
+		if ma.self != nil && !bytes.Equal(ma.self.Addr[:], nilAddress[:]) {
+			err = ma.rpcCli.CallContext(ctx, &v, "miner_setEtherbase", ma.self.Addr)
+			if err != nil || !*v {
+				log.Info("Failed to set the coinbase", "error", err)
+			} else {
+				log.Info("Successfully set the coinbase")
+			}
+		}
+	}
+
+	if data, err := ma.getGovData(false); err == nil {
+		if data.modifiedBlock != 0 && ma.modifiedBlock != data.modifiedBlock {
+			ma.lock.Lock()
+			defer ma.lock.Unlock()
+
+			ma.isLegacyGovernance = false
+			ma.modifiedBlock = data.modifiedBlock
+			ma.blockInterval = data.blockInterval
+			ma.blocksPer = data.blocksPer
+			ma.blockReward = data.blockReward
+			ma.maxPriorityFeePerGas = data.maxPriorityFeePerGas
+			ma.maxBaseFee = data.maxBaseFee
+			ma.gasLimit = data.gasLimit
+			ma.baseFeeMaxChangeRate = data.baseFeeMaxChangeRate
+			ma.gasTargetPercentage = data.gasTargetPercentage
+
+			_nodes := map[string]*metaNode{}
+			for _, i := range data.nodes {
+				_nodes[i.Id] = i
+				if i.Id == ma.nodeInfo.ID {
+					ma.self = i
+				}
+			}
+			ma.nodes = _nodes
+
+			if len(data.addedNodes) > 0 {
+				log.Debug("Added:\n")
+				for _, i := range data.addedNodes {
+					log.Debug(fmt.Sprintf("%v\n", i))
+					ma.addPeer(i)
+				}
+			}
+			if len(data.addedNodes) > 0 {
+				log.Debug("Updated:\n")
+				for _, i := range data.updatedNodes {
+					log.Debug(fmt.Sprintf("%v\n", i))
+				}
+			}
+			if len(data.addedNodes) > 0 {
+				log.Debug("Deleted:\n")
+				for _, i := range data.deletedNodes {
+					log.Debug(fmt.Sprintf("%v\n", i))
+				}
+			}
+
+			if params.MaxIdleBlockInterval != uint64(data.maxIdleBlockInterval) {
+				params.MaxIdleBlockInterval = uint64(data.maxIdleBlockInterval)
+			}
+
+			// set coinbase and minimum gas price
+			setGasCoinbase(data.maxPriorityFeePerGas)
+		}
+		if data.blockNum != 0 {
+			ma.lastBlock = data.blockNum
+		}
+	} else if data, err := ma.getGovDataLegacy(); err == nil {
+		if data.modifiedBlock != 0 && ma.modifiedBlock != data.modifiedBlock {
+			ma.lock.Lock()
+			defer ma.lock.Unlock()
+
+			ma.isLegacyGovernance = true
+			ma.registry.Abi = registryLegacyContract.Abi
+			ma.gov.Abi = govLegacyContract.Abi
+			ma.envStorage.Abi = envStorageImpLegacyContract.Abi
+			ma.staking.Abi = stakingLegacyContract.Abi
+
+			ma.modifiedBlock = data.modifiedBlock
+			ma.blocksPer = data.blocksPer
+			ma.gasPrice = data.gasPrice
+
+			_nodes := map[string]*metaNode{}
+			for _, i := range data.nodes {
+				_nodes[i.Id] = i
+				if i.Id == ma.nodeInfo.ID {
+					ma.self = i
+				}
+			}
+			ma.nodes = _nodes
+
+			if len(data.addedNodes) > 0 {
+				log.Debug("Added:\n")
+				for _, i := range data.addedNodes {
+					log.Debug(fmt.Sprintf("%v\n", i))
+					ma.addPeer(i)
+				}
+			}
+			if len(data.addedNodes) > 0 {
+				log.Debug("Updated:\n")
+				for _, i := range data.updatedNodes {
+					log.Debug(fmt.Sprintf("%v\n", i))
+				}
+			}
+			if len(data.addedNodes) > 0 {
+				log.Debug("Deleted:\n")
+				for _, i := range data.deletedNodes {
+					log.Debug(fmt.Sprintf("%v\n", i))
+				}
+			}
+
+			if params.MaxIdleBlockInterval != uint64(data.maxIdleBlockInterval) {
+				params.MaxIdleBlockInterval = uint64(data.maxIdleBlockInterval)
+			}
+
+			// set coinbase and minimum gas price
+			setGasCoinbase(data.gasPrice)
+		}
+		if data.blockNum != 0 {
+			ma.lastBlock = int64(data.blockNum)
+		}
+
+	} else {
+		return err
+	}
+	return nil
+}
+
 func StartAdmin(stack *node.Node, datadir string) {
 	if !(params.ConsensusMethod == params.ConsensusPoA ||
 		params.ConsensusMethod == params.ConsensusETCD ||
@@ -733,23 +911,6 @@ func StartAdmin(stack *node.Node, datadir string) {
 	rpcCli, err := stack.Attach()
 	if err != nil {
 		utils.Fatalf("Failed to attach to self: %v", err)
-	}
-
-	registryContract, err := metclient.LoadJsonContract(strings.NewReader(RegistryAbi))
-	if err != nil {
-		utils.Fatalf("Loading ABI failed: %v", err)
-	}
-	govContract, err := metclient.LoadJsonContract(strings.NewReader(GovAbi))
-	if err != nil {
-		utils.Fatalf("Loading ABI failed: %v", err)
-	}
-	stakingContract, err := metclient.LoadJsonContract(strings.NewReader(StakingAbi))
-	if err != nil {
-		utils.Fatalf("Loading ABI failed: %v", err)
-	}
-	envStorageImpContract, err := metclient.LoadJsonContract(strings.NewReader(EnvStorageImpAbi))
-	if err != nil {
-		utils.Fatalf("Loading ABI failed: %v", err)
 	}
 
 	cli := ethclient.NewClient(rpcCli)
@@ -764,12 +925,13 @@ func StartAdmin(stack *node.Node, datadir string) {
 			Cli: cli, Abi: stakingContract.Abi},
 		envStorage: &metclient.RemoteContract{
 			Cli: cli, Abi: envStorageImpContract.Abi},
-		Updates:     make(chan bool, 10),
-		rpcCli:      rpcCli,
-		cli:         cli,
-		blocksPer:   100,
-		etcdDir:     path.Join(datadir, "etcd"),
-		etcdTimeout: 30 * time.Second,
+		Updates:            make(chan bool, 10),
+		rpcCli:             rpcCli,
+		cli:                cli,
+		isLegacyGovernance: true,
+		blocksPer:          100,
+		etcdDir:            path.Join(datadir, "etcd"),
+		etcdTimeout:        30 * time.Second,
 	}
 
 	admin.bootNodeId, admin.bootAccount, err = admin.getGenesisInfo()
@@ -777,12 +939,32 @@ func StartAdmin(stack *node.Node, datadir string) {
 		return
 	}
 
-	go admin.run()
+	admin.update()
+
 	go admin.handleNewBlocks()
 	go func() {
+		peerTime := time.Now()
 		for {
-			time.Sleep(time.Duration(SyncIdleThreshold/2) * time.Second)
+			if admin.amPartner() {
+				if admin.self != nil && !admin.etcdIsLeader() {
+					EtcdStart()
+				}
+				admin.checkMining()
+
+				t := time.Now()
+				if t.Sub(peerTime).Seconds() >= 30 {
+					peerTime = t
+					nodes := admin.getNodes()
+					for _, n := range nodes {
+						if !admin.isPeerUp(n.Id) {
+							admin.addPeer(n)
+						}
+					}
+				}
+			}
 			syncCheck()
+
+			time.Sleep(time.Duration(5 * time.Second))
 		}
 	}()
 }
@@ -806,109 +988,6 @@ func (ma *metaAdmin) addPeer(node *metaNode) error {
 	}
 
 	return nil
-}
-
-func (ma *metaAdmin) update() {
-	if ma.registry == nil || ma.registry.To == nil {
-		return
-	}
-
-	refresh := false
-	registry, gov, staking, envStorage, err := ma.getAdminAddresses()
-	if err != nil {
-		return
-	} else if !bytes.Equal(registry[:], ma.registry.To[:]) ||
-		!bytes.Equal(gov[:], ma.gov.To[:]) ||
-		!bytes.Equal(staking[:], ma.staking.To[:]) ||
-		!bytes.Equal(envStorage[:], ma.envStorage.To[:]) {
-		ma.registry.To = registry
-		ma.gov.To = gov
-		ma.staking.To = staking
-		ma.envStorage.To = envStorage
-		refresh = true
-	}
-
-	data, err := ma.getGovData(refresh)
-	if err != nil {
-		log.Error(fmt.Sprintf("Failed to get nodes: %v", err))
-	} else if refresh ||
-		(data.modifiedBlock != 0 && ma.modifiedBlock != data.modifiedBlock) {
-		log.Debug(fmt.Sprintf("Modified Block: %d", data.modifiedBlock))
-
-		ma.modifiedBlock = data.modifiedBlock
-		ma.blockInterval = data.blockInterval
-		ma.blocksPer = data.blocksPer
-		ma.blockReward = data.blockReward
-		ma.maxPriorityFeePerGas = data.maxPriorityFeePerGas
-		ma.maxBaseFee = data.maxBaseFee
-		ma.gasLimit = data.gasLimit
-		ma.baseFeeMaxChangeRate = data.baseFeeMaxChangeRate
-		ma.gasTargetPercentage = data.gasTargetPercentage
-
-		_nodes := map[string]*metaNode{}
-		for _, i := range data.nodes {
-			_nodes[i.Id] = i
-			if i.Id == ma.nodeInfo.ID {
-				ma.self = i
-			}
-		}
-		ma.nodes = _nodes
-
-		if len(data.addedNodes) > 0 {
-			log.Debug("Added:\n")
-			for _, i := range data.addedNodes {
-				log.Debug(fmt.Sprintf("%v\n", i))
-				ma.addPeer(i)
-			}
-		}
-		if len(data.addedNodes) > 0 {
-			log.Debug("Updated:\n")
-			for _, i := range data.updatedNodes {
-				log.Debug(fmt.Sprintf("%v\n", i))
-			}
-		}
-		if len(data.addedNodes) > 0 {
-			log.Debug("Deleted:\n")
-			for _, i := range data.deletedNodes {
-				log.Debug(fmt.Sprintf("%v\n", i))
-			}
-		}
-
-		if params.MaxIdleBlockInterval != uint64(data.maxIdleBlockInterval) {
-			params.MaxIdleBlockInterval = uint64(data.maxIdleBlockInterval)
-		}
-
-		// set coinbase and minimum gas price
-		setGasCoinbase := func() {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			var v *bool
-			err := ma.rpcCli.CallContext(ctx, &v, "miner_setGasPrice",
-				"0x"+data.maxPriorityFeePerGas.Text(16))
-			if err != nil || !*v {
-				log.Info("set minimum gas price failed",
-					"maxPriorityFeePerGas", data.maxPriorityFeePerGas, "error", err)
-			} else {
-				log.Info("successfully set",
-					"maxPriorityFeePerGas", data.maxPriorityFeePerGas)
-			}
-
-			if ma.self != nil && !bytes.Equal(ma.self.Addr[:], nilAddress[:]) {
-				err = ma.rpcCli.CallContext(ctx, &v, "miner_setEtherbase", &ma.self.Addr)
-				if err != nil || !*v {
-					log.Info("set the coinbase", "error", err)
-				} else {
-					log.Info("successfully set the coinbase")
-				}
-			}
-		}
-		setGasCoinbase()
-	}
-
-	if data.blockNum != 0 {
-		ma.lastBlock = data.blockNum
-	}
 }
 
 func (ma *metaAdmin) checkMining() {
@@ -951,60 +1030,6 @@ func (ma *metaAdmin) checkMining() {
 	if mining != nil && !*mining {
 		// in case we're leader, transfer leadership
 		ma.etcdTransferLeadership()
-	}
-}
-
-func (ma *metaAdmin) run() {
-	lt := time.Now()
-	for {
-		if ma.nodeInfo == nil {
-			nodeInfo, err := ma.getNodeInfo()
-			if err != nil {
-				log.Error("Failed to get node info", "error", err)
-			} else {
-				ma.nodeInfo = nodeInfo
-			}
-		}
-		if ma.registry.To == nil {
-			registry, gov, staking, envStorage, err := ma.getAdminAddresses()
-			if err == nil {
-				ma.registry.To = registry
-				ma.gov.To = gov
-				ma.staking.To = staking
-				ma.envStorage.To = envStorage
-			}
-		}
-		if ma.registry.To != nil && ma.nodeInfo != nil {
-			ma.update()
-			if ma.amPartner() && ma.self != nil && !ma.etcdIsRunning() {
-				EtcdStart()
-			}
-		}
-
-		if ma.amPartner() {
-			ma.checkMining()
-
-			t := time.Now()
-			if t.Sub(lt).Seconds() >= 30 {
-				lt = t
-				nodes := ma.getNodes()
-				for _, n := range nodes {
-					if !ma.isPeerUp(n.Id) {
-						ma.addPeer(n)
-					}
-				}
-			}
-		}
-
-		to := make(chan bool, 1)
-		go func() {
-			time.Sleep(5 * time.Second)
-			to <- true
-		}()
-		select {
-		case <-ma.Updates:
-		case <-to:
-		}
 	}
 }
 
@@ -1196,6 +1221,9 @@ func (ma *metaAdmin) calculateRewards(num, blockReward, fees *big.Int, addBalanc
 }
 
 func calculateRewards(num, blockReward, fees *big.Int, addBalance func(common.Address, *big.Int)) (*common.Address, []byte, error) {
+	if admin.isLegacyGovernance {
+		return admin.calculateRewardsLegacy(num, blockReward, fees, addBalance)
+	}
 	return admin.calculateRewards(num, blockReward, fees, addBalance)
 }
 
@@ -1204,13 +1232,18 @@ func verifyRewards(num *big.Int, rewards string) error {
 	//return admin.verifyRewards(num, rewards)
 }
 
-func signBlock(height *big.Int, hash common.Hash) (coinbase common.Address, sig []byte, err error) {
+func signBlock(height *big.Int, hash common.Hash, isPangyo bool) (coinbase common.Address, nodeId, sig []byte, err error) {
 	if admin == nil {
 		err = metaminer.ErrNotInitialized
 		return
 	}
-	data := append(height.Bytes(), hash.Bytes()...)
-	data = crypto.Keccak256(data)
+	var data []byte
+	if !isPangyo {
+		data = hash.Bytes()
+	} else {
+		data = append(height.Bytes(), hash.Bytes()...)
+		data = crypto.Keccak256(data)
+	}
 	prvKey := admin.stack.Server().PrivateKey
 	sig, err = crypto.Sign(data, prvKey)
 	if admin.self != nil {
@@ -1224,12 +1257,15 @@ func signBlock(height *big.Int, hash common.Hash) (coinbase common.Address, sig 
 			return
 		}
 
-		nodeId := crypto.FromECDSAPub(&prvKey.PublicKey)[1:]
+		nodeId = crypto.FromECDSAPub(&prvKey.PublicKey)[1:]
 		if addr, err2 := enodeExists(ctx, height, gov, nodeId); err2 != nil {
 			err = err2
 			return
 		} else {
 			coinbase = addr
+		}
+		if isPangyo {
+			nodeId = nil
 		}
 	} else if admin.nodeInfo != nil && admin.nodeInfo.ID == admin.bootNodeId {
 		coinbase = admin.bootAccount
@@ -1237,7 +1273,7 @@ func signBlock(height *big.Int, hash common.Hash) (coinbase common.Address, sig 
 	return
 }
 
-func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, checkMinerLimit bool) bool {
+func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, isPangyo bool) bool {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1270,7 +1306,7 @@ func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, has
 		return false
 	}
 	// check miner limit
-	if !checkMinerLimit {
+	if !isPangyo {
 		return true
 	}
 	ok, err := admin.verifyMinerLimit(ctx, height, gov, &coinbase, nodeId)
@@ -1394,8 +1430,14 @@ func suggestGasPrice() *big.Int {
 		return defaultFee
 	}
 	var fee *big.Int
-	if err := metclient.CallContract(context.Background(), admin.envStorage, "getMaxPriorityFeePerGas", nil, &fee, nil); err != nil {
-		return defaultFee
+	if admin.isLegacyGovernance {
+		if err := metclient.CallContract(context.Background(), admin.envStorage, "getGasPrice", nil, &fee, nil); err != nil {
+			return defaultFee
+		}
+	} else {
+		if err := metclient.CallContract(context.Background(), admin.envStorage, "getMaxPriorityFeePerGas", nil, &fee, nil); err != nil {
+			return defaultFee
+		}
 	}
 	return fee
 }
@@ -1781,9 +1823,45 @@ func verifyBlockRewards(height *big.Int) interface{} {
 }
 
 func init() {
+	var err error
+	registryContract, err = metclient.LoadJsonContract(strings.NewReader(RegistryAbi))
+	if err != nil {
+		utils.Fatalf("Loading ABI failed: %v", err)
+	}
+	govContract, err = metclient.LoadJsonContract(strings.NewReader(GovAbi))
+	if err != nil {
+		utils.Fatalf("Loading ABI failed: %v", err)
+	}
+	stakingContract, err = metclient.LoadJsonContract(strings.NewReader(StakingAbi))
+	if err != nil {
+		utils.Fatalf("Loading ABI failed: %v", err)
+	}
+	envStorageImpContract, err = metclient.LoadJsonContract(strings.NewReader(EnvStorageImpAbi))
+	if err != nil {
+		utils.Fatalf("Loading ABI failed: %v", err)
+	}
+	registryLegacyContract, err = metclient.LoadJsonContract(strings.NewReader(RegistryLegacyAbi))
+	if err != nil {
+		utils.Fatalf("Loading ABI failed: %v", err)
+	}
+	govLegacyContract, err = metclient.LoadJsonContract(strings.NewReader(GovLegacyAbi))
+	if err != nil {
+		utils.Fatalf("Loading ABI failed: %v", err)
+	}
+	stakingLegacyContract, err = metclient.LoadJsonContract(strings.NewReader(StakingLegacyAbi))
+	if err != nil {
+		utils.Fatalf("Loading ABI failed: %v", err)
+	}
+	envStorageImpLegacyContract, err = metclient.LoadJsonContract(strings.NewReader(EnvStorageImpLegacyAbi))
+	if err != nil {
+		utils.Fatalf("Loading ABI failed: %v", err)
+	}
+
+	metaminer.IsMinerFunc = IsMiner
 	metaminer.AmPartnerFunc = AmPartner
 	metaminer.IsPartnerFunc = IsPartner
 	metaminer.AmHubFunc = AmHub
+	metaminer.LogBlockFunc = LogBlock
 	metaminer.SuggestGasPriceFunc = suggestGasPrice
 	metaminer.CalculateRewardsFunc = calculateRewards
 	metaminer.VerifyRewardsFunc = verifyRewards
