@@ -1599,15 +1599,22 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 	if !metaminer.IsPoW() {
 		parent := w.chain.CurrentBlock()
 		height := new(big.Int).Add(parent.Number(), common.Big1)
-		ok, err := metaminer.AcquireMiningToken(height, parent.Hash())
-		if ok {
-			log.Debug("Mining Token, successful", "height", height, "parent-hash", parent.Hash())
+		if !w.chain.Config().IsBokbunja(height) {
+			if !metaminer.IsMiner() {
+				w.refreshPending(true)
+				return
+			}
 		} else {
-			log.Debug("Mining Token, failure", "height", height, "parent-hash", parent.Hash(), "error", err)
-		}
-		if !ok {
-			w.refreshPending(true)
-			return
+			ok, err := metaminer.AcquireMiningToken(height, parent.Hash())
+			if ok {
+				log.Debug("Mining Token, successful", "height", height, "parent-hash", parent.Hash())
+			} else {
+				log.Debug("Mining Token, failure", "height", height, "parent-hash", parent.Hash(), "error", err)
+			}
+			if !ok {
+				w.refreshPending(true)
+				return
+			}
 		}
 	}
 
@@ -1665,8 +1672,16 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 // Note the assumption is held that the mutation is allowed to the passed env, do
 // the deep copy first.
 func (w *worker) commit(env *environment, interval func(), update bool, start time.Time) error {
-	if !metaminer.IsPoW() && !metaminer.HasMiningToken() {
-		return errors.New("Not Miner")
+	if !metaminer.IsPoW() {
+		if !w.chain.Config().IsBokbunja(env.header.Number) {
+			if !metaminer.IsMiner() {
+				return errors.New("Not Miner")
+			}
+		} else {
+			if !metaminer.HasMiningToken() {
+				return errors.New("Not Miner")
+			}
+		}
 	}
 
 	if w.isRunning() {
@@ -1704,8 +1719,16 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 // In Metadium, uncles are not welcome and difficulty is so low,
 // there's no reason to run miners asynchronously.
 func (w *worker) commitEx(env *environment, interval func(), update bool, start time.Time) error {
-	if !metaminer.IsPoW() && !metaminer.HasMiningToken() {
-		return errors.New("Not Miner")
+	if !metaminer.IsPoW() {
+		if !w.chain.Config().IsBokbunja(env.header.Number) {
+			if !metaminer.IsMiner() {
+				return errors.New("Not Miner")
+			}
+		} else {
+			if !metaminer.HasMiningToken() {
+				return errors.New("Not Miner")
+			}
+		}
 	}
 	if w.isRunning() {
 		// Create a local environment copy, avoid the data race with snapshot state.
@@ -1765,8 +1788,15 @@ func (w *worker) commitEx(env *environment, interval func(), update bool, start 
 					logs = append(logs, receipt.Logs...)
 				}
 				if !metaminer.IsPoW() {
-					if err = metaminer.ReleaseMiningToken(sealedBlock.Number(), sealedBlock.Hash(), sealedBlock.ParentHash()); err != nil {
-						return err
+					if !w.chain.Config().IsBokbunja(sealedBlock.Number()) {
+						if !metaminer.IsMiner() {
+							return errors.New("Not Miner")
+						}
+						go metaminer.LogBlock(sealedBlock.Number().Int64(), sealedBlock.Hash())
+					} else {
+						if err = metaminer.ReleaseMiningToken(sealedBlock.Number(), sealedBlock.Hash(), sealedBlock.ParentHash()); err != nil {
+							return err
+						}
 					}
 				}
 				// Commit block and state to database.

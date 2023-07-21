@@ -13,13 +13,15 @@ import (
 var (
 	ErrNotInitialized = errors.New("not initialized")
 
+	IsMinerFunc                 func() bool
 	AmPartnerFunc               func() bool
 	IsPartnerFunc               func(string) bool
 	AmHubFunc                   func(string) int
+	LogBlockFunc                func(int64, common.Hash)
 	CalculateRewardsFunc        func(*big.Int, *big.Int, *big.Int, func(common.Address, *big.Int)) (*common.Address, []byte, error)
 	VerifyRewardsFunc           func(*big.Int, string) error
-	SignBlockFunc               func(height *big.Int, hash common.Hash) (coinbase common.Address, sig []byte, err error)
-	VerifyBlockSigFunc          func(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, checkMinerLimit bool) bool
+	SignBlockFunc               func(height *big.Int, hash common.Hash, isPangyo bool) (coinbase common.Address, nodeId, sig []byte, err error)
+	VerifyBlockSigFunc          func(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, isPangyo bool) bool
 	RequirePendingTxsFunc       func() bool
 	VerifyBlockRewardsFunc      func(height *big.Int) interface{}
 	SuggestGasPriceFunc         func() *big.Int
@@ -28,6 +30,14 @@ var (
 	ReleaseMiningTokenFunc      func(height *big.Int, hash, parentHash common.Hash) error
 	HasMiningTokenFunc          func() bool
 )
+
+func IsMiner() bool {
+	if IsMinerFunc == nil {
+		return false
+	} else {
+		return IsMinerFunc()
+	}
+}
 
 func IsPartner(id string) bool {
 	if IsPartnerFunc == nil {
@@ -50,6 +60,12 @@ func AmHub(id string) int {
 		return -1
 	} else {
 		return AmHubFunc(id)
+	}
+}
+
+func LogBlock(height int64, hash common.Hash) {
+	if LogBlockFunc != nil {
+		LogBlockFunc(height, hash)
 	}
 }
 
@@ -94,20 +110,20 @@ func VerifyRewards(num *big.Int, rewards string) error {
 	}
 }
 
-func SignBlock(height *big.Int, hash common.Hash) (coinbase common.Address, sig []byte, err error) {
+func SignBlock(height *big.Int, hash common.Hash, isPangyo bool) (coinbase common.Address, nodeId, sig []byte, err error) {
 	if SignBlockFunc == nil {
 		err = ErrNotInitialized
 	} else {
-		coinbase, sig, err = SignBlockFunc(height, hash)
+		coinbase, nodeId, sig, err = SignBlockFunc(height, hash, isPangyo)
 	}
 	return
 }
 
-func VerifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, checkMinerLimit bool) bool {
+func VerifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, isPangyo bool) bool {
 	if VerifyBlockSigFunc == nil {
 		return false
 	} else {
-		return VerifyBlockSigFunc(height, coinbase, nodeId, hash, sig, checkMinerLimit)
+		return VerifyBlockSigFunc(height, coinbase, nodeId, hash, sig, isPangyo)
 	}
 }
 

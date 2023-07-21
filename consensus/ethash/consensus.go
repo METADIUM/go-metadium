@@ -623,11 +623,12 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 
 	// sign header.Root with node's private key
 	if !metaminer.IsPoW() {
-		coinbase, sig, err := metaminer.SignBlock(header.Number, header.Root)
+		coinbase, nodeId, sig, err := metaminer.SignBlock(header.Number, header.Root, chain.Config().IsPangyo(header.Number))
 		if err != nil {
 			return nil, err
 		} else {
 			header.Coinbase = coinbase
+			header.MinerNodeId = nodeId
 			header.MinerNodeSig = sig
 		}
 	}

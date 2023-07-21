@@ -320,10 +320,16 @@ func etcdEventHandler() {
 	ctx := context.Background()
 	workCh := admin.etcdCli.Watch(ctx, metaWorkKey)
 	lockCh := admin.etcdCli.Watch(ctx, metaTokenKey)
+	previousEtcdLeader.Store(uint64(0))
+	latestEtcdLeader.Store(uint64(0))
 	for {
 		select {
 		case <-admin.etcd.Server.LeaderChangedNotify():
-			latestEtcdLeader.Store(admin.etcd.Server.Leader())
+			leader := uint64(admin.etcd.Server.Leader())
+			if latestEtcdLeader.Load().(uint64) != leader {
+				previousEtcdLeader.Store(latestEtcdLeader.Load().(uint64))
+			}
+			latestEtcdLeader.Store(uint64(leader))
 		case watchResp := <-workCh:
 			latestUpdateTime.Store(time.Now())
 			for _, event := range watchResp.Events {
@@ -582,6 +588,27 @@ func (ma *metaAdmin) etcdLeader(locked bool) (uint64, *metaNode) {
 	}
 
 	return 0, nil
+}
+
+func (ma *metaAdmin) etcdGetNode(id uint64) *metaNode {
+	if !ma.etcdIsReady() {
+		return nil
+	}
+	for _, i := range ma.etcd.Server.Cluster().Members() {
+		if uint64(i.ID) == id {
+			var node *metaNode
+			ma.lock.Lock()
+			for _, j := range ma.nodes {
+				if i.Attributes.Name == j.Name {
+					node = j
+					break
+				}
+			}
+			ma.lock.Unlock()
+			return node
+		}
+	}
+	return nil
 }
 
 func (ma *metaAdmin) etcdPut(key, value string) (int64, error) {
