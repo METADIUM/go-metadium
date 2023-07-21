@@ -40,7 +40,7 @@ metadium: gmet logrot
 	@(cd build; tar cfz metadium.tar.gz bin conf)
 	@echo "Done building build/metadium.tar.gz"
 
-gmet: rocksdb metadium/governance_abi.go
+gmet: rocksdb metadium/governance_abi.go metadium/governance_legacy_abi.go
 ifeq ($(USE_ROCKSDB), NO)
 	$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/gmet
 else
@@ -68,7 +68,7 @@ else
 		$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/dbbench
 endif
 
-all: metadium/governance_abi.go
+all: metadium/governance_abi.go metadium/governance_legacy_abi.go
 	$(GORUN) build/ci.go install
 
 android:
@@ -89,12 +89,12 @@ test: all
 test-short: all
 	$(GORUN) build/ci.go test -short
 
-lint: metadium/governance_abi.go ## Run linters.
+lint: metadium/governance_abi.go metadium/governance_legacy_abi ## Run linters.
 	$(GORUN) build/ci.go lint
 
 clean:
 	env GO111MODULE=on go clean -cache
-	rm -fr build/_workspace/pkg/ $(GOBIN)/* build/conf metadium/admin_abi.go metadium/governance_abi.go
+	rm -fr build/_workspace/pkg/ $(GOBIN)/* build/conf metadium/governance_abi.go metadium/governance_legacy_abi.go
 	@ROCKSDB_DIR=$(ROCKSDB_DIR);			\
 	if [ -e $${ROCKSDB_DIR}/Makefile ]; then	\
 		cd $${ROCKSDB_DIR};			\
@@ -133,26 +133,7 @@ rocksdb:
 	cd $(ROCKSDB_DIR) && PORTABLE=1 make -j8 static_lib;
 endif
 
-AWK_CODE='								\
-BEGIN { print "package metadium"; bin = 0; name = ""; abi = ""; }	\
-/^{/ { bin = 1; abi = ""; name = ""; }					\
-/^}/ { bin = 0; abi = abi "}"; print "var " name "Abi = `" abi "`"; }	\
-{									\
-  if (bin == 1) {							\
-    abi = abi $$0;							\
-    if ($$1 == "\"contractName\":") {					\
-      name = $$2;							\
-      gsub(",|\"", "", name);						\
-    }									\
-  }									\
-}'
-
-metadium/admin_abi.go: metadium/contracts/MetadiumAdmin-template.sol build/bin/solc
-	@PATH=${PATH}:build/bin metadium/scripts/solc.sh -f abi $< /tmp/junk.$$$$; \
-	cat /tmp/junk.$$$$ | awk $(AWK_CODE) > $@;	\
-	rm -f /tmp/junk.$$$$;
-
-AWK_CODE_2='								     \
+AWK_CODE='								     \
 BEGIN { print "package metadium\n"; }					     \
 /^var Registry_contract/ {						     \
   sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
@@ -176,7 +157,34 @@ BEGIN { print "package metadium\n"; }					     \
 }'
 
 metadium/governance_abi.go: metadium/contracts/MetadiumGovernance.js
-	@cat $< | awk $(AWK_CODE_2) > $@
+	@cat $< | awk $(AWK_CODE) > $@
+
+AWK_CODE_LEGACY='								     \
+BEGIN { print "package metadium\n"; }					     \
+/^var Registry_contract/ {						     \
+  sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
+  n = "Registry";							     \
+  print "var " n "LegacyAbi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
+}									     \
+/^var Staking_contract/ {						     \
+  sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
+  n = "Staking";							     \
+  print "var " n "LegacyAbi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
+}									     \
+/^var EnvStorageImp_contract/ {						     \
+  sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
+  n = "EnvStorageImp";							     \
+  print "var " n "LegacyAbi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
+}									     \
+/^var Gov_contract/ {							     \
+  sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
+  n = "Gov";								     \
+  print "var " n "LegacyAbi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
+}'
+
+metadium/governance_legacy_abi.go: metadium/contracts/MetadiumGovernanceLegacy.js
+	@cat $< | awk $(AWK_CODE_LEGACY) > $@
+
 
 ifneq ($(shell uname), Linux)
 
