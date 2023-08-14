@@ -1646,6 +1646,11 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 	}
 
 	if !metaminer.IsPoW() { // Metadium
+		parent := w.chain.CurrentBlock()
+		getCoinbase, err := metaminer.GetCoinbase(parent.Number())
+		if err == nil {
+			work.coinbase = getCoinbase
+		}
 		if !w.commitTransactionsEx(work, interrupt, start) {
 			w.commitEx(work, w.fullTaskHook, true, start)
 		}
