@@ -892,7 +892,7 @@ func (ma *metaAdmin) update() error {
 			setGasCoinbase(data.gasPrice)
 		}
 		if data.blockNum != 0 {
-			ma.lastBlock = int64(data.blockNum)
+			ma.lastBlock = data.blockNum
 		}
 
 	} else {
@@ -964,7 +964,7 @@ func StartAdmin(stack *node.Node, datadir string) {
 			}
 			syncCheck()
 
-			time.Sleep(time.Duration(5 * time.Second))
+			time.Sleep(5 * time.Second)
 		}
 	}()
 }
