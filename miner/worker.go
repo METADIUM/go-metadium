@@ -1543,7 +1543,6 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 	for i := int64(0); i < params.BlockTimeAdjMultiple; i++ {
 		offset, height, _, dt = check(adjBlocks)
 		log.Debug("time-it", "round", adjBlocks, "offset", offset, "height", height, "dt", dt)
-		log.Error("time-it", "round", adjBlocks, "offset", offset, "height", height, "dt", dt)
 		if offset < 0 {
 			break
 		} else if offset > 0 {
