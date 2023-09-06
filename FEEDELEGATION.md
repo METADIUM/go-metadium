@@ -307,10 +307,10 @@ type RPCTransaction struct {
 - example :
 
 ```
-$ bin/gweimx.sh console
+$ bin/gmet.sh console
 > personal.signTransaction({
  from:"0x82667998ae5fd9e4f4637fc805e97740c673c517",
- chainId: "0x458",
+ chainId: "0xc",
  gas: "0x5208",
  maxFeePerGas: "0x174876e801",
  maxPriorityFeePerGas: "0x174876e801",
@@ -331,7 +331,7 @@ result:
  raw: "0x16f8d0f8768204581c85174876e80185174876e80182520894db8408bb47bf5e745fed00fc2c99e2f4e1a9270f880de0b6b3a764000080c080a0b4dc96b4580bd1d3f090b953ea3612625dd834af8e7cc6146def84a0c137b32ca0082427bf3a4589ffe79bebad9151ece587790462cd44abdd810abe0016134b8f94db8408bb47bf5e745fed00fc2c99e2f4e1a9270f80a0ba376dff9a2a4344a570367c94eeee2434a0e44ccf2da900f54becc6adaf0b5ca077b7d15ab7ba7213b5189094ca1bd41c7a48390767e4acb14c98f3442e561abb",
  tx: {
  accessList: [],
- chainId: "0x458",
+ chainId: "0xc",
  feePayer: "0xdb8408bb47bf5e745fed00fc2c99e2f4e1a9270f",
  fr: "0xba376dff9a2a4344a570367c94eeee2434a0e44ccf2da900f54becc6adaf0b5c",
  fs: "0x77b7d15ab7ba7213b5189094ca1bd41c7a48390767e4acb14c98f3442e561abb",
@@ -416,7 +416,7 @@ func (s *PrivateAccountAPI) SignRawFeeDelegateTransaction(ctx context.Context, a
 ```
 - example :
 ```
-$ bin/gweimx.sh console
+$ bin/gmet.sh console
 > personal.signRawFeeDelegateTransaction({"feePayer":"0xdb8408bb47bf5e745fed00fc2c99e2f4e1a9270f"},
 "0x02f8768204581c85174876e80185174876e80182520894db8408bb47bf5e745fed00fc2c99e2f4e1a9270f880de0b6b3a764000080c080a0b4dc96b4580bd1d3f090b953ea3612625dd834af8e7cc6146def84a0c137b32ca0082427bf3a4589ffe79bebad9151ece587790462cd44abdd810abe0016134b8f"
 ,"test")
@@ -427,7 +427,7 @@ result:
 raw: "0x16f8d0f8768204581c85174876e80185174876e80182520894db8408bb47bf5e745fed00fc2c99e2f4e1a9270f880de0b6b3a764000080c080a0b4dc96b4580bd1d3f090b953ea3612625dd834af8e7cc6146def84a0c137b32ca0082427bf3a4589ffe79bebad9151ece587790462cd44abdd810abe0016134b8f94db8408bb47bf5e745fed00fc2c99e2f4e1a9270f80a0ba376dff9a2a4344a570367c94eeee2434a0e44ccf2da900f54becc6adaf0b5ca077b7d15ab7ba7213b5189094ca1bd41c7a48390767e4acb14c98f3442e561abb",
 tx: {
  accessList: [],
- chainId: "0x458",
+ chainId: "0xc",
  feePayer: "0xdb8408bb47bf5e745fed00fc2c99e2f4e1a9270f",
  fr: "0xba376dff9a2a4344a570367c94eeee2434a0e44ccf2da900f54becc6adaf0b5c",
  fs: "0x77b7d15ab7ba7213b5189094ca1bd41c7a48390767e4acb14c98f3442e561abb",
@@ -461,7 +461,7 @@ result:
   accessList: [],
   blockHash: "0x4cab269319725d2cf4d6eb118b11a54c6d73f819d01cc9c64653a5d1975254b8",
   blockNumber: 127551,
-  chainId: "0x458",
+  chainId: "0xc",
   feePayer: "0x82667998ae5fd9e4f4637fc805e97740c673c517",
   fr: "0xde281f30f9c06f17a77ce391ef1f91b2c5bbcc28dbd4350c9a31c6d0b0fe5a37",
   from: "0xe6205771b7777421bfddb90c93eda3f3d9d6e35a",
@@ -484,4 +484,4 @@ result:
 }
 ```
 ### Fee Delegation Transaction Example
--  Reference code : https://github.com/metadium/feedelegation-js
+-  Reference code : https://github.com/METADIUM/feedelegation-js
