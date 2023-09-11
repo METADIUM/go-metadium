@@ -627,7 +627,7 @@ func (ma *metaAdmin) getGovData(refresh bool) (data *govdata, err error) {
 		return
 	}
 	data.blockNum = block.Number.Int64()
-	if !refresh && data.blockNum <= ma.lastBlock {
+	if !refresh && !ma.isLegacyGovernance && data.blockNum <= ma.lastBlock {
 		return
 	}
 
@@ -647,7 +647,7 @@ func (ma *metaAdmin) getGovData(refresh bool) (data *govdata, err error) {
 	if err != nil {
 		return
 	}
-	if !refresh && ma.modifiedBlock == data.modifiedBlock {
+	if !refresh && !ma.isLegacyGovernance && ma.modifiedBlock == data.modifiedBlock {
 		return
 	}
 
@@ -786,11 +786,16 @@ func (ma *metaAdmin) update() error {
 	}
 
 	if data, err := ma.getGovData(false); err == nil {
-		if data.modifiedBlock != 0 && ma.modifiedBlock != data.modifiedBlock {
+		if ma.isLegacyGovernance || (data.modifiedBlock != 0 && ma.modifiedBlock != data.modifiedBlock) {
 			ma.lock.Lock()
 			defer ma.lock.Unlock()
 
 			ma.isLegacyGovernance = false
+			ma.registry.Abi = registryContract.Abi
+			ma.gov.Abi = govContract.Abi
+			ma.envStorage.Abi = envStorageImpContract.Abi
+			ma.staking.Abi = stakingContract.Abi
+
 			ma.modifiedBlock = data.modifiedBlock
 			ma.blockInterval = data.blockInterval
 			ma.blocksPer = data.blocksPer
