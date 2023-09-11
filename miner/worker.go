@@ -1494,7 +1494,7 @@ func (w *worker) generateWork(params *generateParams) (*types.Block, error) {
 
 func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) {
 	if blockInterval /= 1000; blockInterval <= 0 {
-		blockInterval = 1
+		blockInterval = 2
 	}
 
 	maxPeekBack := int64(86400)   // don't look back further than this
@@ -1564,7 +1564,7 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 		if blockInterval <= 1 {
 			tms += params.BlockMinBuildTime
 		} else {
-			tms += 1000
+			tms += (blockInterval-1)*1000 + params.BlockMinBuildTime
 		}
 		if tms/1000 <= int64(parent.Time()) {
 			// make sure that no more than 2 blocks have the same timestamp
