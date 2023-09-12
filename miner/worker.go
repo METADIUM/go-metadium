@@ -1494,7 +1494,7 @@ func (w *worker) generateWork(params *generateParams) (*types.Block, error) {
 
 func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) {
 	if blockInterval /= 1000; blockInterval <= 0 {
-		blockInterval = 1
+		blockInterval = 2
 	}
 
 	maxPeekBack := int64(86400)   // don't look back further than this
@@ -1536,22 +1536,21 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 	ahead := 0
 	offset, height, _, dt := check(1)
 	log.Debug("time-it", "round", 1, "offset", offset, "height", height, "dt", dt)
-	if offset >= 0 {
-		if offset > 0 {
+	if offset > 0 {
+		ahead++
+	}
+	adjBlocks := params.BlockTimeAdjBlocks
+	for i := int64(0); i < params.BlockTimeAdjMultiple; i++ {
+		offset, height, _, dt = check(adjBlocks)
+		log.Debug("time-it", "round", adjBlocks, "offset", offset, "height", height, "dt", dt)
+		if offset < 0 {
+			break
+		} else if offset > 0 {
 			ahead++
 		}
-		adjBlocks := params.BlockTimeAdjBlocks
-		for i := int64(0); i < params.BlockTimeAdjMultiple; i++ {
-			offset, height, _, dt = check(adjBlocks)
-			log.Debug("time-it", "round", adjBlocks, "offset", offset, "height", height, "dt", dt)
-			if offset < 0 {
-				break
-			} else if offset > 0 {
-				ahead++
-			}
-			adjBlocks *= 10
-		}
+		adjBlocks *= 10
 	}
+
 	if offset >= 0 && ahead > 0 {
 		offset = 1
 	}
@@ -1561,7 +1560,12 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 	}
 	switch offset {
 	case -1: // behind, i.e. too few blocks so far, need to make more
-		tms := nowInMilliSeconds + params.BlockMinBuildTime
+		tms := nowInMilliSeconds
+		if blockInterval <= 1 {
+			tms += params.BlockMinBuildTime
+		} else {
+			tms += (blockInterval-1)*1000 + params.BlockMinBuildTime
+		}
 		if tms/1000 <= int64(parent.Time()) {
 			// make sure that no more than 2 blocks have the same timestamp
 			tms = (nowInSeconds + 1) * 1000
@@ -1570,17 +1574,20 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 		log.Debug("time-it", "behind", timestamp, "duration", tms-nowInMilliSeconds)
 	case 1: // ahead, i.e. too many blocks, need to slow down
 		tms := nowInMilliSeconds + blockInterval*1000 + params.BlockMinBuildTime
-		if tms/1000 > nowInSeconds+blockInterval {
-			// make sure time stamp doesn't jump by blockInterval + 2
+		if blockInterval > 1 {
+			tms += 500
+		}
+		if blockInterval <= 1 && tms/1000 > nowInSeconds+blockInterval {
+			// make sure time stamp doesn't jump by blockInterval + 1
 			tms = (nowInSeconds+blockInterval+1)*1000 - params.BlockTrailTime
 		}
 		till = time.Unix(tms/1e3, (tms%1e3)*1e6)
 		log.Debug("time-it", "ahead", timestamp, "duration", tms-nowInMilliSeconds)
 	default: // on schedule
 		tms := nowInMilliSeconds + blockInterval*1000 - params.BlockTrailTime
-		if tms/1000 > nowInSeconds+1 {
-			// make sure time stamp doesn't jump by 2
-			tms = (nowInSeconds+2)*1000 - params.BlockTrailTime
+		if tms/1000 > nowInSeconds+blockInterval {
+			// make sure time stamp doesn't jump by blockInterval + 1
+			tms = (nowInSeconds+blockInterval+1)*1000 - params.BlockTrailTime
 		}
 		till = time.Unix(tms/1e3, (tms%1e3)*1e6)
 		log.Debug("time-it", "on-schedule", timestamp, "duration", tms-nowInMilliSeconds)
@@ -1634,6 +1641,11 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 		timestamp: uint64(timestamp),
 		coinbase:  coinbase,
 	})
+	if !metaminer.IsPoW() { // Metadium
+		if coinbase, err := metaminer.GetCoinbase(work.header.Number); err == nil {
+			work.coinbase = coinbase
+		}
+	}
 	if err != nil {
 		return
 	}

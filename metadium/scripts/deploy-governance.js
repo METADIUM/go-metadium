@@ -332,11 +332,11 @@ var GovernanceDeployer = new function() {
             data.env.stakingMin || 1500000000000000000000000,
             data.env.stakingMax || 1500000000000000000000000,
             data.env.MaxIdleBlockInterval || 5,
-            data.env.blockCreationTime || 1000,
+            data.env.blockCreationTime || 2000,
             // mint amount: 1 meta
             data.env.blockRewardAmount || web3.toWei(1, 'ether'),
-            // tip: 100 gwei
-            data.env.maxPriorityFeePerGas || web3.toWei(100, 'gwei'),
+            // tip: 80 gwei
+            data.env.maxPriorityFeePerGas || web3.toWei(80, 'gwei'),
             // NCPs, Metadium Staker, Eco System, Maintenance
             rewardDistributionMethod[0],
             rewardDistributionMethod[1],
