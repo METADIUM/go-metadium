@@ -27,7 +27,7 @@ func (ma *metaAdmin) collectMinerStates(height *big.Int) []*metaapi.MetadiumMine
 		err error
 	)
 	ctx = context.Background()
-	if _, gov, _, _, err = ma.getRegGovEnvContracts(ctx, height); err != nil {
+	if _, gov, _, _, _, err = ma.getRegGovEnvContracts(ctx, height); err != nil {
 		return nil
 	}
 	e, err := getCoinbaseEnodeCache(ctx, height, gov)
@@ -124,7 +124,7 @@ func enodeExists(ctx context.Context, height *big.Int, gov *metclient.RemoteCont
 // returns metadium nodes at given height
 func getNodesAt(height *big.Int) ([]*metaNode, error) {
 	ctx := context.Background()
-	if _, gov, _, _, err := admin.getRegGovEnvContracts(ctx, height); err != nil {
+	if _, gov, _, _, _, err := admin.getRegGovEnvContracts(ctx, height); err != nil {
 		return nil, metaminer.ErrNotInitialized
 	} else if e, err := getCoinbaseEnodeCache(ctx, height, gov); err != nil {
 		return nil, err
@@ -215,7 +215,7 @@ func (ma *metaAdmin) isEligibleMiner(height *big.Int) (bool, error) {
 	if err != nil {
 		return false, metaminer.ErrNotInitialized
 	}
-	if _, gov, _, _, err = ma.getRegGovEnvContracts(ctx, prev); err != nil {
+	if _, gov, _, _, _, err = ma.getRegGovEnvContracts(ctx, prev); err != nil {
 		return false, metaminer.ErrNotInitialized
 	}
 	e, err := getCoinbaseEnodeCache(ctx, prev, gov)
@@ -253,7 +253,7 @@ func (ma *metaAdmin) nextMinerCandidates(height *big.Int) ([]*metaNode, error) {
 		err error
 	)
 	ctx = context.Background()
-	if _, gov, _, _, err = ma.getRegGovEnvContracts(ctx, height); err != nil {
+	if _, gov, _, _, _, err = ma.getRegGovEnvContracts(ctx, height); err != nil {
 		return nil, metaminer.ErrNotInitialized
 	}
 	e, err := getCoinbaseEnodeCache(ctx, height, gov)

@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
@@ -286,26 +287,26 @@ func (ma *metaAdmin) getInt(ctx context.Context, contract *metclient.RemoteContr
 }
 
 // TODO: error handling
-func (ma *metaAdmin) getRegGovEnvContracts(ctx context.Context, height *big.Int) (reg, gov, env, staking *metclient.RemoteContract, err error) {
+func (ma *metaAdmin) getRegGovEnvContracts(ctx context.Context, height *big.Int) (reg, gov, env, staking *metclient.RemoteContract, legacy bool, err error) {
 	if ma.registry == nil {
 		err = metaminer.ErrNotInitialized
 		return
 	}
 	reg = &metclient.RemoteContract{
 		Cli: ma.cli,
-		Abi: ma.registry.Abi,
+		Abi: registryContract.Abi,
 	}
 	env = &metclient.RemoteContract{
 		Cli: ma.cli,
-		Abi: ma.envStorage.Abi,
+		Abi: envStorageImpContract.Abi,
 	}
 	gov = &metclient.RemoteContract{
 		Cli: ma.cli,
-		Abi: ma.gov.Abi,
+		Abi: govContract.Abi,
 	}
 	staking = &metclient.RemoteContract{
 		Cli: ma.cli,
-		Abi: ma.staking.Abi,
+		Abi: stakingContract.Abi,
 	}
 	if ma.registry.To != nil {
 		reg.To = ma.registry.To
@@ -342,6 +343,13 @@ func (ma *metaAdmin) getRegGovEnvContracts(ctx context.Context, height *big.Int)
 	}
 	staking.To = &common.Address{}
 	staking.To.SetBytes(addr.Bytes())
+
+	if legacy, _ = ma.hasLegacyGovernance(height); legacy {
+		reg.Abi = registryLegacyContract.Abi
+		gov.Abi = govLegacyContract.Abi
+		env.Abi = envStorageImpLegacyContract.Abi
+		staking.Abi = stakingLegacyContract.Abi
+	}
 
 	return
 }
@@ -463,7 +471,7 @@ func (ma *metaAdmin) getMetaNodes(ctx context.Context, block *big.Int) ([]*metaN
 
 func (ma *metaAdmin) getRewardParams(ctx context.Context, height *big.Int) (*rewardParameters, error) {
 	rp := &rewardParameters{}
-	reg, gov, env, staking, err := ma.getRegGovEnvContracts(ctx, height)
+	reg, gov, env, staking, _, err := ma.getRegGovEnvContracts(ctx, height)
 	if err != nil {
 		return nil, err
 	}
@@ -754,7 +762,7 @@ func (ma *metaAdmin) update() error {
 		return err
 	} else if latest.Number.Int64() == ma.lastBlock {
 		return nil
-	} else if reg, gov, env, staking, err := ma.getRegGovEnvContracts(ctx, latest.Number); err != nil {
+	} else if reg, gov, env, staking, _, err := ma.getRegGovEnvContracts(ctx, latest.Number); err != nil {
 		return err
 	} else {
 		ma.registry, ma.gov, ma.envStorage, ma.staking = reg, gov, env, staking
@@ -1225,8 +1233,23 @@ func (ma *metaAdmin) calculateRewards(num, blockReward, fees *big.Int, addBalanc
 	return
 }
 
+// checks if env has getMaxPriorityFeePerGas
+func (ma *metaAdmin) hasLegacyGovernance(num *big.Int) (bool, error) {
+	env := &metclient.RemoteContract{
+		Cli: ma.cli,
+		Abi: envStorageImpContract.Abi,
+		To:  ma.envStorage.To,
+	}
+	var fee *big.Int
+	if err := metclient.CallContract(context.Background(), env, "getMaxPriorityFeePerGas", nil, &fee, num); err == nil {
+		return false, nil
+	} else {
+		return true, err
+	}
+}
+
 func calculateRewards(num, blockReward, fees *big.Int, addBalance func(common.Address, *big.Int)) (*common.Address, []byte, error) {
-	if admin.isLegacyGovernance {
+	if legacy, _ := admin.hasLegacyGovernance(num); legacy {
 		return admin.calculateRewardsLegacy(num, blockReward, fees, addBalance)
 	}
 	return admin.calculateRewards(num, blockReward, fees, addBalance)
@@ -1248,7 +1271,7 @@ func getCoinbase(height *big.Int) (coinbase common.Address, err error) {
 		defer cancel()
 
 		num := new(big.Int).Sub(height, common.Big1)
-		_, gov, _, _, err2 := admin.getRegGovEnvContracts(ctx, num)
+		_, gov, _, _, _, err2 := admin.getRegGovEnvContracts(ctx, num)
 		if err2 != nil {
 			err = err2
 			return
@@ -1286,7 +1309,7 @@ func signBlock(height *big.Int, hash common.Hash, isPangyo bool) (coinbase commo
 		defer cancel()
 
 		num := new(big.Int).Sub(height, common.Big1)
-		_, gov, _, _, err2 := admin.getRegGovEnvContracts(ctx, num)
+		_, gov, _, _, _, err2 := admin.getRegGovEnvContracts(ctx, num)
 		if err2 != nil {
 			err = err2
 			return
@@ -1314,7 +1337,7 @@ func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, has
 
 	// get nodeid from the coinbase
 	num := new(big.Int).Sub(height, common.Big1)
-	_, gov, _, _, err := admin.getRegGovEnvContracts(ctx, num)
+	_, gov, _, _, _, err := admin.getRegGovEnvContracts(ctx, num)
 	if err != nil {
 		return err == metaminer.ErrNotInitialized
 	} else if count, err := admin.getInt(ctx, gov, num, "getMemberLength"); err != nil || count == 0 {
@@ -1495,7 +1518,7 @@ func getBlockBuildParameters(height *big.Int) (blockInterval int64, maxBaseFee, 
 	blockBuildParamsLock.Unlock()
 
 	// default values
-	blockInterval = 15
+	blockInterval = 2000
 	maxBaseFee = big.NewInt(0)
 	gasLimit = big.NewInt(0)
 	baseFeeMaxChangeRate = 0
@@ -1508,32 +1531,44 @@ func getBlockBuildParameters(height *big.Int) (blockInterval int64, maxBaseFee, 
 	defer cancel()
 
 	var env, gov *metclient.RemoteContract
-	if _, gov, env, _, err = admin.getRegGovEnvContracts(ctx, height); err != nil {
+	var legacy bool
+	if _, gov, env, _, legacy, err = admin.getRegGovEnvContracts(ctx, height); err != nil {
 		err = metaminer.ErrNotInitialized
 		return
 	} else if count, err2 := admin.getInt(ctx, gov, height, "getMemberLength"); err2 != nil || count == 0 {
 		err = metaminer.ErrNotInitialized
 		return
 	}
-	var v *big.Int
-	if err = metclient.CallContract(ctx, env, "getBlockCreationTime", nil, &v, height); err != nil {
-		err = metaminer.ErrNotInitialized
-		return
-	}
-	blockInterval = v.Int64()
 
-	gasLimitAndBaseFee := make([]*big.Int, 3)
-	if err = metclient.CallContract(ctx, env, "getGasLimitAndBaseFee", nil, &gasLimitAndBaseFee, height); err != nil {
-		err = metaminer.ErrNotInitialized
-		return
-	}
-	gasLimit = gasLimitAndBaseFee[0]
-	baseFeeMaxChangeRate = gasLimitAndBaseFee[1].Int64()
-	gasTargetPercentage = gasLimitAndBaseFee[2].Int64()
+	if legacy {
+		var header *types.Header
+		if header, err = admin.cli.HeaderByNumber(ctx, height); err != nil {
+			return
+		}
+		// for legacy governance use default values
+		blockInterval = 2000
+		gasLimit = new(big.Int).SetUint64(header.GasLimit)
+	} else {
+		var v *big.Int
+		if err = metclient.CallContract(ctx, env, "getBlockCreationTime", nil, &v, height); err != nil {
+			err = metaminer.ErrNotInitialized
+			return
+		}
+		blockInterval = v.Int64()
 
-	if err = metclient.CallContract(ctx, env, "getMaxBaseFee", nil, &maxBaseFee, height); err != nil {
-		err = metaminer.ErrNotInitialized
-		return
+		gasLimitAndBaseFee := make([]*big.Int, 3)
+		if err = metclient.CallContract(ctx, env, "getGasLimitAndBaseFee", nil, &gasLimitAndBaseFee, height); err != nil {
+			err = metaminer.ErrNotInitialized
+			return
+		}
+		gasLimit = gasLimitAndBaseFee[0]
+		baseFeeMaxChangeRate = gasLimitAndBaseFee[1].Int64()
+		gasTargetPercentage = gasLimitAndBaseFee[2].Int64()
+
+		if err = metclient.CallContract(ctx, env, "getMaxBaseFee", nil, &maxBaseFee, height); err != nil {
+			err = metaminer.ErrNotInitialized
+			return
+		}
 	}
 
 	// cache it
