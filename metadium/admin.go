@@ -286,7 +286,6 @@ func (ma *metaAdmin) getInt(ctx context.Context, contract *metclient.RemoteContr
 	}
 }
 
-// TODO: error handling
 func (ma *metaAdmin) getRegGovEnvContracts(ctx context.Context, height *big.Int) (reg, gov, env, staking *metclient.RemoteContract, legacy bool, err error) {
 	if ma.registry == nil {
 		err = metaminer.ErrNotInitialized
@@ -344,7 +343,12 @@ func (ma *metaAdmin) getRegGovEnvContracts(ctx context.Context, height *big.Int)
 	staking.To = &common.Address{}
 	staking.To.SetBytes(addr.Bytes())
 
-	if legacy, _ = ma.hasLegacyGovernance(height); legacy {
+	// check if governance is legacy, i.e. if it doesn't have getMaxPriorityFeePerGas
+	var fee *big.Int
+	if err = metclient.CallContract(ctx, env, "getMaxPriorityPerGas", nil, &fee, height); err == nil {
+		legacy = false
+	} else {
+		legacy = true
 		reg.Abi = registryLegacyContract.Abi
 		gov.Abi = govLegacyContract.Abi
 		env.Abi = envStorageImpLegacyContract.Abi
@@ -1233,23 +1237,9 @@ func (ma *metaAdmin) calculateRewards(num, blockReward, fees *big.Int, addBalanc
 	return
 }
 
-// checks if env has getMaxPriorityFeePerGas
-func (ma *metaAdmin) hasLegacyGovernance(num *big.Int) (bool, error) {
-	env := &metclient.RemoteContract{
-		Cli: ma.cli,
-		Abi: envStorageImpContract.Abi,
-		To:  ma.envStorage.To,
-	}
-	var fee *big.Int
-	if err := metclient.CallContract(context.Background(), env, "getMaxPriorityFeePerGas", nil, &fee, num); err == nil {
-		return false, nil
-	} else {
-		return true, err
-	}
-}
-
 func calculateRewards(num, blockReward, fees *big.Int, addBalance func(common.Address, *big.Int)) (*common.Address, []byte, error) {
-	if legacy, _ := admin.hasLegacyGovernance(num); legacy {
+	parentNum := new(big.Int).Sub(num, common.Big1)
+	if _, _, _, _, legacy, _ := admin.getRegGovEnvContracts(context.Background(), parentNum); legacy {
 		return admin.calculateRewardsLegacy(num, blockReward, fees, addBalance)
 	}
 	return admin.calculateRewards(num, blockReward, fees, addBalance)
