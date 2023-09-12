@@ -345,7 +345,7 @@ func (ma *metaAdmin) getRegGovEnvContracts(ctx context.Context, height *big.Int)
 
 	// check if governance is legacy, i.e. if it doesn't have getMaxPriorityFeePerGas
 	var fee *big.Int
-	if err = metclient.CallContract(ctx, env, "getMaxPriorityPerGas", nil, &fee, height); err == nil {
+	if err2 := metclient.CallContract(ctx, env, "getMaxPriorityPerGas", nil, &fee, height); err2 == nil {
 		legacy = false
 	} else {
 		legacy = true
