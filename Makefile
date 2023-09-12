@@ -89,7 +89,7 @@ test: all
 test-short: all
 	$(GORUN) build/ci.go test -short
 
-lint: metadium/governance_abi.go metadium/governance_legacy_abi ## Run linters.
+lint: metadium/governance_abi.go metadium/governance_legacy_abi.go ## Run linters.
 	$(GORUN) build/ci.go lint
 
 clean:

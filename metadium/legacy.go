@@ -44,7 +44,7 @@ func (ma *metaAdmin) getGovDataLegacy() (data *govdataLegacy, err error) {
 		return
 	}
 	data.blockNum = block.Number.Int64()
-	if data.blockNum <= ma.lastBlock {
+	if ma.isLegacyGovernance && data.blockNum <= ma.lastBlock {
 		return
 	}
 
@@ -63,7 +63,7 @@ func (ma *metaAdmin) getGovDataLegacy() (data *govdataLegacy, err error) {
 	if err != nil {
 		return
 	}
-	if ma.modifiedBlock == data.modifiedBlock {
+	if ma.isLegacyGovernance && ma.modifiedBlock == data.modifiedBlock {
 		return
 	}
 

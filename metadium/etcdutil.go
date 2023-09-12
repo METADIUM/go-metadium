@@ -329,7 +329,7 @@ func etcdEventHandler() {
 			if latestEtcdLeader.Load().(uint64) != leader {
 				previousEtcdLeader.Store(latestEtcdLeader.Load().(uint64))
 			}
-			latestEtcdLeader.Store(uint64(leader))
+			latestEtcdLeader.Store(leader)
 		case watchResp := <-workCh:
 			latestUpdateTime.Store(time.Now())
 			for _, event := range watchResp.Events {
