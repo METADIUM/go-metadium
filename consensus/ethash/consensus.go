@@ -321,7 +321,7 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 		return err
 	}
 	// Metadium: Check if it's generated and signed by a registered node
-	if !metaminer.IsPoW() && !metaminer.VerifyBlockSig(header.Number, header.MinerNodeId, header.Root, header.MinerNodeSig) {
+	if !metaminer.IsPoW() && !metaminer.VerifyBlockSig(header.Number, header.Coinbase, header.MinerNodeId, header.Root, header.MinerNodeSig, chain.Config().IsPangyo(header.Number)) {
 		return consensus.ErrUnauthorized
 	}
 	return nil
@@ -517,8 +517,8 @@ func calcDifficultyFrontier(time uint64, parent *types.Header) *big.Int {
 }
 
 // Exported for fuzzing
-var FrontierDifficultyCalulator = calcDifficultyFrontier
-var HomesteadDifficultyCalulator = calcDifficultyHomestead
+var FrontierDifficultyCalculator = calcDifficultyFrontier
+var HomesteadDifficultyCalculator = calcDifficultyHomestead
 var DynamicDifficultyCalculator = makeDifficultyCalculator
 
 // verifySeal checks whether a block satisfies the PoW difficulty requirements,
@@ -548,7 +548,7 @@ func (ethash *Ethash) verifySeal(chain consensus.ChainHeaderReader, header *type
 		digest []byte
 		result []byte
 	)
-	if chain.Config().IsAvocado(header.Number) {
+	if chain != nil && chain.Config().IsAvocado(header.Number) {
 		digest, result = hashimeta(ethash.SealHash(header).Bytes(), header.Nonce.Uint64())
 	} else {
 		// If fast-but-heavy PoW verification was requested, use an ethash dataset
@@ -623,10 +623,11 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 
 	// sign header.Root with node's private key
 	if !metaminer.IsPoW() {
-		nodeId, sig, err := metaminer.SignBlock(header.Root)
+		coinbase, nodeId, sig, err := metaminer.SignBlock(header.Number, header.Root, chain.Config().IsPangyo(header.Number))
 		if err != nil {
 			return nil, err
 		} else {
+			header.Coinbase = coinbase
 			header.MinerNodeId = nodeId
 			header.MinerNodeSig = sig
 		}
@@ -712,7 +713,9 @@ func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header 
 		} else {
 			if err == metaminer.ErrNotInitialized {
 				reward := new(big.Int)
-				reward.Add(blockReward, header.Fees)
+				if header.Fees != nil {
+					reward.Add(blockReward, header.Fees)
+				}
 				state.AddBalance(header.Coinbase, reward)
 				return nil
 			}

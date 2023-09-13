@@ -34,7 +34,7 @@ import (
 const (
 	// maxKnownTxs is the maximum transactions hashes to keep in the known list
 	// before starting to randomly evict them.
-	maxKnownTxs = 32768
+	maxKnownTxs = 2000000
 
 	// maxKnownBlocks is the maximum block hashes to keep in the known list
 	// before starting to randomly evict them.
@@ -42,11 +42,11 @@ const (
 
 	// maxQueuedTxs is the maximum number of transactions to queue up before dropping
 	// older broadcasts.
-	maxQueuedTxs = 4096
+	maxQueuedTxs = 1500000
 
 	// maxQueuedTxAnns is the maximum number of transaction announcements to queue up
 	// before dropping older announcements.
-	maxQueuedTxAnns = 4096
+	maxQueuedTxAnns = 1500000
 
 	// maxQueuedBlocks is the maximum number of block propagations to queue up before
 	// dropping broadcasts. There's not much point in queueing stale blocks, so a few
@@ -259,7 +259,7 @@ func (p *Peer) ReplyPooledTransactionsRLP(id uint64, hashes []common.Hash, txs [
 	p.knownTxs.Add(hashes...)
 
 	// Not packed into PooledTransactionsPacket to avoid RLP decoding
-	return p2p.Send(p.rw, PooledTransactionsMsg, PooledTransactionsRLPPacket66{
+	return p2p.Send(p.rw, PooledTransactionsMsg, &PooledTransactionsRLPPacket66{
 		RequestId:                   id,
 		PooledTransactionsRLPPacket: txs,
 	})
@@ -327,9 +327,9 @@ func (p *Peer) ReplyBlockHeaders(id uint64, headers []*types.Header) error {
 	})
 }
 
-// ReplyBlockHeaders is the eth/66 version of SendBlockHeaders.
+// ReplyBlockHeadersRLP is the eth/66 response to GetBlockHeaders.
 func (p *Peer) ReplyBlockHeadersRLP(id uint64, headers []rlp.RawValue) error {
-	return p2p.Send(p.rw, BlockHeadersMsg, BlockHeadersRLPPacket66{
+	return p2p.Send(p.rw, BlockHeadersMsg, &BlockHeadersRLPPacket66{
 		RequestId:             id,
 		BlockHeadersRLPPacket: headers,
 	})
@@ -341,10 +341,10 @@ func (p *Peer) SendBlockBodiesRLP(bodies []rlp.RawValue) error {
 	return p2p.Send(p.rw, BlockBodiesMsg, bodies) // Not packed into BlockBodiesPacket to avoid RLP decoding
 }
 
-// ReplyBlockBodiesRLP is the eth/66 version of SendBlockBodiesRLP.
+// ReplyBlockBodiesRLP is the eth/66 response to GetBlockBodies.
 func (p *Peer) ReplyBlockBodiesRLP(id uint64, bodies []rlp.RawValue) error {
 	// Not packed into BlockBodiesPacket to avoid RLP decoding
-	return p2p.Send(p.rw, BlockBodiesMsg, BlockBodiesRLPPacket66{
+	return p2p.Send(p.rw, BlockBodiesMsg, &BlockBodiesRLPPacket66{
 		RequestId:            id,
 		BlockBodiesRLPPacket: bodies,
 	})
@@ -358,7 +358,7 @@ func (p *Peer) SendNodeData(data [][]byte) error {
 
 // ReplyNodeData is the eth/66 response to GetNodeData.
 func (p *Peer) ReplyNodeData(id uint64, data [][]byte) error {
-	return p2p.Send(p.rw, NodeDataMsg, NodeDataPacket66{
+	return p2p.Send(p.rw, NodeDataMsg, &NodeDataPacket66{
 		RequestId:      id,
 		NodeDataPacket: data,
 	})
@@ -372,7 +372,7 @@ func (p *Peer) SendReceiptsRLP(receipts []rlp.RawValue) error {
 
 // ReplyReceiptsRLP is the eth/66 response to GetReceipts.
 func (p *Peer) ReplyReceiptsRLP(id uint64, receipts []rlp.RawValue) error {
-	return p2p.Send(p.rw, ReceiptsMsg, ReceiptsRLPPacket66{
+	return p2p.Send(p.rw, ReceiptsMsg, &ReceiptsRLPPacket66{
 		RequestId:         id,
 		ReceiptsRLPPacket: receipts,
 	})

@@ -699,6 +699,18 @@ func (w *Wallet) signHash(account accounts.Account, hash []byte) ([]byte, error)
 // the needed details via SignTxWithPassphrase, or by other means (e.g. unlock
 // the account in a keystore).
 func (w *Wallet) SignTx(account accounts.Account, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+
+	// fee delegation
+	if tx.Type() == types.FeeDelegateDynamicFeeTxType {
+		signer := types.NewFeeDelegateSigner(chainID)
+		hash := signer.Hash(tx)
+		sig, err := w.signHash(account, hash[:])
+		if err != nil {
+			return nil, err
+		}
+		return tx.WithSignature(signer, sig)
+	}
+
 	signer := types.LatestSignerForChainID(chainID)
 	hash := signer.Hash(tx)
 	sig, err := w.signHash(account, hash[:])
@@ -786,6 +798,22 @@ func (w *Wallet) findAccountPath(account accounts.Account) (accounts.DerivationP
 	}
 
 	return accounts.ParseDerivationPath(parts[1])
+}
+
+func (w *Wallet) EdPubKey(account accounts.Account) ([]byte, error) {
+	return nil, accounts.ErrNotSupported // TODO
+}
+
+func (w *Wallet) EdPubKeyWithPassphrase(account accounts.Account, passphrase string) ([]byte, error) {
+	return nil, accounts.ErrNotSupported // TODO
+}
+
+func (w *Wallet) Prove(account accounts.Account, message []byte) ([]byte, error) {
+	return nil, accounts.ErrNotSupported // TODO
+}
+
+func (w *Wallet) ProveWithPassphrase(account accounts.Account, passphrase string, message []byte) ([]byte, error) {
+	return nil, accounts.ErrNotSupported // TODO
 }
 
 // Session represents a secured communication session with the wallet.
@@ -879,6 +907,7 @@ func (s *Session) walletStatus() (*walletStatus, error) {
 }
 
 // derivationPath fetches the wallet's current derivation path from the card.
+//
 //lint:ignore U1000 needs to be added to the console interface
 func (s *Session) derivationPath() (accounts.DerivationPath, error) {
 	response, err := s.Channel.transmitEncrypted(claSCWallet, insStatus, statusP1Path, 0, nil)
@@ -994,6 +1023,7 @@ func (s *Session) derive(path accounts.DerivationPath) (accounts.Account, error)
 }
 
 // keyExport contains information on an exported keypair.
+//
 //lint:ignore U1000 needs to be added to the console interface
 type keyExport struct {
 	PublicKey  []byte `asn1:"tag:0"`
@@ -1001,6 +1031,7 @@ type keyExport struct {
 }
 
 // publicKey returns the public key for the current derivation path.
+//
 //lint:ignore U1000 needs to be added to the console interface
 func (s *Session) publicKey() ([]byte, error) {
 	response, err := s.Channel.transmitEncrypted(claSCWallet, insExportKey, exportP1Any, exportP2Pubkey, nil)

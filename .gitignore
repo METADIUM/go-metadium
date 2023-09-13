@@ -55,3 +55,4 @@ vendor/*
 # Metadium
 /metadium/admin_abi.go
 /metadium/governance_abi.go
+/metadium/governance_legacy_abi.go

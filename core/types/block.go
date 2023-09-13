@@ -28,6 +28,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -63,10 +64,43 @@ func (n *BlockNonce) UnmarshalText(input []byte) error {
 	return hexutil.UnmarshalFixedText("BlockNonce", input, n[:])
 }
 
-//go:generate gencodec -type Header -field-override headerMarshaling -out gen_header_json.go
+//go:generate go run github.com/fjl/gencodec -type Header -field-override headerMarshaling -out gen_header_json.go
+//go:generate go run ../../rlp/rlpgen -type Header -out gen_header_rlp.go
 
 // Header represents a block header in the Ethereum blockchain.
 type Header struct {
+	ParentHash   common.Hash    `json:"parentHash"       gencodec:"required"`
+	UncleHash    common.Hash    `json:"sha3Uncles"       gencodec:"required"`
+	Coinbase     common.Address `json:"miner"            gencodec:"required"`
+	Root         common.Hash    `json:"stateRoot"        gencodec:"required"`
+	TxHash       common.Hash    `json:"transactionsRoot" gencodec:"required"`
+	ReceiptHash  common.Hash    `json:"receiptsRoot"     gencodec:"required"`
+	Bloom        Bloom          `json:"logsBloom"        gencodec:"required"`
+	Difficulty   *big.Int       `json:"difficulty"       gencodec:"required"`
+	Number       *big.Int       `json:"number"           gencodec:"required"`
+	GasLimit     uint64         `json:"gasLimit"         gencodec:"required"`
+	GasUsed      uint64         `json:"gasUsed"          gencodec:"required"`
+	Fees         *big.Int       `json:"fees"             gencodec:"required"`
+	Time         uint64         `json:"timestamp"        gencodec:"required"`
+	Extra        []byte         `json:"extraData"        gencodec:"required"`
+	Rewards      []byte         `json:"rewards"          gencodec:"required"`
+	MixDigest    common.Hash    `json:"mixHash"`
+	Nonce        BlockNonce     `json:"nonce"`
+	MinerNodeId  []byte         `json:"minerNode"`
+	MinerNodeSig []byte         `json:"minerNodeSig"`
+
+	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
+	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
+
+	/*
+		TODO (MariusVanDerWijden) Add this field once needed
+		// Random was added during the merge and contains the BeaconState randomness
+		Random common.Hash `json:"random" rlp:"optional"`
+	*/
+}
+
+// TODO: only used for rlp
+type headerRlp struct {
 	ParentHash   common.Hash    `json:"parentHash"       gencodec:"required"`
 	UncleHash    common.Hash    `json:"sha3Uncles"       gencodec:"required"`
 	Coinbase     common.Address `json:"miner"            gencodec:"required"`
@@ -113,10 +147,166 @@ type headerMarshaling struct {
 	Hash         common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
 }
 
+// HeaderLegacy represents a legacy block header in the Ethereum blockchain.
+type HeaderLegacy struct {
+	ParentHash  common.Hash    `json:"parentHash"       gencodec:"required"`
+	UncleHash   common.Hash    `json:"sha3Uncles"       gencodec:"required"`
+	Coinbase    common.Address `json:"miner"            gencodec:"required"`
+	Root        common.Hash    `json:"stateRoot"        gencodec:"required"`
+	TxHash      common.Hash    `json:"transactionsRoot" gencodec:"required"`
+	ReceiptHash common.Hash    `json:"receiptsRoot"     gencodec:"required"`
+	Bloom       Bloom          `json:"logsBloom"        gencodec:"required"`
+	Difficulty  *big.Int       `json:"difficulty"       gencodec:"required"`
+	Number      *big.Int       `json:"number"           gencodec:"required"`
+	GasLimit    uint64         `json:"gasLimit"         gencodec:"required"`
+	GasUsed     uint64         `json:"gasUsed"          gencodec:"required"`
+	Time        uint64         `json:"timestamp"        gencodec:"required"`
+	Extra       []byte         `json:"extraData"        gencodec:"required"`
+	MixDigest   common.Hash    `json:"mixHash"`
+	Nonce       BlockNonce     `json:"nonce"`
+
+	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
+	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
+
+	/*
+		TODO (MariusVanDerWijden) Add this field once needed
+		// Random was added during the merge and contains the BeaconState randomness
+		Random common.Hash `json:"random" rlp:"optional"`
+	*/
+}
+
+func headerToHeaderRlp(h *Header) *headerRlp {
+	hh := &headerRlp{
+		ParentHash:   h.ParentHash,
+		UncleHash:    h.UncleHash,
+		Coinbase:     h.Coinbase,
+		Root:         h.Root,
+		TxHash:       h.TxHash,
+		ReceiptHash:  h.ReceiptHash,
+		Bloom:        h.Bloom,
+		Difficulty:   h.Difficulty,
+		Number:       h.Number,
+		GasLimit:     h.GasLimit,
+		GasUsed:      h.GasUsed,
+		Fees:         h.Fees,
+		Time:         h.Time,
+		Extra:        h.Extra,
+		Rewards:      h.Rewards,
+		MixDigest:    h.MixDigest,
+		Nonce:        h.Nonce,
+		MinerNodeId:  h.MinerNodeId,
+		MinerNodeSig: h.MinerNodeSig,
+		BaseFee:      h.BaseFee,
+	}
+	return hh
+}
+
+func headerRlpToHeader(h *headerRlp) *Header {
+	hh := &Header{
+		ParentHash:   h.ParentHash,
+		UncleHash:    h.UncleHash,
+		Coinbase:     h.Coinbase,
+		Root:         h.Root,
+		TxHash:       h.TxHash,
+		ReceiptHash:  h.ReceiptHash,
+		Bloom:        h.Bloom,
+		Difficulty:   h.Difficulty,
+		Number:       h.Number,
+		GasLimit:     h.GasLimit,
+		GasUsed:      h.GasUsed,
+		Fees:         h.Fees,
+		Time:         h.Time,
+		Extra:        h.Extra,
+		Rewards:      h.Rewards,
+		MixDigest:    h.MixDigest,
+		Nonce:        h.Nonce,
+		MinerNodeId:  h.MinerNodeId,
+		MinerNodeSig: h.MinerNodeSig,
+		BaseFee:      h.BaseFee,
+	}
+	return hh
+}
+
+func HeaderToHeaderLegacy(h *Header) *HeaderLegacy {
+	hh := &HeaderLegacy{
+		ParentHash:  h.ParentHash,
+		UncleHash:   h.UncleHash,
+		Coinbase:    h.Coinbase,
+		Root:        h.Root,
+		TxHash:      h.TxHash,
+		ReceiptHash: h.ReceiptHash,
+		Bloom:       h.Bloom,
+		Difficulty:  h.Difficulty,
+		Number:      h.Number,
+		GasLimit:    h.GasLimit,
+		GasUsed:     h.GasUsed,
+		Time:        h.Time,
+		Extra:       h.Extra,
+		MixDigest:   h.MixDigest,
+		Nonce:       h.Nonce,
+		BaseFee:     h.BaseFee,
+	}
+	return hh
+}
+
+func HeaderLegacyToHeader(h *HeaderLegacy) *Header {
+	hh := &Header{
+		ParentHash:  h.ParentHash,
+		UncleHash:   h.UncleHash,
+		Coinbase:    h.Coinbase,
+		Root:        h.Root,
+		TxHash:      h.TxHash,
+		ReceiptHash: h.ReceiptHash,
+		Bloom:       h.Bloom,
+		Difficulty:  h.Difficulty,
+		Number:      h.Number,
+		GasLimit:    h.GasLimit,
+		GasUsed:     h.GasUsed,
+		Time:        h.Time,
+		Extra:       h.Extra,
+		MixDigest:   h.MixDigest,
+		Nonce:       h.Nonce,
+		BaseFee:     h.BaseFee,
+	}
+	return hh
+}
+
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
 // RLP encoding.
 func (h *Header) Hash() common.Hash {
+	if metaminer.IsPoW() {
+		return rlpHash(HeaderToHeaderLegacy(h))
+	}
 	return rlpHash(h)
+}
+
+func (h *HeaderLegacy) Hash() common.Hash {
+	return rlpHash(h)
+}
+
+func (h *Header) EncodeRLP(w io.Writer) error {
+	if metaminer.IsPoW() {
+		return rlp.Encode(w, HeaderToHeaderLegacy(h))
+	}
+	hh := headerToHeaderRlp(h)
+	return rlp.Encode(w, hh)
+}
+
+func (h *Header) DecodeRLP(s *rlp.Stream) error {
+	if metaminer.IsPoW() {
+		var hl HeaderLegacy
+		if err := s.Decode(&hl); err != nil {
+			return err
+		}
+		*h = *HeaderLegacyToHeader(&hl)
+		return nil
+	}
+	var hr headerRlp
+	if err := s.Decode(&hr); err != nil {
+		return err
+	}
+	*h = *headerRlpToHeader(&hr)
+	return nil
 }
 
 var headerSize = common.StorageSize(reflect.TypeOf(Header{}).Size())

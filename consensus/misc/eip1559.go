@@ -31,14 +31,20 @@ import (
 // - gas limit check
 // - basefee check
 func VerifyEip1559Header(config *params.ChainConfig, parent, header *types.Header) error {
-	// Metadium: eip-1559 is inactive
-	if !metaminer.IsPoW() {
-		return nil
-	}
 	// Verify that the gas limit remains within allowed bounds
 	parentGasLimit := parent.GasLimit
-	if !config.IsLondon(parent.Number) {
-		parentGasLimit = parent.GasLimit * params.ElasticityMultiplier
+	if metaminer.IsPoW() {
+		if !config.IsLondon(parent.Number) {
+			parentGasLimit = parent.GasLimit * params.ElasticityMultiplier
+		}
+	} else {
+		_, _, _, _, gasTargetPercentage, err := metaminer.GetBlockBuildParameters(parent.Number)
+		if err == metaminer.ErrNotInitialized {
+			return nil
+		}
+		if !config.IsLondon(parent.Number) {
+			parentGasLimit = parent.GasLimit * uint64(gasTargetPercentage) / 100
+		}
 	}
 	if err := VerifyGaslimit(parentGasLimit, header.GasLimit); err != nil {
 		return err
@@ -51,52 +57,94 @@ func VerifyEip1559Header(config *params.ChainConfig, parent, header *types.Heade
 	expectedBaseFee := CalcBaseFee(config, parent)
 	if header.BaseFee.Cmp(expectedBaseFee) != 0 {
 		return fmt.Errorf("invalid baseFee: have %s, want %s, parentBaseFee %s, parentGasUsed %d",
-			expectedBaseFee, header.BaseFee, parent.BaseFee, parent.GasUsed)
+			header.BaseFee, expectedBaseFee, parent.BaseFee, parent.GasUsed)
 	}
 	return nil
 }
 
 // CalcBaseFee calculates the basefee of the header.
 func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
-	// Metadium: eip-1559 is inactive
-	if !metaminer.IsPoW() {
-		return new(big.Int).SetUint64(0)
-	}
 	// If the current block is the first EIP-1559 block, return the InitialBaseFee.
 	if !config.IsLondon(parent.Number) {
-		return new(big.Int).SetUint64(params.InitialBaseFee)
+		return new(big.Int).SetInt64(params.InitialBaseFee)
 	}
 
 	var (
 		parentGasTarget          = parent.GasLimit / params.ElasticityMultiplier
 		parentGasTargetBig       = new(big.Int).SetUint64(parentGasTarget)
 		baseFeeChangeDenominator = new(big.Int).SetUint64(params.BaseFeeChangeDenominator)
+		baseFeeChangeRate        *big.Int
+		parentBaseFee            = parent.BaseFee
+		maxBaseFee               *big.Int
 	)
+	if !metaminer.IsPoW() {
+		// NB: in Metadium both elasticityMultiplier & baseFeeChangeDenominator are percentage numbers
+		_, maxBaseFeeGov, _, baseFeeMaxChangeRate, gasTargetPercentage, err := metaminer.GetBlockBuildParameters(parent.Number)
+		if err == metaminer.ErrNotInitialized {
+			return new(big.Int).Set(parentBaseFee)
+		}
+		parentGasTarget = parent.GasLimit * uint64(gasTargetPercentage) / 100
+		parentGasTargetBig = new(big.Int).SetUint64(parentGasTarget)
+		if parentGasTargetBig.Cmp(common.Big0) == 0 {
+			parentGasTargetBig = new(big.Int).SetUint64(parentGasTarget)
+		}
+		baseFeeChangeRate = new(big.Int).SetInt64(baseFeeMaxChangeRate)
+		maxBaseFee = maxBaseFeeGov
+		if parentBaseFee.Cmp(common.Big0) == 0 && maxBaseFee.Cmp(common.Big0) != 0 {
+			parentBaseFee = big.NewInt(1)
+		}
+	}
 	// If the parent gasUsed is the same as the target, the baseFee remains unchanged.
 	if parent.GasUsed == parentGasTarget {
-		return new(big.Int).Set(parent.BaseFee)
+		return new(big.Int).Set(parentBaseFee)
 	}
 	if parent.GasUsed > parentGasTarget {
 		// If the parent block used more gas than its target, the baseFee should increase.
 		gasUsedDelta := new(big.Int).SetUint64(parent.GasUsed - parentGasTarget)
-		x := new(big.Int).Mul(parent.BaseFee, gasUsedDelta)
-		y := x.Div(x, parentGasTargetBig)
-		baseFeeDelta := math.BigMax(
-			x.Div(y, baseFeeChangeDenominator),
-			common.Big1,
-		)
+		x := new(big.Int).Mul(parentBaseFee, gasUsedDelta)
+		y := new(big.Int)
+		if parentGasTargetBig.Cmp(common.Big0) == 0 {
+			y = x
+		} else {
+			y = x.Div(x, parentGasTargetBig)
+		}
+		var baseFeeDelta *big.Int
+		if metaminer.IsPoW() {
+			baseFeeDelta = math.BigMax(
+				x.Div(y, baseFeeChangeDenominator),
+				common.Big1,
+			)
 
-		return x.Add(parent.BaseFee, baseFeeDelta)
+			return x.Add(parentBaseFee, baseFeeDelta)
+		} else {
+			baseFeeDelta = math.BigMax(
+				x.Div(y.Mul(y, baseFeeChangeRate), big.NewInt(100)),
+				common.Big1,
+			)
+
+			return math.BigMin(x.Add(parentBaseFee, baseFeeDelta), maxBaseFee)
+		}
 	} else {
 		// Otherwise if the parent block used less gas than its target, the baseFee should decrease.
 		gasUsedDelta := new(big.Int).SetUint64(parentGasTarget - parent.GasUsed)
-		x := new(big.Int).Mul(parent.BaseFee, gasUsedDelta)
+		x := new(big.Int).Mul(parentBaseFee, gasUsedDelta)
 		y := x.Div(x, parentGasTargetBig)
-		baseFeeDelta := x.Div(y, baseFeeChangeDenominator)
-
-		return math.BigMax(
-			x.Sub(parent.BaseFee, baseFeeDelta),
-			common.Big0,
-		)
+		var baseFeeDelta *big.Int
+		if metaminer.IsPoW() {
+			baseFeeDelta = x.Div(y, baseFeeChangeDenominator)
+			return math.BigMax(
+				x.Sub(parentBaseFee, baseFeeDelta),
+				common.Big1,
+			)
+		} else {
+			baseFeeDelta = x.Div(y.Mul(y, baseFeeChangeRate), big.NewInt(100))
+			if baseFeeDelta.Cmp(common.Big0) == 0 && parentBaseFee.Cmp(common.Big1) > 0 {
+				baseFeeDelta.SetUint64(1)
+			}
+			return math.BigMin(math.BigMax(
+				x.Sub(parentBaseFee, baseFeeDelta),
+				common.Big1,
+			), maxBaseFee)
+		}
 	}
 }

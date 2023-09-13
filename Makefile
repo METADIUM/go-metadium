@@ -2,7 +2,7 @@
 # with Go source code. If you know what GOPATH is then you probably
 # don't need to bother with make.
 
-.PHONY: geth android ios evm all test clean rocksdb etcd
+.PHONY: geth android ios evm all test clean rocksdb
 .PHONY: gmet-linux
 
 GOBIN = ./build/bin
@@ -29,7 +29,7 @@ ROCKSDB_DIR=$(shell pwd)/rocksdb
 ROCKSDB_TAG=-tags rocksdb
 endif
 
-metadium: etcd gmet logrot
+metadium: gmet logrot
 	@[ -d build/conf ] || mkdir -p build/conf
 	@cp -p metadium/scripts/gmet.sh metadium/scripts/solc.sh build/bin/
 	@cp -p metadium/scripts/config.json.example		\
@@ -40,7 +40,7 @@ metadium: etcd gmet logrot
 	@(cd build; tar cfz metadium.tar.gz bin conf)
 	@echo "Done building build/metadium.tar.gz"
 
-gmet: etcd rocksdb metadium/governance_abi.go
+gmet: rocksdb metadium/governance_abi.go metadium/governance_legacy_abi.go
 ifeq ($(USE_ROCKSDB), NO)
 	$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/gmet
 else
@@ -68,7 +68,7 @@ else
 		$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/dbbench
 endif
 
-all:
+all: metadium/governance_abi.go metadium/governance_legacy_abi.go
 	$(GORUN) build/ci.go install
 
 android:
@@ -86,12 +86,15 @@ ios:
 test: all
 	$(GORUN) build/ci.go test
 
-lint: metadium/governance_abi.go ## Run linters.
+test-short: all
+	$(GORUN) build/ci.go test -short
+
+lint: metadium/governance_abi.go metadium/governance_legacy_abi.go ## Run linters.
 	$(GORUN) build/ci.go lint
 
 clean:
 	env GO111MODULE=on go clean -cache
-	rm -fr build/_workspace/pkg/ $(GOBIN)/* build/conf metadium/admin_abi.go metadium/governance_abi.go
+	rm -fr build/_workspace/pkg/ $(GOBIN)/* build/conf metadium/governance_abi.go metadium/governance_legacy_abi.go
 	@ROCKSDB_DIR=$(ROCKSDB_DIR);			\
 	if [ -e $${ROCKSDB_DIR}/Makefile ]; then	\
 		cd $${ROCKSDB_DIR};			\
@@ -103,14 +106,13 @@ clean:
 
 devtools:
 	env GOBIN= go install golang.org/x/tools/cmd/stringer@latest
-	env GOBIN= go install github.com/kevinburke/go-bindata/go-bindata@latest
 	env GOBIN= go install github.com/fjl/gencodec@latest
 	env GOBIN= go install github.com/golang/protobuf/protoc-gen-go@latest
 	env GOBIN= go install ./cmd/abigen
 	@type "solc" 2> /dev/null || echo 'Please install solc'
 	@type "protoc" 2> /dev/null || echo 'Please install protoc'
 
-gmet-linux: etcd
+gmet-linux:
 	@docker --version > /dev/null 2>&1;				\
 	if [ ! $$? = 0 ]; then						\
 		echo "Docker not found.";				\
@@ -120,7 +122,7 @@ gmet-linux: etcd
 		docker run -e HOME=/tmp --rm -v $(shell pwd):/data	\
 			-u $(shell id -u):$(shell id -g)		\
 			-w /data meta/builder:local			\
-			make USE_ROCKSDB=$(USE_ROCKSDB);		\
+			"make USE_ROCKSDB=$(USE_ROCKSDB)";		\
 	fi
 
 ifneq ($(USE_ROCKSDB), YES)
@@ -131,38 +133,14 @@ rocksdb:
 	cd $(ROCKSDB_DIR) && PORTABLE=1 make -j8 static_lib;
 endif
 
-etcd:
-	@if [ ! -e etcd/.git ]; then			\
-		git submodule update --init etcd;	\
-	fi
-
-AWK_CODE='								\
-BEGIN { print "package metadium"; bin = 0; name = ""; abi = ""; }	\
-/^{/ { bin = 1; abi = ""; name = ""; }					\
-/^}/ { bin = 0; abi = abi "}"; print "var " name "Abi = `" abi "`"; }	\
-{									\
-  if (bin == 1) {							\
-    abi = abi $$0;							\
-    if ($$1 == "\"contractName\":") {					\
-      name = $$2;							\
-      gsub(",|\"", "", name);						\
-    }									\
-  }									\
-}'
-
-metadium/admin_abi.go: metadium/contracts/MetadiumAdmin-template.sol build/bin/solc
-	@PATH=${PATH}:build/bin metadium/scripts/solc.sh -f abi $< /tmp/junk.$$$$; \
-	cat /tmp/junk.$$$$ | awk $(AWK_CODE) > $@;	\
-	rm -f /tmp/junk.$$$$;
-
-AWK_CODE_2='								     \
+AWK_CODE='								     \
 BEGIN { print "package metadium\n"; }					     \
 /^var Registry_contract/ {						     \
   sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
   n = "Registry";							     \
   print "var " n "Abi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
 }									     \
-/^var Staking_contract/ {						     \
+/^var StakingImp_contract/ {						     \
   sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
   n = "Staking";							     \
   print "var " n "Abi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
@@ -172,14 +150,41 @@ BEGIN { print "package metadium\n"; }					     \
   n = "EnvStorageImp";							     \
   print "var " n "Abi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
 }									     \
-/^var Gov_contract/ {							     \
+/^var GovImp_contract/ {							     \
   sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
   n = "Gov";								     \
   print "var " n "Abi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
 }'
 
 metadium/governance_abi.go: metadium/contracts/MetadiumGovernance.js
-	@cat $< | awk $(AWK_CODE_2) > $@
+	@cat $< | awk $(AWK_CODE) > $@
+
+AWK_CODE_LEGACY='								     \
+BEGIN { print "package metadium\n"; }					     \
+/^var Registry_contract/ {						     \
+  sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
+  n = "Registry";							     \
+  print "var " n "LegacyAbi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
+}									     \
+/^var Staking_contract/ {						     \
+  sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
+  n = "Staking";							     \
+  print "var " n "LegacyAbi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
+}									     \
+/^var EnvStorageImp_contract/ {						     \
+  sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
+  n = "EnvStorageImp";							     \
+  print "var " n "LegacyAbi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
+}									     \
+/^var Gov_contract/ {							     \
+  sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
+  n = "Gov";								     \
+  print "var " n "LegacyAbi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
+}'
+
+metadium/governance_legacy_abi.go: metadium/contracts/MetadiumGovernanceLegacy.js
+	@cat $< | awk $(AWK_CODE_LEGACY) > $@
+
 
 ifneq ($(shell uname), Linux)
 

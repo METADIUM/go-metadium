@@ -20,7 +20,6 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math/big"
 	"math/rand"
 	"os"
@@ -51,12 +50,17 @@ func init() {
 	testTxPoolConfig = DefaultTxPoolConfig
 	testTxPoolConfig.Journal = ""
 
+	testTxPoolConfig.AccountSlots = 16
+	testTxPoolConfig.GlobalSlots = 4096 + 1024
+	testTxPoolConfig.AccountQueue = 64
+	testTxPoolConfig.GlobalQueue = 1024
+
 	cpy := *params.TestChainConfig
 	eip1559Config = &cpy
 	eip1559Config.BerlinBlock = common.Big0
 	eip1559Config.LondonBlock = common.Big0
 
-	params.DropUnderpriced = false
+	params.DropUnderPriced = false
 }
 
 type testBlockChain struct {
@@ -953,6 +957,10 @@ func TestTransactionQueueTimeLimitingNoLocals(t *testing.T) {
 }
 
 func testTransactionQueueTimeLimiting(t *testing.T, nolocals bool) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	// Reduce the eviction interval to a testable amount
 	defer func(old time.Duration) { evictionInterval = old }(evictionInterval)
 	evictionInterval = time.Millisecond * 100
@@ -2242,10 +2250,14 @@ func TestTransactionJournaling(t *testing.T)         { testTransactionJournaling
 func TestTransactionJournalingNoLocals(t *testing.T) { testTransactionJournaling(t, true) }
 
 func testTransactionJournaling(t *testing.T, nolocals bool) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	t.Parallel()
 
 	// Create a temporary file for the journal
-	file, err := ioutil.TempFile("", "")
+	file, err := os.CreateTemp("", "")
 	if err != nil {
 		t.Fatalf("failed to create temporary journal: %v", err)
 	}

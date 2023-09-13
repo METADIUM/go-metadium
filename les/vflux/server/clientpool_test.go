@@ -1,4 +1,4 @@
-// Copyright 2019 The go-ethereum Authors
+// Copyright 2021 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -135,6 +135,10 @@ func alwaysTrueFn() bool {
 }
 
 func testClientPool(t *testing.T, activeLimit, clientCount, paidCount int, randomDisconnect bool) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
 	rand.Seed(time.Now().UnixNano())
 	var (
 		clock     mclock.Simulated

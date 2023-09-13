@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/big"
 	"net/http"
 	"os"
@@ -277,6 +276,9 @@ type genesisConfig struct {
 	} `json:"accounts"`
 	Members []*struct {
 		Addr     common.Address `json:"addr"`
+		Staker   common.Address `json:"staker"`
+		Voter    common.Address `json:"voter"`
+		Reward   common.Address `json:"reward"`
 		Stake    *big.Int       `json:"stake"`
 		Name     string         `json:"name"`
 		Id       string         `json:"id"`
@@ -288,7 +290,7 @@ type genesisConfig struct {
 
 func loadGenesisConfig(r io.Reader) (*genesisConfig, error) {
 	var config genesisConfig
-	if data, err := ioutil.ReadAll(r); err != nil {
+	if data, err := io.ReadAll(r); err != nil {
 		return nil, err
 	} else if err = json.Unmarshal(data, &config); err != nil {
 		return nil, err
@@ -326,7 +328,7 @@ func genGenesis(ctx *cli.Context) error {
 	var genesis map[string]interface{}
 	if fn := ctx.String(genesisTemplateFlag.Name); fn == "" {
 		utils.Fatalf("Genesis template is not specified.")
-	} else if data, err := ioutil.ReadFile(fn); err != nil {
+	} else if data, err := os.ReadFile(fn); err != nil {
 		return err
 	} else if err = json.Unmarshal(data, &genesis); err != nil {
 		return err
@@ -357,10 +359,14 @@ func genGenesis(ctx *cli.Context) error {
 		utils.Fatalf("At least one member and node are required.")
 	}
 
-	bootacct, bootnode := "", ""
+	bootacct, bootnode, emptyAddr := "", "", common.Address{}
 	for _, i := range config.Members {
 		if i.Bootnode {
-			bootacct = i.Addr.Hex()
+			if !bytes.Equal(i.Addr[:], emptyAddr[:]) {
+				bootacct = i.Addr.Hex()
+			} else if !bytes.Equal(i.Staker[:], emptyAddr[:]) {
+				bootacct = i.Staker.Hex()
+			}
 			bootnode = i.Id
 			break
 		}

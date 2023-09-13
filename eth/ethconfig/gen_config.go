@@ -26,7 +26,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		NoPruning                       bool
 		NoPrefetch                      bool
 		TxLookupLimit                   uint64                 `toml:",omitempty"`
-		Whitelist                       map[uint64]common.Hash `toml:"-"`
+		RequiredBlocks                  map[uint64]common.Hash `toml:"-"`
 		LightServ                       int                    `toml:",omitempty"`
 		LightIngress                    int                    `toml:",omitempty"`
 		LightEgress                     int                    `toml:",omitempty"`
@@ -48,6 +48,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		TrieTimeout                     time.Duration
 		SnapshotCache                   int
 		Preimages                       bool
+		TriesInMemory                   uint64
 		Miner                           miner.Config
 		Ethash                          ethash.Config
 		TxPool                          core.TxPoolConfig
@@ -61,6 +62,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		CheckpointOracle                *params.CheckpointOracleConfig `toml:",omitempty"`
 		OverrideArrowGlacier            *big.Int                       `toml:",omitempty"`
 		OverrideTerminalTotalDifficulty *big.Int                       `toml:",omitempty"`
+		OverrideBokbunja                *big.Int                       `toml:",omitempty"`
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -71,7 +73,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.NoPruning = c.NoPruning
 	enc.NoPrefetch = c.NoPrefetch
 	enc.TxLookupLimit = c.TxLookupLimit
-	enc.Whitelist = c.Whitelist
+	enc.RequiredBlocks = c.RequiredBlocks
 	enc.LightServ = c.LightServ
 	enc.LightIngress = c.LightIngress
 	enc.LightEgress = c.LightEgress
@@ -93,6 +95,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.TrieTimeout = c.TrieTimeout
 	enc.SnapshotCache = c.SnapshotCache
 	enc.Preimages = c.Preimages
+	enc.TriesInMemory = c.TriesInMemory
 	enc.Miner = c.Miner
 	enc.Ethash = c.Ethash
 	enc.TxPool = c.TxPool
@@ -106,6 +109,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.CheckpointOracle = c.CheckpointOracle
 	enc.OverrideArrowGlacier = c.OverrideArrowGlacier
 	enc.OverrideTerminalTotalDifficulty = c.OverrideTerminalTotalDifficulty
+	enc.OverrideBokbunja = c.OverrideBokbunja
 	return &enc, nil
 }
 
@@ -120,7 +124,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		NoPruning                       *bool
 		NoPrefetch                      *bool
 		TxLookupLimit                   *uint64                `toml:",omitempty"`
-		Whitelist                       map[uint64]common.Hash `toml:"-"`
+		RequiredBlocks                  map[uint64]common.Hash `toml:"-"`
 		LightServ                       *int                   `toml:",omitempty"`
 		LightIngress                    *int                   `toml:",omitempty"`
 		LightEgress                     *int                   `toml:",omitempty"`
@@ -142,6 +146,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		TrieTimeout                     *time.Duration
 		SnapshotCache                   *int
 		Preimages                       *bool
+		TriesInMemory                   *uint64
 		Miner                           *miner.Config
 		Ethash                          *ethash.Config
 		TxPool                          *core.TxPoolConfig
@@ -155,6 +160,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		CheckpointOracle                *params.CheckpointOracleConfig `toml:",omitempty"`
 		OverrideArrowGlacier            *big.Int                       `toml:",omitempty"`
 		OverrideTerminalTotalDifficulty *big.Int                       `toml:",omitempty"`
+		OverrideBokbunja                *big.Int                       `toml:",omitempty"`
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -184,8 +190,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.TxLookupLimit != nil {
 		c.TxLookupLimit = *dec.TxLookupLimit
 	}
-	if dec.Whitelist != nil {
-		c.Whitelist = dec.Whitelist
+	if dec.RequiredBlocks != nil {
+		c.RequiredBlocks = dec.RequiredBlocks
 	}
 	if dec.LightServ != nil {
 		c.LightServ = *dec.LightServ
@@ -250,6 +256,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.Preimages != nil {
 		c.Preimages = *dec.Preimages
 	}
+	if dec.TriesInMemory != nil {
+		c.TriesInMemory = *dec.TriesInMemory
+	}
 	if dec.Miner != nil {
 		c.Miner = *dec.Miner
 	}
@@ -288,6 +297,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.OverrideTerminalTotalDifficulty != nil {
 		c.OverrideTerminalTotalDifficulty = dec.OverrideTerminalTotalDifficulty
+	}
+	if dec.OverrideBokbunja != nil {
+		c.OverrideBokbunja = dec.OverrideBokbunja
 	}
 	return nil
 }
