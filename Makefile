@@ -122,7 +122,7 @@ gmet-linux:
 		docker run -e HOME=/tmp --rm -v $(shell pwd):/data	\
 			-u $(shell id -u):$(shell id -g)		\
 			-w /data meta/builder:local			\
-			make USE_ROCKSDB=$(USE_ROCKSDB);		\
+			"make USE_ROCKSDB=$(USE_ROCKSDB)";		\
 	fi
 
 ifneq ($(USE_ROCKSDB), YES)
