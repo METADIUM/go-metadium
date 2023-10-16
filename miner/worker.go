@@ -1497,8 +1497,8 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 		blockInterval = 2
 	}
 
-	maxPeekBack := int64(86400 / blockInterval) // don't look back further than this
-	tooBehindMultiple := int64(2)               // ignore if > tooBehindMultiple * height * blockInterval
+	maxPeekBack := 86400 / blockInterval // don't look back further than this
+	tooBehindMultiple := int64(2)        // ignore if > tooBehindMultiple * height * blockInterval
 
 	parent := w.chain.CurrentBlock()
 	num := parent.Number()
