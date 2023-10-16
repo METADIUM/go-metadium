@@ -1497,8 +1497,8 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 		blockInterval = 2
 	}
 
-	maxPeekBack := int64(86400)   // don't look back further than this
-	tooBehindMultiple := int64(2) // ignore if > tooBehindMultiple * height * blockInterval
+	maxPeekBack := int64(86400 / blockInterval) // don't look back further than this
+	tooBehindMultiple := int64(2)               // ignore if > tooBehindMultiple * height * blockInterval
 
 	parent := w.chain.CurrentBlock()
 	num := parent.Number()
@@ -1539,7 +1539,7 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 	if offset > 0 {
 		ahead++
 	}
-	adjBlocks := params.BlockTimeAdjBlocks
+	adjBlocks := params.BlockTimeAdjBlocks / blockInterval
 	for i := int64(0); i < params.BlockTimeAdjMultiple; i++ {
 		offset, height, _, dt = check(adjBlocks)
 		log.Debug("time-it", "round", adjBlocks, "offset", offset, "height", height, "dt", dt)
