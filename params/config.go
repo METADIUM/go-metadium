@@ -158,9 +158,9 @@ var (
 		BerlinBlock:         big.NewInt(51960000),
 		LondonBlock:         big.NewInt(51960000),
 		AvocadoBlock:        big.NewInt(59_860_000),
-		PangyoBlock:         nil,
-		ApplepieBlock:       nil,
-		BokbunjaBlock:       nil,
+		PangyoBlock:         big.NewInt(73_225_410),
+		ApplepieBlock:       big.NewInt(73_225_410),
+		BokbunjaBlock:       big.NewInt(73_225_410),
 		Ethash:              new(EthashConfig),
 	}
 
