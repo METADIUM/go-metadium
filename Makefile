@@ -154,6 +154,11 @@ BEGIN { print "package metadium\n"; }					     \
   sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
   n = "Gov";								     \
   print "var " n "Abi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
+}									     \
+/^var TRSListImp_contract/ {							     \
+  sub("^var[^(]*\\(","",$$0); sub("\\);$$","",$$0);			     \
+  n = "TRSList";								     \
+  print "var " n "Abi = `{ \"contractName\": \"" n "\", \"abi\": " $$0 "}`"; \
 }'
 
 metadium/governance_abi.go: metadium/contracts/MetadiumGovernance.js

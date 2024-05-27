@@ -66,9 +66,11 @@ type metaAdmin struct {
 	gov         *metclient.RemoteContract
 	staking     *metclient.RemoteContract
 	envStorage  *metclient.RemoteContract
-	Updates     chan bool
-	rpcCli      *rpc.Client
-	cli         *ethclient.Client
+	// Add TRS
+	trsList *metclient.RemoteContract
+	Updates chan bool
+	rpcCli  *rpc.Client
+	cli     *ethclient.Client
 
 	etcd        *embed.Etcd
 	etcdCli     *clientv3.Client
@@ -124,6 +126,16 @@ type rewardParameters struct {
 	blocksPer                                    int64
 }
 
+// Add TRS
+// Transaction Restriction Service(TRS) Parameters
+type trsParameters struct {
+	updatedBlock  *big.Int
+	trsListLength *big.Int
+	trsList       []common.Address
+	trsListMap    map[common.Address]bool
+	subscribe     bool
+}
+
 var (
 	// "Metadium Registry"
 	magic, _        = big.NewInt(0).SetString("0x4d6574616469756d205265676973747279", 0)
@@ -150,6 +162,8 @@ var (
 
 	registryContract, govContract, stakingContract, envStorageImpContract                         *metclient.ContractData
 	registryLegacyContract, govLegacyContract, stakingLegacyContract, envStorageImpLegacyContract *metclient.ContractData
+	// Add TRS
+	trsListAbiContract *metclient.ContractData
 
 	// testnet block 94 rewards
 	testnetBlock94Rewards       []reward
@@ -157,6 +171,10 @@ var (
 		{ "addr": "0x6f488615e6b462ce8909e9cd34c3f103994ab2fb", "reward": 100000000000000000 },
 		{ "addr": "0x6bd26c4a45e7d7cac2a389142f99f12e5713d719", "reward": 250000000000000000 },
 		{ "addr": "0x816e30b6c314ba5d1a67b1b54be944ce4554ed87", "reward": 306213253695614752 }]`
+
+	// Add TRS
+	// sync.Map[int]*trsParameters
+	trsParamCache = &sync.Map{}
 )
 
 func (n *metaNode) eq(m *metaNode) bool {
@@ -555,6 +573,290 @@ func (ma *metaAdmin) getRewardParams(ctx context.Context, height *big.Int) (*rew
 	return rp, nil
 }
 
+// Add TRS
+func (ma *metaAdmin) getTRSListGovContracts(ctx context.Context, height *big.Int) (trsList *metclient.RemoteContract, gov *metclient.RemoteContract, err error) {
+	if admin == nil || ma.registry == nil {
+		err = metaminer.ErrNotInitialized
+		return
+	}
+	reg := &metclient.RemoteContract{
+		Cli: ma.cli,
+		Abi: ma.registry.Abi,
+	}
+	gov = &metclient.RemoteContract{
+		Cli: ma.cli,
+		Abi: ma.gov.Abi,
+	}
+	trsList = &metclient.RemoteContract{
+		Cli: ma.cli,
+		Abi: ma.trsList.Abi,
+	}
+	if ma.registry.To != nil {
+		reg.To = ma.registry.To
+	} else {
+		var addr *common.Address
+		if addr, err = ma.getRegistryAddress(ctx, ma.cli, reg.Abi, height); err != nil {
+			err = metaminer.ErrNotInitialized
+			return
+		}
+		reg.To = addr
+	}
+
+	var addr common.Address
+	input := []interface{}{metclient.ToBytes32("TRSList")}
+	if err = metclient.CallContract(ctx, reg, "getContractAddress", input, &addr, height); err != nil {
+		err = errors.New("TRSList not initialized")
+		return
+	}
+
+	trsList.To = &common.Address{}
+	trsList.To.SetBytes(addr.Bytes())
+	ma.trsList.To = trsList.To
+
+	input = []interface{}{metclient.ToBytes32("GovernanceContract")}
+	if err = metclient.CallContract(ctx, reg, "getContractAddress", input, &addr, height); err != nil {
+		err = errors.New("gov not initialized")
+		return
+	}
+
+	gov.To = &common.Address{}
+	gov.To.SetBytes(addr.Bytes())
+
+	return
+}
+
+func (ma *metaAdmin) getTrsParameters(height *big.Int) (*trsParameters, error) {
+	var (
+		nodes           []*metaNode
+		addr            common.Address
+		name, enode, ip []byte
+		port            *big.Int
+		nodeLength      int64
+		input, output   []interface{}
+		modifiedBlock   *big.Int
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	trsParam := &trsParameters{}
+	trs, gov, err := ma.getTRSListGovContracts(ctx, height)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = metclient.CallContract(ctx, gov, "modifiedBlock", nil, &modifiedBlock, height); err != nil {
+		return nil, err
+	} else if modifiedBlock.Int64() == 0 {
+		return nil, metaminer.ErrNotInitialized
+	}
+
+	//if found in cache, use it
+	if e, ok := coinbaseEnodeCache.Load(modifiedBlock.Int64()); ok {
+		nodes = e.(*coinbaseEnodeEntry).nodes
+	} else {
+		nodeLength, err = ma.getInt(ctx, gov, height, "getNodeLength")
+		if err != nil {
+			return nil, err
+		}
+		for i := int64(1); i <= nodeLength; i++ {
+			input = []interface{}{big.NewInt(i)}
+			output = []interface{}{&name, &enode, &ip, &port}
+			if err = metclient.CallContract(ctx, gov, "getNode", input, &output, height); err != nil {
+				return nil, err
+			}
+
+			if err = metclient.CallContract(ctx, gov, "getMember", input, &addr, height); err != nil {
+				return nil, err
+			}
+
+			sid := hex.EncodeToString(enode)
+			if len(sid) != 128 {
+				return nil, ErrInvalidEnode
+			}
+			idv4, _ := toIdv4(sid)
+			nodes = append(nodes, &metaNode{
+				Name:  string(name),
+				Enode: sid,
+				Ip:    string(ip),
+				Id:    idv4,
+				Port:  int(port.Int64()),
+			})
+		}
+	}
+
+	if ma.self != nil {
+		for _, i := range nodes {
+			if i.Id == ma.self.Id {
+				log.Debug("TRS self", "i.Name", i.Name, "ma.self.Addr", ma.self.Addr)
+				input = []interface{}{ma.self.Addr}
+				if err = metclient.CallContract(ctx, trs, "isAddressInSubscriptionList", input, &trsParam.subscribe, height); err != nil {
+					trsParam.subscribe = false
+				}
+				break
+			}
+		}
+	}
+	// no coinbaseEnodeEntry caching
+
+	if err = metclient.CallContract(ctx, trs, "getUpdatedBlock", nil, &trsParam.updatedBlock, height); err != nil {
+		return nil, err
+	}
+
+	// if found in cache, use it
+	if trsParamCacheTemp, ok := trsParamCache.Load(trsParam.updatedBlock.Int64()); ok {
+		if ma.self != nil && trsParam.subscribe != trsParamCacheTemp.(*trsParameters).subscribe {
+			// change subscribe status
+			trsParamCacheTemp.(*trsParameters).subscribe = trsParam.subscribe
+		}
+		return trsParamCacheTemp.(*trsParameters), nil
+	}
+
+	if err = metclient.CallContract(ctx, trs, "getTRSListLength", nil, &trsParam.trsListLength, height); err != nil {
+		return nil, err
+	}
+
+	trsParam.trsList = make([]common.Address, trsParam.trsListLength.Uint64())
+	if err = metclient.CallContract(ctx, trs, "getTRSList", nil, &trsParam.trsList, height); err != nil {
+		return nil, err
+	}
+
+	if err != nil {
+		err = metaminer.ErrNotInitialized
+		return nil, err
+	}
+
+	trsListMap := make(map[common.Address]bool, trsParam.trsListLength.Uint64())
+	for _, addr = range trsParam.trsList {
+		trsListMap[addr] = true
+	}
+	trsParam.trsListMap = trsListMap
+
+	// no trsListMap caching
+
+	return trsParam, nil
+}
+
+func (ma *metaAdmin) getTRSListWithCache(height *big.Int) (*trsParameters, error) {
+	var (
+		nodes           []*metaNode
+		addr            common.Address
+		name, enode, ip []byte
+		port            *big.Int
+		nodeLength      int64
+		input, output   []interface{}
+		modifiedBlock   *big.Int
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	trsParam := &trsParameters{}
+	trs, gov, err := ma.getTRSListGovContracts(ctx, height)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = metclient.CallContract(ctx, gov, "modifiedBlock", nil, &modifiedBlock, height); err != nil {
+		return nil, err
+	} else if modifiedBlock.Int64() == 0 {
+		return nil, metaminer.ErrNotInitialized
+	}
+	// if found in cache, use it
+	if e, ok := coinbaseEnodeCache.Load(modifiedBlock.Int64()); ok {
+		nodes = e.(*coinbaseEnodeEntry).nodes
+	} else {
+		nodeLength, err = ma.getInt(ctx, gov, height, "getNodeLength")
+		if err != nil {
+			return nil, err
+		}
+		for i := int64(1); i <= nodeLength; i++ {
+			input = []interface{}{big.NewInt(i)}
+			output = []interface{}{&name, &enode, &ip, &port}
+			if err = metclient.CallContract(ctx, gov, "getNode", input, &output, height); err != nil {
+				return nil, err
+			}
+
+			if err = metclient.CallContract(ctx, gov, "getMember", input, &addr, height); err != nil {
+				return nil, err
+			}
+
+			sid := hex.EncodeToString(enode)
+			if len(sid) != 128 {
+				return nil, ErrInvalidEnode
+			}
+			idv4, _ := toIdv4(sid)
+			nodes = append(nodes, &metaNode{
+				Name:  string(name),
+				Enode: sid,
+				Ip:    string(ip),
+				Id:    idv4,
+				Port:  int(port.Int64()),
+			})
+		}
+	}
+
+	if ma.self != nil {
+		for _, i := range nodes {
+			if i.Id == ma.self.Id {
+				input = []interface{}{ma.self.Addr}
+				if err = metclient.CallContract(ctx, trs, "isAddressInSubscriptionList", input, &trsParam.subscribe, height); err != nil {
+					trsParam.subscribe = false
+				}
+				break
+			}
+		}
+	}
+	// no coinbaseEnodeEntry caching
+
+	if err = metclient.CallContract(ctx, trs, "getUpdatedBlock", nil, &trsParam.updatedBlock, height); err != nil {
+		return nil, err
+	}
+
+	// if found in cache, use it
+	if trsParamCacheTemp, ok := trsParamCache.Load(trsParam.updatedBlock.Int64()); ok {
+		if ma.self != nil && trsParam.subscribe != trsParamCacheTemp.(*trsParameters).subscribe {
+			// change subscribe status
+			trsParamCacheTemp.(*trsParameters).subscribe = trsParam.subscribe
+			trsParamCache.Store(trsParam.updatedBlock.Int64(), trsParamCacheTemp.(*trsParameters))
+		}
+		return trsParamCacheTemp.(*trsParameters), nil
+	}
+
+	if err = metclient.CallContract(ctx, trs, "getTRSListLength", nil, &trsParam.trsListLength, height); err != nil {
+		return nil, err
+	}
+
+	trsParam.trsList = make([]common.Address, trsParam.trsListLength.Uint64())
+	if err = metclient.CallContract(ctx, trs, "getTRSList", nil, &trsParam.trsList, height); err != nil {
+		return nil, err
+	}
+
+	if err != nil {
+		err = metaminer.ErrNotInitialized
+		return nil, err
+	}
+
+	trsListMap := make(map[common.Address]bool, trsParam.trsListLength.Uint64())
+	for _, addr = range trsParam.trsList {
+		trsListMap[addr] = true
+	}
+	trsParam.trsListMap = trsListMap
+	trsParamCache.Store(trsParam.updatedBlock.Int64(), trsParam)
+
+	return trsParam, nil
+}
+
+func getTRSListMap(num *big.Int) (map[common.Address]bool, bool, error) {
+	st := time.Now()
+	trsParam, err := admin.getTRSListWithCache(num)
+	et := time.Now()
+
+	if err != nil {
+		return nil, false, err
+	}
+	log.Debug("get trsList map run time", "Duration time", et.Sub(st), "trsListMap len", len(trsParam.trsListMap))
+	return trsParam.trsListMap, trsParam.subscribe, err
+}
+
 func (ma *metaAdmin) getRewardAccounts(ctx context.Context, block *big.Int) (rewardPoolAccount, maintenanceAccount *common.Address, members []*metaMember, err error) {
 	var (
 		addr  common.Address
@@ -942,6 +1244,9 @@ func StartAdmin(stack *node.Node, datadir string) {
 			Cli: cli, Abi: stakingContract.Abi},
 		envStorage: &metclient.RemoteContract{
 			Cli: cli, Abi: envStorageImpContract.Abi},
+		// Add TRS
+		trsList: &metclient.RemoteContract{
+			Cli: cli, Abi: trsListAbiContract.Abi},
 		Updates:            make(chan bool, 10),
 		rpcCli:             rpcCli,
 		cli:                cli,
@@ -1604,6 +1909,45 @@ func (ma *metaAdmin) miners() string {
 	return ma.toMiningPeers(nodes)
 }
 
+// Add TRS
+func TRSInfo(height rpc.BlockNumber) interface{} {
+	if admin == nil {
+		return ""
+	} else {
+		number := new(big.Int).SetUint64(0)
+
+		if height > 0 {
+			number = new(big.Int).SetUint64(uint64(height.Int64()))
+		} else {
+			number = new(big.Int).SetUint64(uint64(admin.lastBlock))
+		}
+
+		trsParam, err := admin.getTrsParameters(number)
+
+		if err != nil {
+			trsInfo := map[string]interface{}{
+				"blockNumber":         number,
+				"trsListContract":     admin.trsList.To,
+				"trsListUpdatedBlock": nil,
+				"trsListLength":       nil,
+				"trsList":             nil,
+				"trsSubscribe":        nil,
+			}
+			return trsInfo
+		}
+		trsInfo := map[string]interface{}{
+			"blockNumber":         number,
+			"trsListContract":     admin.trsList.To,
+			"trsListUpdatedBlock": trsParam.updatedBlock,
+			"trsListLength":       trsParam.trsListLength,
+			"trsList":             trsParam.trsListMap,
+			"trsSubscribe":        trsParam.subscribe,
+		}
+
+		return trsInfo
+	}
+}
+
 func Info() interface{} {
 	if admin == nil {
 		return ""
@@ -1916,6 +2260,11 @@ func init() {
 	if err != nil {
 		utils.Fatalf("Loading ABI failed: %v", err)
 	}
+	// Add TRS
+	trsListAbiContract, err = metclient.LoadJsonContract(strings.NewReader(TRSListAbi))
+	if err != nil {
+		utils.Fatalf("Loading ABI failed: %v", err)
+	}
 
 	metaminer.IsMinerFunc = IsMiner
 	metaminer.AmPartnerFunc = AmPartner
@@ -1934,6 +2283,8 @@ func init() {
 	metaminer.AcquireMiningTokenFunc = acquireMiningToken
 	metaminer.ReleaseMiningTokenFunc = releaseMiningToken
 	metaminer.HasMiningTokenFunc = hasMiningToken
+	metaminer.GetTRSListMapFunc = getTRSListMap // Add TRS
+	metaapi.TRSInfo = TRSInfo                   // Add TRS
 	metaapi.Info = Info
 	metaapi.GetMiners = getMiners
 	metaapi.GetMinerStatus = getMinerStatus

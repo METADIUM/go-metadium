@@ -108,4 +108,8 @@ var (
 	// ErrSenderInsufficientFunds is returned if the value cost of executing a transaction
 	// is higher than the balance of the sender's account.
 	ErrSenderInsufficientFunds = errors.New("fee delegation: insufficient sender's funds for value")
+
+	// Add TRS
+	// ErrIncludedTRSList is returned if the address included in the TRSList.
+	ErrIncludedTRSList = errors.New("included in the TRSList")
 )

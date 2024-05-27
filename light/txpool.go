@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -380,6 +381,17 @@ func (pool *TxPool) validateTx(ctx context.Context, tx *types.Transaction) error
 	// a transaction using the RPC for example.
 	if tx.Value().Sign() < 0 {
 		return core.ErrNegativeValue
+	}
+
+	// Add TRS
+	// Only nodes that subscribe to TRS reject transactions included in trsList.
+	if !metaminer.IsPoW() {
+		trsListMap, trsSubscribe, _ := metaminer.GetTRSListMap(pool.chain.CurrentHeader().Number)
+		if len(trsListMap) > 0 && trsSubscribe {
+			if trsListMap[from] || (tx.To() != nil && trsListMap[*tx.To()]) {
+				return core.ErrIncludedTRSList
+			}
+		}
 	}
 
 	// Transactor should have enough funds to cover the costs
