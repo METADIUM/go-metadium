@@ -120,9 +120,9 @@ gmet-linux:
 		docker build -t meta/builder:local			\
 			-f Dockerfile.metadium . &&			\
 		docker run -e HOME=/tmp --rm -v $(shell pwd):/data	\
-			-u $(shell id -u):$(shell id -g)		\
 			-w /data meta/builder:local			\
-			"make USE_ROCKSDB=$(USE_ROCKSDB)";		\
+			"git config --global --add safe.directory /data;\
+			 make USE_ROCKSDB=$(USE_ROCKSDB)";		\
 	fi
 
 ifneq ($(USE_ROCKSDB), YES)
