@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -136,6 +137,12 @@ type trsParameters struct {
 	subscribe     bool
 }
 
+// Block information structure where trsParamCache is stored
+type trsBlockInfo struct {
+	blockNumber  *big.Int
+	updatedBlock *big.Int
+}
+
 var (
 	// "Metadium Registry"
 	magic, _        = big.NewInt(0).SetString("0x4d6574616469756d205265676973747279", 0)
@@ -175,6 +182,8 @@ var (
 	// Add TRS
 	// sync.Map[int]*trsParameters
 	trsParamCache = &sync.Map{}
+	// trsBlockInfo is saved
+	trsBlockInfoValue atomic.Value
 )
 
 func (n *metaNode) eq(m *metaNode) bool {
@@ -749,6 +758,19 @@ func (ma *metaAdmin) getTRSListWithCache(height *big.Int) (*trsParameters, error
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// load trsBlockInfoValue
+	if loadValue := trsBlockInfoValue.Load(); loadValue != nil {
+		if value, ok := loadValue.(*trsBlockInfo); ok {
+			if value.blockNumber.Cmp(height) >= 0 {
+				if trsParamCacheTemp, okCache := trsParamCache.Load(value.updatedBlock.Int64()); okCache {
+					return trsParamCacheTemp.(*trsParameters), nil
+				}
+			}
+		}
+	}
+
+	// store new trsBlockInfoValue
 	trsParam := &trsParameters{}
 	trs, gov, err := ma.getTRSListGovContracts(ctx, height)
 	if err != nil {
@@ -818,6 +840,11 @@ func (ma *metaAdmin) getTRSListWithCache(height *big.Int) (*trsParameters, error
 			trsParamCacheTemp.(*trsParameters).subscribe = trsParam.subscribe
 			trsParamCache.Store(trsParam.updatedBlock.Int64(), trsParamCacheTemp.(*trsParameters))
 		}
+		storeValue := &trsBlockInfo{
+			blockNumber:  new(big.Int).Set(height),
+			updatedBlock: new(big.Int).Set(trsParamCacheTemp.(*trsParameters).updatedBlock),
+		}
+		trsBlockInfoValue.Store(storeValue)
 		return trsParamCacheTemp.(*trsParameters), nil
 	}
 
@@ -841,7 +868,11 @@ func (ma *metaAdmin) getTRSListWithCache(height *big.Int) (*trsParameters, error
 	}
 	trsParam.trsListMap = trsListMap
 	trsParamCache.Store(trsParam.updatedBlock.Int64(), trsParam)
-
+	storeValue := &trsBlockInfo{
+		blockNumber:  new(big.Int).Set(height),
+		updatedBlock: new(big.Int).Set(trsParam.updatedBlock),
+	}
+	trsBlockInfoValue.Store(storeValue)
 	return trsParam, nil
 }
 

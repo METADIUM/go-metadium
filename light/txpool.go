@@ -72,6 +72,9 @@ type TxPool struct {
 	eip2718  bool // Fork indicator whether we are in the eip2718 stage.
 	// fee delegation
 	feedelegation bool // Fork indicator whether we are in the fee delegation stage.
+	// Add TRS
+	trsListMap   map[common.Address]bool
+	trsSubscribe bool
 }
 
 // TxRelayBackend provides an interface to the mechanism that forwards transacions
@@ -323,6 +326,13 @@ func (pool *TxPool) setNewHead(head *types.Header) {
 	pool.eip2718 = pool.config.IsBerlin(next)
 	// fee delegation
 	pool.feedelegation = pool.config.IsApplepie(next)
+	// Add TRS
+	if !metaminer.IsPoW() {
+		pool.trsListMap, pool.trsSubscribe, _ = metaminer.GetTRSListMap(head.Number)
+	} else {
+		pool.trsListMap = nil
+		pool.trsSubscribe = false
+	}
 }
 
 // Stop stops the light transaction pool
@@ -386,9 +396,8 @@ func (pool *TxPool) validateTx(ctx context.Context, tx *types.Transaction) error
 	// Add TRS
 	// Only nodes that subscribe to TRS reject transactions included in trsList.
 	if !metaminer.IsPoW() {
-		trsListMap, trsSubscribe, _ := metaminer.GetTRSListMap(pool.chain.CurrentHeader().Number)
-		if len(trsListMap) > 0 && trsSubscribe {
-			if trsListMap[from] || (tx.To() != nil && trsListMap[*tx.To()]) {
+		if len(pool.trsListMap) > 0 && pool.trsSubscribe {
+			if pool.trsListMap[from] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
 				return core.ErrIncludedTRSList
 			}
 		}

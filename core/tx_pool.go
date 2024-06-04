@@ -253,6 +253,9 @@ type TxPool struct {
 	eip1559  bool // Fork indicator whether we are using EIP-1559 type transactions.
 	// fee delegation
 	feedelegation bool // Fork indicator whether we are using fee delegation type transactions.
+	// Add TRS
+	trsListMap   map[common.Address]bool
+	trsSubscribe bool
 
 	currentState  *state.StateDB // Current state in the blockchain head
 	pendingNonces *txNoncer      // Pending state tracking virtual nonces
@@ -444,13 +447,12 @@ func (pool *TxPool) loop() {
 		case <-trsTicker.C:
 			// Removes the transaction included in trsList regardless of TRS subscription.
 			if !metaminer.IsPoW() {
-				trsListMap, _, _ := metaminer.GetTRSListMap(pool.chain.CurrentBlock().Number())
-				if len(trsListMap) > 0 {
+				if len(pool.trsListMap) > 0 {
 					pool.mu.Lock()
 					for addr := range pool.pending {
 						list := pool.pending[addr].Flatten()
 						for _, tx := range list {
-							if trsListMap[addr] || (tx.To() != nil && trsListMap[*tx.To()]) {
+							if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
 								log.Debug("Discard pending transaction included in trsList", "hash", tx.Hash(), "addr", addr)
 								pool.removeTx(tx.Hash(), true)
 								pendingDiscardMeter.Mark(int64(1))
@@ -731,9 +733,8 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	// Add TRS
 	// Only nodes that subscribe to TRS removes transactions included in trsList.
 	if !metaminer.IsPoW() {
-		trsListMap, trsSubscribe, _ := metaminer.GetTRSListMap(pool.chain.CurrentBlock().Number())
-		if len(trsListMap) > 0 && trsSubscribe {
-			if trsListMap[from] || (tx.To() != nil && trsListMap[*tx.To()]) {
+		if len(pool.trsListMap) > 0 && pool.trsSubscribe {
+			if pool.trsListMap[from] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
 				return ErrIncludedTRSList
 			}
 		}
@@ -1438,6 +1439,13 @@ func (pool *TxPool) reset(oldHead, newHead *types.Header) {
 	pool.eip1559 = pool.chainconfig.IsLondon(next)
 	// fee delegation
 	pool.feedelegation = pool.chainconfig.IsApplepie(next)
+	// Add TRS
+	if !metaminer.IsPoW() {
+		pool.trsListMap, pool.trsSubscribe, _ = metaminer.GetTRSListMap(newHead.Number)
+	} else {
+		pool.trsListMap = nil
+		pool.trsSubscribe = false
+	}
 }
 
 // promoteExecutables moves transactions that have become processable from the
@@ -1446,13 +1454,6 @@ func (pool *TxPool) reset(oldHead, newHead *types.Header) {
 func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Transaction {
 	// Track the promoted transactions to broadcast them at once
 	var promoted []*types.Transaction
-
-	// Add TRS
-	var trsListMap map[common.Address]bool
-	var trsSubscribe bool
-	if !metaminer.IsPoW() {
-		trsListMap, trsSubscribe, _ = metaminer.GetTRSListMap(pool.chain.CurrentBlock().Number())
-	}
 
 	// Iterate over all accounts and promote any executable transactions
 	for _, addr := range accounts {
@@ -1473,9 +1474,9 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 		// Add TRS
 		// Only nodes that subscribe to TRS removes transactions included in trsList.
 		if !metaminer.IsPoW() {
-			if len(trsListMap) > 0 && trsSubscribe {
+			if len(pool.trsListMap) > 0 && pool.trsSubscribe {
 				for _, tx := range list.Flatten() {
-					if trsListMap[addr] || (tx.To() != nil && trsListMap[*tx.To()]) {
+					if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
 						log.Trace("Removed queued transaction included in trsList", "hash", tx.Hash(), "addr", addr)
 						list.Remove(tx)
 						drops = append(drops, tx)
@@ -1682,13 +1683,6 @@ func (pool *TxPool) truncateQueue() {
 // is always explicitly triggered by SetBaseFee and it would be unnecessary and wasteful
 // to trigger a re-heap is this function
 func (pool *TxPool) demoteUnexecutables() {
-	// Add TRS
-	var trsListMap map[common.Address]bool
-	var trsSubscribe bool
-	if !metaminer.IsPoW() {
-		trsListMap, trsSubscribe, _ = metaminer.GetTRSListMap(pool.chain.CurrentBlock().Number())
-	}
-
 	// Iterate over all accounts and demote any non-executable transactions
 	for addr, list := range pool.pending {
 		nonce := pool.currentState.GetNonce(addr)
@@ -1706,9 +1700,9 @@ func (pool *TxPool) demoteUnexecutables() {
 		// Add TRS
 		// Only nodes that subscribe to TRS removes transactions included in trsList.
 		if !metaminer.IsPoW() {
-			if len(trsListMap) > 0 && trsSubscribe {
+			if len(pool.trsListMap) > 0 && pool.trsSubscribe {
 				for _, tx := range list.Flatten() {
-					if trsListMap[addr] || (tx.To() != nil && trsListMap[*tx.To()]) {
+					if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
 						log.Trace("Removed pending transaction included in trsList", "hash", tx.Hash(), "addr", addr)
 						list.Remove(tx)
 						drops = append(drops, tx)
