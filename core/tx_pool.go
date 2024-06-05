@@ -1473,25 +1473,23 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 
 		// Add TRS
 		// Only nodes that subscribe to TRS removes transactions included in trsList.
-		if !metaminer.IsPoW() {
-			if len(pool.trsListMap) > 0 && pool.trsSubscribe {
-				for _, tx := range list.Flatten() {
-					if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
-						log.Trace("Removed queued transaction included in trsList", "hash", tx.Hash(), "addr", addr)
-						list.Remove(tx)
-						drops = append(drops, tx)
+		doTrs := !metaminer.IsPoW() && len(pool.trsListMap) > 0 && pool.trsSubscribe
+		if pool.feedelegation || doTrs {
+			for _, tx := range list.Flatten() {
+				if pool.feedelegation {
+					if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
+						feePayer := *tx.FeePayer()
+						if pool.currentState.GetBalance(feePayer).Cmp(tx.FeePayerCost()) < 0 {
+							log.Trace("Removed queued fee delegation transaction", "hash", tx.Hash().String())
+							list.Remove(tx)
+							drops = append(drops, tx)
+							continue
+						}
 					}
 				}
-			}
-		}
-
-		// fee delegation
-		if pool.feedelegation {
-			for _, tx := range list.Flatten() {
-				if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
-					feePayer := *tx.FeePayer()
-					if pool.currentState.GetBalance(feePayer).Cmp(tx.FeePayerCost()) < 0 {
-						log.Trace("promoteExecutables", "hash", tx.Hash().String())
+				if doTrs {
+					if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
+						log.Trace("Removed queued transaction included in trsList", "hash", tx.Hash(), "addr", addr)
 						list.Remove(tx)
 						drops = append(drops, tx)
 					}
@@ -1699,25 +1697,23 @@ func (pool *TxPool) demoteUnexecutables() {
 
 		// Add TRS
 		// Only nodes that subscribe to TRS removes transactions included in trsList.
-		if !metaminer.IsPoW() {
-			if len(pool.trsListMap) > 0 && pool.trsSubscribe {
-				for _, tx := range list.Flatten() {
-					if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
-						log.Trace("Removed pending transaction included in trsList", "hash", tx.Hash(), "addr", addr)
-						list.Remove(tx)
-						drops = append(drops, tx)
+		doTrs := !metaminer.IsPoW() && len(pool.trsListMap) > 0 && pool.trsSubscribe
+		if pool.feedelegation || doTrs {
+			for _, tx := range list.Flatten() {
+				if pool.feedelegation {
+					if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
+						feePayer := *tx.FeePayer()
+						if pool.currentState.GetBalance(feePayer).Cmp(tx.FeePayerCost()) < 0 {
+							log.Trace("Removed pending fee delegation transaction", "hash", tx.Hash().String())
+							list.Remove(tx)
+							drops = append(drops, tx)
+							continue
+						}
 					}
 				}
-			}
-		}
-
-		// fee delegation
-		if pool.feedelegation {
-			for _, tx := range list.Flatten() {
-				if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
-					feePayer := *tx.FeePayer()
-					if pool.currentState.GetBalance(feePayer).Cmp(tx.FeePayerCost()) < 0 {
-						log.Trace("demoteUnexecutables", "hash", tx.Hash().String())
+				if doTrs {
+					if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
+						log.Trace("Removed pending transaction included in trsList", "hash", tx.Hash(), "addr", addr)
 						list.Remove(tx)
 						drops = append(drops, tx)
 					}
