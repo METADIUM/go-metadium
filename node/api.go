@@ -337,6 +337,12 @@ func (api *publicAdminAPI) Datadir() string {
 	return api.node.DataDir()
 }
 
+// Add TRS
+// TrsInfo retrieves the information about Transaction Restriction Service(TRS)
+func (api *publicAdminAPI) TrsInfo(height rpc.BlockNumber) interface{} {
+	return metaapi.TRSInfo(height)
+}
+
 // MetadiumInfo retrieves the information about Metadium
 func (api *publicAdminAPI) MetadiumInfo() interface{} {
 	return metaapi.Info()

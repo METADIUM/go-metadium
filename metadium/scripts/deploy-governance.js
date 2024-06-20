@@ -268,6 +268,17 @@ var GovernanceDeployer = new function() {
         ballotStorage = this.resolveContract(BallotStorage_contract.abi, ballotStorage)
         staking = this.resolveContract(Staking_contract.abi, staking)
 
+        // Add TRS
+        // deploy trsList contract
+        var trslist,trslistImp
+        trslistImp = this.deployContract(TRSListImp_data)
+        this.log("Waiting for trslistImp contract receipts...")
+        trslistImp = this.resolveContract(TRSListImp_contract.abi, trslistImp)
+        code = TRSList_contract.getData(trslistImp.address, { data: TRSList_data })
+        trslist = this.deployContract(code)
+        this.log("Waiting for trslist contract receipts...")
+        trslist = this.resolveContract(TRSList_contract.abi, trslist)
+
         // 3. setup registry
         this.log("Setting registry...")
         txs.length = 0
@@ -283,6 +294,10 @@ var GovernanceDeployer = new function() {
         txs[txs.length] = this.sendTx(registry.address, null,
             registry.setContractDomain.getData(
                 "GovernanceContract", gov.address))
+        // Add TRS
+        txs[txs.length] = this.sendTx(registry.address, null,
+            registry.setContractDomain.getData(
+                "TRSList", trslist.address))
         if (initData.staker)
             txs[txs.length] = this.sendTx(registry.address, null,
                 registry.setContractDomain.getData(
@@ -350,6 +365,12 @@ var GovernanceDeployer = new function() {
         txs[txs.length] = this.sendTx(envStorage.address, null,
             tmpEnvStorageImp.initialize.getData(registry.address, envNames, envValues))
 
+        // 4.1 initialize trslist:
+        this.log("Initializing trslist ...")
+        var tmptrslistImp = web3.eth.contract(trslistImp.abi).at(trslist.address)
+        txs[txs.length] = this.sendTx(trslist.address, null,
+            tmptrslistImp.initialize.getData(registry.address))
+
         // 5. deposit staking
         var tmpStakingImp = web3.eth.contract(stakingImp.abi).at(staking.address)
         code = tmpStakingImp.init.getData(registry.address,
@@ -358,7 +379,7 @@ var GovernanceDeployer = new function() {
         txs[txs.length] = this.sendStakingDeposit(staking.address, tmpStakingImp.deposit.getData(), web3.toBigNumber(bootNode.stake).toString(10));
         for(i=0;i<txs.length;i++){
             if (!this.checkReceipt(txs[i]))
-            throw "Failed to initialize data. Tx is " + txs[i]
+            throw "Failed to initialize data. Tx["+i+"] is " + txs[i]
         }
 
         if (!this.checkReceipt(txs[0]))
@@ -391,6 +412,8 @@ var GovernanceDeployer = new function() {
                  '  "BALLOT_STORAGE_ADDRESS": "' + ballotStorage.address + '",\n' +
                  '  "GOV_ADDRESS": "' + gov.address + '",\n' +
                  '  "GOV_IMP_ADDRESS": "' + govImp.address + '"\n' +
+                 '  "TRSLIST_ADDRESS": "' + trslist.address + '"\n' +
+                 '  "TRSLIST_IMP_ADDRESS": "' + trslistImp.address + '"\n' +
                  '}')
 
         return true

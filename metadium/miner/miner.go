@@ -30,6 +30,8 @@ var (
 	AcquireMiningTokenFunc      func(height *big.Int, parentHash common.Hash) (bool, error)
 	ReleaseMiningTokenFunc      func(height *big.Int, hash, parentHash common.Hash) error
 	HasMiningTokenFunc          func() bool
+	// Add TRS
+	GetTRSListMapFunc func(height *big.Int) (trsListMap map[common.Address]bool, trsSubscribe bool, err error)
 )
 
 func IsMiner() bool {
@@ -168,6 +170,17 @@ func GetBlockBuildParameters(height *big.Int) (blockInterval int64, maxBaseFee, 
 	} else {
 		return GetBlockBuildParametersFunc(height)
 	}
+}
+
+// Add TRS
+func GetTRSListMap(height *big.Int) (trsListMap map[common.Address]bool, trsSubscribe bool, err error) {
+	if GetTRSListMapFunc == nil {
+		err = ErrNotInitialized
+		trsSubscribe = false
+	} else {
+		trsListMap, trsSubscribe, err = GetTRSListMapFunc(height)
+	}
+	return
 }
 
 // EOF
