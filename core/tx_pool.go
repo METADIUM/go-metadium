@@ -34,6 +34,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -95,6 +96,8 @@ var (
 var (
 	evictionInterval    = time.Minute     // Time interval to check for evictable transactions
 	statsReportInterval = 8 * time.Second // Time interval to report transaction pool stats
+	// Add TRS
+	trsTickerInterval = 3 * time.Hour // Time interval to check for TRS transactions
 )
 
 var (
@@ -250,6 +253,9 @@ type TxPool struct {
 	eip1559  bool // Fork indicator whether we are using EIP-1559 type transactions.
 	// fee delegation
 	feedelegation bool // Fork indicator whether we are using fee delegation type transactions.
+	// Add TRS
+	trsListMap   map[common.Address]bool
+	trsSubscribe bool
 
 	currentState  *state.StateDB // Current state in the blockchain head
 	pendingNonces *txNoncer      // Pending state tracking virtual nonces
@@ -356,12 +362,16 @@ func (pool *TxPool) loop() {
 		report  = time.NewTicker(statsReportInterval)
 		evict   = time.NewTicker(evictionInterval)
 		journal = time.NewTicker(pool.config.Rejournal)
+		// Add TRS
+		trsTicker = time.NewTicker(trsTickerInterval)
 		// Track the previous head headers for transaction reorgs
 		head = pool.chain.CurrentBlock()
 	)
 	defer report.Stop()
 	defer evict.Stop()
 	defer journal.Stop()
+	// Add TRS
+	defer trsTicker.Stop()
 
 	// Notify tests that the init phase is done
 	close(pool.initDoneCh)
@@ -432,6 +442,25 @@ func (pool *TxPool) loop() {
 					log.Warn("Failed to rotate local tx journal", "err", err)
 				}
 				pool.mu.Unlock()
+			}
+		// Add TRS
+		case <-trsTicker.C:
+			// Removes the transaction included in trsList regardless of TRS subscription.
+			if !metaminer.IsPoW() {
+				if len(pool.trsListMap) > 0 {
+					pool.mu.Lock()
+					for addr := range pool.pending {
+						list := pool.pending[addr].Flatten()
+						for _, tx := range list {
+							if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
+								log.Debug("Discard pending transaction included in trsList", "hash", tx.Hash(), "addr", addr)
+								pool.removeTx(tx.Hash(), true)
+								pendingDiscardMeter.Mark(int64(1))
+							}
+						}
+					}
+					pool.mu.Unlock()
+				}
 			}
 		}
 	}
@@ -701,6 +730,16 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	if pool.currentState.GetNonce(from) > tx.Nonce() {
 		return ErrNonceTooLow
 	}
+	// Add TRS
+	// Only nodes that subscribe to TRS removes transactions included in trsList.
+	if !metaminer.IsPoW() {
+		if len(pool.trsListMap) > 0 && pool.trsSubscribe {
+			if pool.trsListMap[from] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
+				return ErrIncludedTRSList
+			}
+		}
+	}
+
 	// Transactor should have enough funds to cover the costs
 	// cost == V + GP * GL
 
@@ -1400,6 +1439,13 @@ func (pool *TxPool) reset(oldHead, newHead *types.Header) {
 	pool.eip1559 = pool.chainconfig.IsLondon(next)
 	// fee delegation
 	pool.feedelegation = pool.chainconfig.IsApplepie(next)
+	// Add TRS
+	if !metaminer.IsPoW() {
+		pool.trsListMap, pool.trsSubscribe, _ = metaminer.GetTRSListMap(newHead.Number)
+	} else {
+		pool.trsListMap = nil
+		pool.trsSubscribe = false
+	}
 }
 
 // promoteExecutables moves transactions that have become processable from the
@@ -1425,13 +1471,25 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 		// Drop all transactions that are too costly (low balance or out of gas)
 		drops, _ := list.Filter(pool.currentState.GetBalance(addr), pool.currentMaxGas)
 
-		// fee delegation
-		if pool.feedelegation {
+		// Add TRS
+		// Only nodes that subscribe to TRS removes transactions included in trsList.
+		doTrs := !metaminer.IsPoW() && len(pool.trsListMap) > 0 && pool.trsSubscribe
+		if pool.feedelegation || doTrs {
 			for _, tx := range list.Flatten() {
-				if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
-					feePayer := *tx.FeePayer()
-					if pool.currentState.GetBalance(feePayer).Cmp(tx.FeePayerCost()) < 0 {
-						log.Trace("promoteExecutables", "hash", tx.Hash().String())
+				if pool.feedelegation {
+					if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
+						feePayer := *tx.FeePayer()
+						if pool.currentState.GetBalance(feePayer).Cmp(tx.FeePayerCost()) < 0 {
+							log.Trace("Removed queued fee delegation transaction", "hash", tx.Hash().String())
+							list.Remove(tx)
+							drops = append(drops, tx)
+							continue
+						}
+					}
+				}
+				if doTrs {
+					if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
+						log.Trace("Removed queued transaction included in trsList", "hash", tx.Hash(), "addr", addr)
 						list.Remove(tx)
 						drops = append(drops, tx)
 					}
@@ -1637,13 +1695,25 @@ func (pool *TxPool) demoteUnexecutables() {
 		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
 		drops, invalids := list.Filter(pool.currentState.GetBalance(addr), pool.currentMaxGas)
 
-		// fee delegation
-		if pool.feedelegation {
+		// Add TRS
+		// Only nodes that subscribe to TRS removes transactions included in trsList.
+		doTrs := !metaminer.IsPoW() && len(pool.trsListMap) > 0 && pool.trsSubscribe
+		if pool.feedelegation || doTrs {
 			for _, tx := range list.Flatten() {
-				if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
-					feePayer := *tx.FeePayer()
-					if pool.currentState.GetBalance(feePayer).Cmp(tx.FeePayerCost()) < 0 {
-						log.Trace("demoteUnexecutables", "hash", tx.Hash().String())
+				if pool.feedelegation {
+					if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
+						feePayer := *tx.FeePayer()
+						if pool.currentState.GetBalance(feePayer).Cmp(tx.FeePayerCost()) < 0 {
+							log.Trace("Removed pending fee delegation transaction", "hash", tx.Hash().String())
+							list.Remove(tx)
+							drops = append(drops, tx)
+							continue
+						}
+					}
+				}
+				if doTrs {
+					if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
+						log.Trace("Removed pending transaction included in trsList", "hash", tx.Hash(), "addr", addr)
 						list.Remove(tx)
 						drops = append(drops, tx)
 					}

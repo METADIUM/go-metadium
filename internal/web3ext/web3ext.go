@@ -249,6 +249,12 @@ web3._extend({
 			call: 'admin_etcdDeleteWork',
 			params: 0
 		}),
+		new web3._extend.Method({
+			name: 'trsInfo',
+			call: 'admin_trsInfo',
+			params: 1,
+			inputFormatter: [web3._extend.formatters.inputBlockNumberFormatter]
+		}),
 	],
 	properties: [
 		new web3._extend.Property({
