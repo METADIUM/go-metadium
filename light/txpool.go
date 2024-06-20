@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -71,6 +72,9 @@ type TxPool struct {
 	eip2718  bool // Fork indicator whether we are in the eip2718 stage.
 	// fee delegation
 	feedelegation bool // Fork indicator whether we are in the fee delegation stage.
+	// Add TRS
+	trsListMap   map[common.Address]bool
+	trsSubscribe bool
 }
 
 // TxRelayBackend provides an interface to the mechanism that forwards transacions
@@ -322,6 +326,13 @@ func (pool *TxPool) setNewHead(head *types.Header) {
 	pool.eip2718 = pool.config.IsBerlin(next)
 	// fee delegation
 	pool.feedelegation = pool.config.IsApplepie(next)
+	// Add TRS
+	if !metaminer.IsPoW() {
+		pool.trsListMap, pool.trsSubscribe, _ = metaminer.GetTRSListMap(head.Number)
+	} else {
+		pool.trsListMap = nil
+		pool.trsSubscribe = false
+	}
 }
 
 // Stop stops the light transaction pool
@@ -380,6 +391,16 @@ func (pool *TxPool) validateTx(ctx context.Context, tx *types.Transaction) error
 	// a transaction using the RPC for example.
 	if tx.Value().Sign() < 0 {
 		return core.ErrNegativeValue
+	}
+
+	// Add TRS
+	// Only nodes that subscribe to TRS reject transactions included in trsList.
+	if !metaminer.IsPoW() {
+		if len(pool.trsListMap) > 0 && pool.trsSubscribe {
+			if pool.trsListMap[from] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
+				return core.ErrIncludedTRSList
+			}
+		}
 	}
 
 	// Transactor should have enough funds to cover the costs

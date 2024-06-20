@@ -106,6 +106,9 @@ type environment struct {
 	blockGasLimit        *big.Int
 	baseFeeMaxChangeRate int64
 	gasTargetPercentage  int64
+	// Add TRS
+	trsListMap   map[common.Address]bool // The trslist addresses map
+	trsSubscribe bool                    // The trs subscribe
 }
 
 // copy creates a deep copy of environment.
@@ -982,6 +985,16 @@ func (w *worker) commitTransactions(env *environment, txs *types.TransactionsByP
 			txs.Pop()
 			continue
 		}
+		// Add TRS
+		// Nodes that subscribe to TRS ignore transactions included in trsList.
+		if env.trsListMap != nil && len(env.trsListMap) > 0 && env.trsSubscribe {
+			if env.trsListMap[from] || (tx.To() != nil && env.trsListMap[*tx.To()]) {
+				log.Debug("included in trsList", "hash", tx.Hash(), "from", from)
+				txs.Pop()
+				continue
+			}
+		}
+
 		// Start executing the transaction
 		env.state.Prepare(tx.Hash(), env.tcount)
 
@@ -1644,6 +1657,12 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 	if !metaminer.IsPoW() { // Metadium
 		if coinbase, err := metaminer.GetCoinbase(work.header.Number); err == nil {
 			work.coinbase = coinbase
+		}
+		// Add TRS
+		// Set the trsList and the node's trs subscription information to the work.
+		if trsListMap, trsSubscribe, _ := metaminer.GetTRSListMap(big.NewInt(work.header.Number.Int64() - 1)); trsListMap != nil && err == nil {
+			work.trsListMap = trsListMap
+			work.trsSubscribe = trsSubscribe
 		}
 	}
 	if err != nil {

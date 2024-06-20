@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 type MetadiumMinerStatus struct {
@@ -34,7 +35,8 @@ var (
 	msgChannelLock = &sync.Mutex{}
 	msgChannel     chan interface{}
 
-	Info func() interface{}
+	TRSInfo func(height rpc.BlockNumber) interface{} // Add TRS
+	Info    func() interface{}
 
 	GetMinerStatus func() *MetadiumMinerStatus
 	GetMiners      func(node string, timeout int) []*MetadiumMinerStatus
