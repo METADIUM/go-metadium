@@ -1243,45 +1243,96 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *int32, tstart
 	// committed transactions
 	committedTxs := map[common.Hash]*types.Transaction{}
 
-	// Fill the block with all available pending transactions.
-	pending := w.eth.TxPool().Pending(true)
+	txCh := make(chan core.NewTxsEvent, 10000)
+	sub := w.eth.TxPool().SubscribeNewTxsEvent(txCh)
+	defer sub.Unsubscribe()
 
-	// Short circuit if there is no available pending transactions
-	if len(pending) != 0 {
+	for {
+		if interrupt != nil && atomic.LoadInt32(interrupt) != 0 {
+			return true
+		}
 
-		// using new simple round-robin ordering instead of old one.
-		if params.PrefetchCount == 0 {
-			// remove processed txs from 'pending'
-			if len(committedTxs) > 0 {
-				for k, x := range pending {
-					var z types.Transactions
-					for _, y := range x {
-						if _, ok := committedTxs[y.Hash()]; !ok {
-							z = append(z, y)
+		// Drain any queued tx notifications first, so the subsequent pending
+		// snapshot reflects all arrivals that triggered those events.
+		for {
+			select {
+			case <-txCh:
+			default:
+				goto drained
+			}
+		}
+	drained:
+
+		// Fill the block with all available pending transactions.
+		pending := w.eth.TxPool().Pending(true)
+
+		// Short circuit if there is no available pending transactions
+		if len(pending) != 0 {
+
+			// using new simple round-robin ordering instead of old one.
+			if params.PrefetchCount == 0 {
+				// remove processed txs from 'pending'
+				if len(committedTxs) > 0 {
+					for k, x := range pending {
+						var z types.Transactions
+						for _, y := range x {
+							if _, ok := committedTxs[y.Hash()]; !ok {
+								z = append(z, y)
+							}
+						}
+						if len(z) > 0 {
+							pending[k] = z
+						} else {
+							delete(pending, k)
 						}
 					}
-					if len(z) > 0 {
-						pending[k] = z
-					} else {
-						delete(pending, k)
-					}
 				}
-			}
 
-			txs := types.NewTransactionsByPriceAndNonce(env.signer, pending, env.header.BaseFee)
-			if err := w.commitTransactions(env, txs, interrupt, &tstart, committedTxs); err != nil {
-				return true
-			}
-		} else {
-			txs := NewTxOrderer(pending, committedTxs)
-			if err := w.commitTransactionsSimple(env, txs, interrupt, &tstart); err != nil {
-				return true
+				txs := types.NewTransactionsByPriceAndNonce(env.signer, pending, env.header.BaseFee)
+				if err := w.commitTransactions(env, txs, interrupt, &tstart, committedTxs); err != nil {
+					return true
+				}
+			} else {
+				txs := NewTxOrderer(pending, committedTxs)
+				if err := w.commitTransactionsSimple(env, txs, interrupt, &tstart); err != nil {
+					return true
+				}
 			}
 		}
 
-	}
+		// Wait until env.till or until new transactions arrive.
+		if time.Now().After(*env.till) {
+			break
+		}
 
-	time.Sleep(time.Until(*env.till))
+		remaining := time.Until(*env.till)
+		timer := time.NewTimer(remaining)
+		select {
+		case <-timer.C:
+		case <-txCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			continue
+		case <-sub.Err():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return true
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}
 
 	log.Debug("Block", "number", env.header.Number.Int64(), "elapsed", common.PrettyDuration(time.Since(tstart)), "txs", len(committedTxs))
 
