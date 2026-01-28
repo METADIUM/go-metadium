@@ -20,8 +20,8 @@ jobs:
       
     - name: Build Go-Metadium
       env:
-        CFLAGS: "-Wno-error=redundant-move"                                     
-        CXXFLAGS: "-Wno-error=redundant-move"
+        CFLAGS: "-Wno-error=unused-parameter"
+        CXXFLAGS: "-Wno-error=unused-parameter"
       run: make metadium
     - name: Check Build
       run: ls -al build/metadium.tar.gz
