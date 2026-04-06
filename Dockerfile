@@ -1,33 +1,32 @@
-# Support setting various labels on the final image
-ARG COMMIT=""
-ARG VERSION=""
-ARG BUILDNUM=""
+# Build stage
+FROM golang:1.21-bullseye AS builder
 
-# Build Geth in a stock Go builder container
-FROM golang:1.17-alpine as builder
+WORKDIR /build
 
-RUN apk add --no-cache gcc musl-dev linux-headers git
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git make gcc libc-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Get dependencies - will also be cached if we won't change go.mod/go.sum
-COPY go.mod /go-ethereum/
-COPY go.sum /go-ethereum/
-RUN cd /go-ethereum && go mod download
+# Copy source code
+COPY . .
 
-ADD . /go-ethereum
-RUN cd /go-ethereum && go run build/ci.go install ./cmd/geth
+# Build geth
+RUN go build -v -o geth ./cmd/geth
 
-# Pull Geth into a second stage deploy alpine container
-FROM alpine:latest
+# Runtime stage
+FROM debian:bookworm-slim
 
-RUN apk add --no-cache ca-certificates
-COPY --from=builder /go-ethereum/build/bin/geth /usr/local/bin/
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /root
+
+# Copy geth binary from builder
+COPY --from=builder /build/geth /usr/local/bin/
+
+# Expose ports
 EXPOSE 8545 8546 30303 30303/udp
+
+# Default command
 ENTRYPOINT ["geth"]
-
-# Add some metadata labels to help programatic image consumption
-ARG COMMIT=""
-ARG VERSION=""
-ARG BUILDNUM=""
-
-LABEL commit="$COMMIT" version="$VERSION" buildnum="$BUILDNUM"
+CMD ["--help"]
