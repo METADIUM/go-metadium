@@ -282,9 +282,8 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			// overloading it further.
 			delete(pending, req.Peer)
 			stales[req.Peer] = req
+			timeouts.Pop() // Popping an item will reorder indices in `ordering`, delete after, otherwise will resurrect!
 			delete(ordering, req)
-
-			timeouts.Pop()
 			if timeouts.Size() > 0 {
 				_, exp := timeouts.Peek()
 				timeout.Reset(time.Until(time.Unix(0, -exp)))
