@@ -38,6 +38,9 @@ import (
 	"github.com/ethereum/go-ethereum/contracts/checkpointoracle/contract"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
+	"github.com/ethereum/go-ethereum/core/txpool"
+	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
+	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -271,7 +274,9 @@ func newTestServerHandler(blocks int, indexers []*core.ChainIndexer, db ethdb.Da
 
 	txpoolConfig := core.DefaultTxPoolConfig
 	txpoolConfig.Journal = ""
-	txpool := core.NewTxPool(txpoolConfig, gspec.Config, simulation.Blockchain())
+	legPool := legacypool.New(txpoolConfig, gspec.Config, simulation.Blockchain())
+	bPool := blobpool.New(gspec.Config, simulation.Blockchain())
+	pool, _ := txpool.New(new(big.Int).SetUint64(txpoolConfig.PriceLimit), simulation.Blockchain(), []txpool.SubPool{legPool, bPool})
 	if indexers != nil {
 		checkpointConfig := &params.CheckpointOracleConfig{
 			Address:   crypto.CreateAddress(bankAddr, 0),
@@ -314,7 +319,7 @@ func newTestServerHandler(blocks int, indexers []*core.ChainIndexer, db ethdb.Da
 	server.clientPool = vfs.NewClientPool(db, testBufRecharge, defaultConnectedBias, clock, alwaysTrueFn)
 	server.clientPool.Start()
 	server.clientPool.SetLimits(10000, 10000) // Assign enough capacity for clientpool
-	server.handler = newServerHandler(server, simulation.Blockchain(), db, txpool, func() bool { return true })
+	server.handler = newServerHandler(server, simulation.Blockchain(), db, pool, func() bool { return true })
 	if server.oracle != nil {
 		server.oracle.Start(simulation)
 	}

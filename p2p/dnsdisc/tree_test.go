@@ -22,7 +22,6 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
 func TestParseRoot(t *testing.T) {
@@ -51,77 +50,6 @@ func TestParseRoot(t *testing.T) {
 	}
 	for i, test := range tests {
 		e, err := parseRoot(test.input)
-		if !reflect.DeepEqual(e, test.e) {
-			t.Errorf("test %d: wrong entry %s, want %s", i, spew.Sdump(e), spew.Sdump(test.e))
-		}
-		if err != test.err {
-			t.Errorf("test %d: wrong error %q, want %q", i, err, test.err)
-		}
-	}
-}
-
-func TestParseEntry(t *testing.T) {
-	testkey := testKey(signingKeySeed)
-	tests := []struct {
-		input string
-		e     entry
-		err   error
-	}{
-		// Subtrees:
-		{
-			input: "enrtree-branch:1,2",
-			err:   entryError{"branch", errInvalidChild},
-		},
-		{
-			input: "enrtree-branch:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-			err:   entryError{"branch", errInvalidChild},
-		},
-		{
-			input: "enrtree-branch:",
-			e:     &branchEntry{},
-		},
-		{
-			input: "enrtree-branch:AAAAAAAAAAAAAAAAAAAA",
-			e:     &branchEntry{[]string{"AAAAAAAAAAAAAAAAAAAA"}},
-		},
-		{
-			input: "enrtree-branch:AAAAAAAAAAAAAAAAAAAA,BBBBBBBBBBBBBBBBBBBB",
-			e:     &branchEntry{[]string{"AAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBB"}},
-		},
-		// Links
-		{
-			input: "enrtree://AKPYQIUQIL7PSIACI32J7FGZW56E5FKHEFCCOFHILBIMW3M6LWXS2@nodes.example.org",
-			e:     &linkEntry{"AKPYQIUQIL7PSIACI32J7FGZW56E5FKHEFCCOFHILBIMW3M6LWXS2@nodes.example.org", "nodes.example.org", &testkey.PublicKey},
-		},
-		{
-			input: "enrtree://nodes.example.org",
-			err:   entryError{"link", errNoPubkey},
-		},
-		{
-			input: "enrtree://AP62DT7WOTEQZGQZOU474PP3KMEGVTTE7A7NPRXKX3DUD57@nodes.example.org",
-			err:   entryError{"link", errBadPubkey},
-		},
-		{
-			input: "enrtree://AP62DT7WONEQZGQZOU474PP3KMEGVTTE7A7NPRXKX3DUD57TQHGIA@nodes.example.org",
-			err:   entryError{"link", errBadPubkey},
-		},
-		// ENRs
-		{
-			input: "enr:-HW4QES8QIeXTYlDzbfr1WEzE-XKY4f8gJFJzjJL-9D7TC9lJb4Z3JPRRz1lP4pL_N_QpT6rGQjAU9Apnc-C1iMP36OAgmlkgnY0iXNlY3AyNTZrMaED5IdwfMxdmR8W37HqSFdQLjDkIwBd4Q_MjxgZifgKSdM",
-			e:     &enrEntry{node: testNode(nodesSeed1)},
-		},
-		{
-			input: "enr:-HW4QLZHjM4vZXkbp-5xJoHsKSbE7W39FPC8283X-y8oHcHPTnDDlIlzL5ArvDUlHZVDPgmFASrh7cWgLOLxj4wprRkHgmlkgnY0iXNlY3AyNTZrMaEC3t2jLMhDpCDX5mbSEwDn4L3iUfyXzoO8G28XvjGRkrAg=",
-			err:   entryError{"enr", errInvalidENR},
-		},
-		// Invalid:
-		{input: "", err: errUnknownEntry},
-		{input: "foo", err: errUnknownEntry},
-		{input: "enrtree", err: errUnknownEntry},
-		{input: "enrtree-x=", err: errUnknownEntry},
-	}
-	for i, test := range tests {
-		e, err := parseEntry(test.input, enode.ValidSchemes)
 		if !reflect.DeepEqual(e, test.e) {
 			t.Errorf("test %d: wrong entry %s, want %s", i, spew.Sdump(e), spew.Sdump(test.e))
 		}

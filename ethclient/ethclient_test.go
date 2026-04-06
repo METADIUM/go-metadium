@@ -338,6 +338,18 @@ func testHeader(t *testing.T, chain []*types.Block, client *rpc.Client) {
 			if got != nil {
 				// hack to make DeepEqual work
 				got.Rewards, got.MinerNodeId, got.MinerNodeSig = nil, nil, nil
+				// In PoW test mode, ExcessBlobGas is not stored in the legacy RLP header,
+				// so DB-retrieved headers have nil while in-memory headers have big.NewInt(0).
+				// Normalize both to nil for comparison (they're semantically equivalent).
+				if got.ExcessBlobGas != nil && got.ExcessBlobGas.Sign() == 0 {
+					got.ExcessBlobGas = nil
+				}
+			}
+			if tt.want != nil && tt.want.ExcessBlobGas != nil && tt.want.ExcessBlobGas.Sign() == 0 {
+				// Also normalize the want side: big.NewInt(0) == nil for PoW-mode legacy headers.
+				wantCopy := *tt.want
+				wantCopy.ExcessBlobGas = nil
+				tt.want = &wantCopy
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("HeaderByNumber(%v)\n   = %v\nwant %v", tt.block, got, tt.want)

@@ -1,0 +1,135 @@
+version: "3.8"
+
+# go-metadium PoA 3-node private network for ElderflowerFork testing
+# Phase 1: only node1(bootnode) produces blocks, node2/3 sync only
+# Prerequisites: ./setup.sh
+# Start:         ./start.sh
+# Stop:          ./stop.sh
+
+networks:
+  gmet-poa-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+
+x-gmet-common: &gmet-common
+  image: gmet-poa:latest
+  restart: unless-stopped
+  user: "1006:1006"
+  networks:
+    - gmet-poa-net
+
+services:
+  node1:
+    <<: *gmet-common
+    container_name: gmet-poa-node1
+    hostname: gmet-poa-node1
+    volumes:
+      - ./genesis.json:/data/genesis.json:ro
+      - ./data/node1:/data/geth
+    ports:
+      - "8545:8545"
+      - "30403:30303"
+      - "30403:30303/udp"
+    networks:
+      gmet-poa-net:
+        ipv4_address: 172.31.0.11
+    entrypoint: ["/entrypoint.sh"]
+    command: >
+      --networkid 1337
+      --consensusmethod 2
+      --syncmode full
+      --gcmode archive
+      --mine
+      --miner.etherbase 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,admin,miner,txpool,debug,personal
+      --http.corsdomain "*"
+      --http.vhosts "*"
+      --ws
+      --ws.addr 0.0.0.0
+      --ws.port 8546
+      --ws.api eth,net,web3,admin,txpool,debug
+      --port 30303
+      --nat extip:172.31.0.11
+      --maxpeers 10
+      --verbosity 3
+      --userocksdb 0
+      --unlock 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+      --password /data/geth/password.txt
+      --allow-insecure-unlock
+
+  node2:
+    <<: *gmet-common
+    container_name: gmet-poa-node2
+    hostname: gmet-poa-node2
+    depends_on:
+      - node1
+    volumes:
+      - ./genesis.json:/data/genesis.json:ro
+      - ./data/node2:/data/geth
+    ports:
+      - "8546:8545"
+      - "30404:30304"
+      - "30404:30304/udp"
+    networks:
+      gmet-poa-net:
+        ipv4_address: 172.31.0.12
+    entrypoint: ["/entrypoint.sh"]
+    command: >
+      --networkid 1337
+      --consensusmethod 2
+      --syncmode full
+      --gcmode archive
+      --mine
+      --miner.etherbase 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,admin,miner,txpool
+      --http.corsdomain "*"
+      --http.vhosts "*"
+      --port 30304
+      --nat extip:172.31.0.12
+      --maxpeers 10
+      --verbosity 3
+      --userocksdb 0
+
+  node3:
+    <<: *gmet-common
+    container_name: gmet-poa-node3
+    hostname: gmet-poa-node3
+    depends_on:
+      - node1
+    volumes:
+      - ./genesis.json:/data/genesis.json:ro
+      - ./data/node3:/data/geth
+    ports:
+      - "8547:8545"
+      - "30405:30305"
+      - "30405:30305/udp"
+    networks:
+      gmet-poa-net:
+        ipv4_address: 172.31.0.13
+    entrypoint: ["/entrypoint.sh"]
+    command: >
+      --networkid 1337
+      --consensusmethod 2
+      --syncmode full
+      --gcmode archive
+      --mine
+      --miner.etherbase 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,admin,miner,txpool
+      --http.corsdomain "*"
+      --http.vhosts "*"
+      --port 30305
+      --nat extip:172.31.0.13
+      --maxpeers 10
+      --verbosity 3
+      --userocksdb 0

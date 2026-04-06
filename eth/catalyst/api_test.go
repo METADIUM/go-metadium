@@ -278,7 +278,7 @@ func TestEth2NewBlock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to create the executable data %v", err)
 		}
-		block, err := beacon.ExecutableDataToBlock(*execData)
+		block, err := execDataToBlock(ethservice.BlockChain().Config(), parent, *execData)
 		if err != nil {
 			t.Fatalf("Failed to convert executable data to block %v", err)
 		}
@@ -318,7 +318,7 @@ func TestEth2NewBlock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to create the executable data %v", err)
 		}
-		block, err := beacon.ExecutableDataToBlock(*execData)
+		block, err := execDataToBlock(ethservice.BlockChain().Config(), parent, *execData)
 		if err != nil {
 			t.Fatalf("Failed to convert executable data to block %v", err)
 		}
@@ -645,7 +645,8 @@ func TestEmptyBlocks(t *testing.T) {
 	// (2) Now send P1' which is invalid
 	payload = getNewPayload(t, api, commonAncestor)
 	payload.GasUsed += 1
-	payload = setBlockhash(payload)
+	// Pass ExcessBlobGas matching what NewPayloadV1 will compute from commonAncestor.
+	payload = setBlockhash(payload, blockExcessBlobGas(ethservice.BlockChain().Config(), commonAncestor))
 	// Now latestValidHash should be the common ancestor
 	status, err = api.NewPayloadV1(*payload)
 	if err != nil {
@@ -662,7 +663,8 @@ func TestEmptyBlocks(t *testing.T) {
 	// (3) Now send a payload with unknown parent
 	payload = getNewPayload(t, api, commonAncestor)
 	payload.ParentHash = common.Hash{1}
-	payload = setBlockhash(payload)
+	// Parent is unknown so NewPayloadV1 cannot compute ExcessBlobGas; use nil to match.
+	payload = setBlockhash(payload, nil)
 	// Now latestValidHash should be the common ancestor
 	status, err = api.NewPayloadV1(*payload)
 	if err != nil {
@@ -692,30 +694,51 @@ func getNewPayload(t *testing.T, api *ConsensusAPI, parent *types.Block) *beacon
 
 // setBlockhash sets the blockhash of a modified ExecutableData.
 // Can be used to make modified payloads look valid.
-func setBlockhash(data *beacon.ExecutableDataV1) *beacon.ExecutableDataV1 {
+// excessBlobGas must be provided for Metadium Camellia blocks since it affects the block hash.
+func setBlockhash(data *beacon.ExecutableDataV1, excessBlobGas *big.Int) *beacon.ExecutableDataV1 {
 	txs, _ := decodeTransactions(data.Transactions)
 	number := big.NewInt(0)
 	number.SetUint64(data.Number)
 	header := &types.Header{
-		ParentHash:  data.ParentHash,
-		UncleHash:   types.EmptyUncleHash,
-		Coinbase:    data.FeeRecipient,
-		Root:        data.StateRoot,
-		TxHash:      types.DeriveSha(types.Transactions(txs), trie.NewStackTrie(nil)),
-		ReceiptHash: data.ReceiptsRoot,
-		Bloom:       types.BytesToBloom(data.LogsBloom),
-		Difficulty:  common.Big0,
-		Number:      number,
-		GasLimit:    data.GasLimit,
-		GasUsed:     data.GasUsed,
-		Time:        data.Timestamp,
-		BaseFee:     data.BaseFeePerGas,
-		Extra:       data.ExtraData,
-		MixDigest:   data.Random,
+		ParentHash:    data.ParentHash,
+		UncleHash:     types.EmptyUncleHash,
+		Coinbase:      data.FeeRecipient,
+		Root:          data.StateRoot,
+		TxHash:        types.DeriveSha(types.Transactions(txs), trie.NewStackTrie(nil)),
+		ReceiptHash:   data.ReceiptsRoot,
+		Bloom:         types.BytesToBloom(data.LogsBloom),
+		Difficulty:    common.Big0,
+		Number:        number,
+		GasLimit:      data.GasLimit,
+		GasUsed:       data.GasUsed,
+		Time:          data.Timestamp,
+		BaseFee:       data.BaseFeePerGas,
+		Extra:         data.ExtraData,
+		MixDigest:     data.Random,
+		ExcessBlobGas: excessBlobGas,
 	}
 	block := types.NewBlockWithHeader(header).WithBody(txs, nil /* uncles */)
 	data.BlockHash = block.Hash()
 	return data
+}
+
+// blockExcessBlobGas computes the ExcessBlobGas for a child block given a parent block.
+// This is needed because Metadium's IsPoW() mode includes ExcessBlobGas in the block hash.
+func blockExcessBlobGas(config *params.ChainConfig, parent *types.Block) *big.Int {
+	num := new(big.Int).SetUint64(parent.NumberU64() + 1)
+	if !config.IsCamellia(num) {
+		return nil
+	}
+	parentExcess := parent.Header().ExcessBlobGas
+	if parentExcess == nil {
+		parentExcess = new(big.Int)
+	}
+	return types.CalcExcessBlobGas(parentExcess, 0)
+}
+
+// execDataToBlock wraps beacon.ExecutableDataToBlock, computing ExcessBlobGas from the parent.
+func execDataToBlock(config *params.ChainConfig, parent *types.Block, data beacon.ExecutableDataV1) (*types.Block, error) {
+	return beacon.ExecutableDataToBlock(data, blockExcessBlobGas(config, parent))
 }
 
 func decodeTransactions(enc [][]byte) ([]*types.Transaction, error) {
@@ -762,7 +785,8 @@ func TestTrickRemoteBlockCache(t *testing.T) {
 	payload2 := getNewPayload(t, apiA, commonAncestor)
 	//payload2.ParentHash = payload1.BlockHash
 	payload2.GasUsed += 1
-	payload2 = setBlockhash(payload2)
+	// NodeB doesn't have commonAncestor, so NewPayloadV1 uses nil ExcessBlobGas.
+	payload2 = setBlockhash(payload2, nil)
 	invalidChain = append(invalidChain, payload2)
 
 	head := payload2
@@ -770,7 +794,8 @@ func TestTrickRemoteBlockCache(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		payload := getNewPayload(t, apiA, commonAncestor)
 		payload.ParentHash = head.BlockHash
-		payload = setBlockhash(payload)
+		// Parent is in the invalid chain (unknown to nodeB), so ExcessBlobGas is nil.
+		payload = setBlockhash(payload, nil)
 		invalidChain = append(invalidChain, payload)
 		head = payload
 	}
