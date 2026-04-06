@@ -22,6 +22,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/les/flowcontrol"
@@ -49,7 +50,7 @@ type ethBackend interface {
 	BloomIndexer() *core.ChainIndexer
 	ChainDb() ethdb.Database
 	Synced() bool
-	TxPool() *core.TxPool
+	TxPoolFull() *txpool.TxPool
 }
 
 type LesServer struct {
@@ -114,7 +115,7 @@ func NewLesServer(node *node.Node, e ethBackend, config *ethconfig.Config) (*Les
 	if config.LightNoSyncServe {
 		issync = func() bool { return true }
 	}
-	srv.handler = newServerHandler(srv, e.BlockChain(), e.ChainDb(), e.TxPool(), issync)
+	srv.handler = newServerHandler(srv, e.BlockChain(), e.ChainDb(), e.TxPoolFull(), issync)
 	srv.costTracker, srv.minCapacity = newCostTracker(e.ChainDb(), config)
 	srv.oracle = srv.setupOracle(node, e.BlockChain().Genesis().Hash(), config)
 

@@ -156,6 +156,28 @@ const (
 
 	VrfVerifyGas uint64 = 50000 // @lukepark327: VRF Verify gas price
 
+	// Blob transaction constants (EIP-4844)
+	TxDataNonZeroBlobGas   uint64 = 1      // Per byte of data attached to a blob transaction that is not equal to zero
+	BlobTxPerBlobGas       uint64 = 131072 // Gas per blob for blob transaction (128 KB per blob)
+	MaxBlobsPerTransaction uint64 = 4      // Maximum blobs per transaction (reduced from mainnet 6 for 2s PoA)
+
+	// EIP-3860: Initcode size limit
+	MaxInitCodeSize uint64 = 49152 // Maximum size of initcode for CREATE/CREATE2 (2 * 24576)
+	InitCodeWordGas uint64 = 2     // Gas per word of initcode (EIP-3860)
+
+	// EIP-4844: Blob gas market constants.
+	// Metadium PoA runs at 2s block time (6× faster than Ethereum mainnet 12s).
+	// To keep blob throughput and fee market comparable to mainnet:
+	//   - Target: 1 blob/block  (vs mainnet 3 blobs/12s ≈ same throughput per second)
+	//   - Max:    2 blobs/block (maintains 1:2 target:max ratio from mainnet)
+	// This prevents blob fee volatility and excessive block propagation overhead on
+	// a private network where validators communicate over a shared LAN/VPN.
+	BlobVerificationGas       uint64 = 50000   // Gas cost for KZG point evaluation precompile (EIP-4844)
+	TargetBlobGasPerBlock     uint64 = 131072  // Target blob gas per block (1 blob × 131072)
+	MaxBlobGasPerBlock        uint64 = 262144  // Maximum blob gas per block (2 blobs × 131072)
+	MinBlobBaseFee            uint64 = 1       // Minimum blob base fee (wei)
+	BlobBaseFeeUpdateFraction uint64 = 3338477 // Blob base fee update fraction (EIP-4844 standard)
+
 	// The Refund Quotient is the cap on how much of the used gas can be refunded. Before EIP-3529,
 	// up to half the consumed gas could be refunded. Redefined as 1/5th in EIP-3529
 	RefundQuotient        uint64 = 2

@@ -17,6 +17,7 @@
 package vm
 
 import (
+	"math/big"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -845,6 +846,30 @@ func opSelfdestruct(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext
 	return nil, errStopToken
 }
 
+// opSelfdestruct6780 implements EIP-6780 restricted SELFDESTRUCT.
+// Only deletes the account if it was created in the same transaction.
+// Otherwise, only sends the balance to the beneficiary.
+func opSelfdestruct6780(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
+	if interpreter.readOnly {
+		return nil, ErrWriteProtection
+	}
+	beneficiary := scope.Stack.pop()
+	balance := interpreter.evm.StateDB.GetBalance(scope.Contract.Address())
+	interpreter.evm.StateDB.AddBalance(beneficiary.Bytes20(), balance)
+	// EIP-6780: Only actually suicide if the contract was created in this tx
+	if interpreter.evm.StateDB.CreatedInTx(scope.Contract.Address()) {
+		interpreter.evm.StateDB.Suicide(scope.Contract.Address())
+	} else {
+		// Just zero the balance, do not delete the account
+		interpreter.evm.StateDB.SubBalance(scope.Contract.Address(), balance)
+	}
+	if interpreter.cfg.Debug {
+		interpreter.cfg.Tracer.CaptureEnter(SELFDESTRUCT, scope.Contract.Address(), beneficiary.Bytes20(), []byte{}, 0, balance)
+		interpreter.cfg.Tracer.CaptureExit([]byte{}, 0, nil)
+	}
+	return nil, errStopToken
+}
+
 // following functions are used by the instruction jump  table
 
 // make log instruction function
@@ -930,4 +955,93 @@ func makeSwap(size int64) executionFunc {
 		scope.Stack.swap(int(size))
 		return nil, nil
 	}
+}
+
+// opTload implements EIP-1153 TLOAD operation
+func opTload(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
+	loc := scope.Stack.peek()
+	hash := common.Hash(loc.Bytes32())
+	val := interpreter.evm.StateDB.GetTransientState(scope.Contract.Address(), hash)
+	loc.SetBytes(val.Bytes())
+	return nil, nil
+}
+
+// opTstore implements EIP-1153 TSTORE operation
+func opTstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
+	if interpreter.readOnly {
+		return nil, ErrWriteProtection
+	}
+	loc := scope.Stack.pop()
+	val := scope.Stack.pop()
+	interpreter.evm.StateDB.SetTransientState(scope.Contract.Address(),
+		common.Hash(loc.Bytes32()), common.Hash(val.Bytes32()))
+	return nil, nil
+}
+
+// opMcopy implements EIP-5656 MCOPY operation
+func opMcopy(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
+	dst := scope.Stack.pop()
+	src := scope.Stack.pop()
+	length := scope.Stack.pop()
+	if length.IsZero() {
+		return nil, nil
+	}
+	dstOffset := dst.Uint64()
+	srcOffset := src.Uint64()
+	size := length.Uint64()
+	scope.Memory.Set(dstOffset, size, scope.Memory.GetCopy(int64(srcOffset), int64(size)))
+	return nil, nil
+}
+
+// memoryMcopy returns the memory expansion cost for MCOPY
+func memoryMcopy(stack *Stack) (uint64, bool) {
+	dst := stack.Back(0)
+	src := stack.Back(1)
+	length := stack.Back(2)
+	x, overflow := calcMemSize64(dst, length)
+	if overflow {
+		return 0, true
+	}
+	y, overflow := calcMemSize64(src, length)
+	if overflow {
+		return 0, true
+	}
+	if x > y {
+		return x, false
+	}
+	return y, false
+}
+
+// opBlobHash implements EIP-4844 BLOBHASH operation
+// Returns the versioned hash of a blob committed to by the transaction.
+// For non-blob transactions, returns zero.
+func opBlobHash(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
+	index := scope.Stack.pop()
+	blobHashes := interpreter.evm.TxContext.BlobHashes
+
+	var hash common.Hash
+	if index.IsUint64() {
+		idx := index.Uint64()
+		if idx < uint64(len(blobHashes)) {
+			hash = blobHashes[idx]
+		}
+		// If idx >= len(blobHashes), hash remains zero
+	}
+	// If index is not uint64 (too large), hash remains zero
+
+	scope.Stack.push(new(uint256.Int).SetBytes(hash[:]))
+	return nil, nil
+}
+
+// opBlobBaseFee implements EIP-4844 BLOBBASEFEE operation
+// Returns the current blob base fee from the block's excess blob gas.
+func opBlobBaseFee(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
+	excessBlobGas := interpreter.evm.Context.ExcessBlobGas
+	if excessBlobGas == nil {
+		excessBlobGas = big.NewInt(0)
+	}
+	blobBaseFee := types.CalcBlobBaseFee(excessBlobGas)
+	v, _ := uint256.FromBig(blobBaseFee)
+	scope.Stack.push(v)
+	return nil, nil
 }

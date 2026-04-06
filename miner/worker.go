@@ -96,9 +96,10 @@ type environment struct {
 	coinbase  common.Address
 
 	header   *types.Header
-	txs      []*types.Transaction
-	receipts []*types.Receipt
-	uncles   map[common.Hash]*types.Header
+	txs         []*types.Transaction
+	receipts    []*types.Receipt
+	uncles      map[common.Hash]*types.Header
+	blobGasUsed uint64 // total blob gas consumed by blob txs in this block
 
 	// metadium parameters
 	till                 *time.Time // until when to block generation holds
@@ -114,14 +115,15 @@ type environment struct {
 // copy creates a deep copy of environment.
 func (env *environment) copy() *environment {
 	cpy := &environment{
-		signer:    env.signer,
-		state:     env.state.Copy(),
-		ancestors: env.ancestors.Clone(),
-		family:    env.family.Clone(),
-		tcount:    env.tcount,
-		coinbase:  env.coinbase,
-		header:    types.CopyHeader(env.header),
-		receipts:  copyReceipts(env.receipts),
+		signer:      env.signer,
+		state:       env.state.Copy(),
+		ancestors:   env.ancestors.Clone(),
+		family:      env.family.Clone(),
+		tcount:      env.tcount,
+		coinbase:    env.coinbase,
+		header:      types.CopyHeader(env.header),
+		receipts:    copyReceipts(env.receipts),
+		blobGasUsed: env.blobGasUsed,
 	}
 	if env.gasPool != nil {
 		gasPool := *env.gasPool
@@ -198,6 +200,7 @@ type worker struct {
 	chainConfig *params.ChainConfig
 	engine      consensus.Engine
 	eth         Backend
+	pool        TxPool // full tx pool (may include blob pool in production)
 	chain       *core.BlockChain
 
 	// Feeds
@@ -262,15 +265,41 @@ type worker struct {
 	resubmitHook func(time.Duration, time.Duration) // Method to call upon updating resubmitting interval.
 }
 
+// initExcessBlobGas sets ExcessBlobGas on header if Camellia is active and it has not been set
+// by the consensus engine's Prepare(). Uses the parent block's BlobGasUsed to correctly
+// compute the new ExcessBlobGas per EIP-4844.
+func initExcessBlobGas(cfg *params.ChainConfig, header *types.Header, parent *types.Header) {
+	if !cfg.IsCamellia(header.Number) || header.ExcessBlobGas != nil {
+		return
+	}
+	parentExcessBlobGas := parent.ExcessBlobGas
+	if parentExcessBlobGas == nil {
+		parentExcessBlobGas = new(big.Int)
+	}
+	var parentBlobGasUsed uint64
+	if parent.BlobGasUsed != nil {
+		parentBlobGasUsed = parent.BlobGasUsed.Uint64()
+	}
+	header.ExcessBlobGas = types.CalcExcessBlobGas(parentExcessBlobGas, parentBlobGasUsed)
+}
+
 // compare and swap lock for mining thread
 var busyMining int32
 
 func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Engine, eth Backend, mux *event.TypeMux, isLocalBlock func(header *types.Header) bool, init bool) *worker {
+	// Use FullTxPool (blob-aware) if the backend supports it; fall back to legacy pool.
+	var pool TxPool
+	if bab, ok := eth.(BlobAwareBackend); ok {
+		pool = bab.FullTxPool()
+	} else {
+		pool = eth.TxPool()
+	}
 	worker := &worker{
 		config:             config,
 		chainConfig:        chainConfig,
 		engine:             engine,
 		eth:                eth,
+		pool:               pool,
 		mux:                mux,
 		chain:              eth.BlockChain(),
 		isLocalBlock:       isLocalBlock,
@@ -291,7 +320,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
 	}
 	// Subscribe NewTxsEvent for tx pool
-	worker.txsSub = eth.TxPool().SubscribeNewTxsEvent(worker.txsCh)
+	worker.txsSub = pool.SubscribeNewTxsEvent(worker.txsCh)
 	// Subscribe events for blockchain
 	worker.chainHeadSub = eth.BlockChain().SubscribeChainHeadEvent(worker.chainHeadCh)
 	worker.chainSideSub = eth.BlockChain().SubscribeChainSideEvent(worker.chainSideCh)
@@ -918,6 +947,11 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
 
+	// EIP-4844: track blob gas used by blob transactions
+	if tx.Type() == types.BlobTxType {
+		env.blobGasUsed += types.GetBlobGasUsed(uint64(len(tx.BlobHashes())))
+	}
+
 	return receipt.Logs, nil
 }
 
@@ -1244,7 +1278,7 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *int32, tstart
 	committedTxs := map[common.Hash]*types.Transaction{}
 
 	txCh := make(chan core.NewTxsEvent, 10000)
-	sub := w.eth.TxPool().SubscribeNewTxsEvent(txCh)
+	sub := w.pool.SubscribeNewTxsEvent(txCh)
 	defer sub.Unsubscribe()
 
 	for {
@@ -1264,10 +1298,30 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *int32, tstart
 	drained:
 
 		// Fill the block with all available pending transactions.
-		pending := w.eth.TxPool().Pending(true)
+		pending := w.pool.Pending(true)
 
 		// Short circuit if there is no available pending transactions
 		if len(pending) != 0 {
+			// EIP-4844: Separate blob txs from legacy txs.
+			blobPending := make(map[common.Address]types.Transactions)
+			for addr, txs := range pending {
+				var legacy, blobs types.Transactions
+				for _, tx := range txs {
+					if tx.Type() == types.BlobTxType {
+						blobs = append(blobs, tx)
+					} else {
+						legacy = append(legacy, tx)
+					}
+				}
+				if len(legacy) > 0 {
+					pending[addr] = legacy
+				} else {
+					delete(pending, addr)
+				}
+				if len(blobs) > 0 {
+					blobPending[addr] = blobs
+				}
+			}
 
 			// using new simple round-robin ordering instead of old one.
 			if params.PrefetchCount == 0 {
@@ -1295,6 +1349,12 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *int32, tstart
 			} else {
 				txs := NewTxOrderer(pending, committedTxs)
 				if err := w.commitTransactionsSimple(env, txs, interrupt, &tstart); err != nil {
+					return true
+				}
+			}
+			// EIP-4844: commit blob transactions up to MaxBlobGasPerBlock.
+			if w.chainConfig.IsCamellia(env.header.Number) && len(blobPending) > 0 {
+				if err := w.fillBlobTransactions(interrupt, env, nil, blobPending); err != nil {
 					return true
 				}
 			}
@@ -1381,6 +1441,12 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 			return nil, fmt.Errorf("invalid timestamp, parent %d given %d", parent.Time(), timestamp)
 		}
 		timestamp = parent.Time() + 1
+		// If the block timestamp is in the future, wait until that time.
+		// This prevents timestamp drift when multiple nodes mine in parallel
+		// at sub-second speed (hashimeta/nodag mode with avocadoBlock=0).
+		if now := time.Now().Unix(); int64(timestamp) > now {
+			time.Sleep(time.Duration(int64(timestamp)-now) * time.Second)
+		}
 	}
 	// Construct the sealing block header, set the extra field if it's allowed
 	num := parent.Number()
@@ -1425,6 +1491,8 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		log.Error("Failed to prepare header for sealing", "err", err)
 		return nil, err
 	}
+	// EIP-4844: Initialize ExcessBlobGas for Camellia fork blocks.
+	initExcessBlobGas(w.chainConfig, header, parent.Header())
 	// Could potentially happen if starting to mine in an odd state.
 	// Note genParams.coinbase can be different with header.Coinbase
 	// since clique algorithm can modify the coinbase field in header.
@@ -1465,28 +1533,99 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 // into the given sealing block. The transaction selection and ordering strategy can
 // be customized with the plugin in the future.
 func (w *worker) fillTransactions(interrupt *int32, env *environment) error {
-	// Split the pending transactions into locals and remotes
-	// Fill the block with all available pending transactions.
-	pending := w.eth.TxPool().Pending(true)
-	localTxs, remoteTxs := make(map[common.Address]types.Transactions), pending
-	for _, account := range w.eth.TxPool().Locals() {
-		if txs := remoteTxs[account]; len(txs) > 0 {
-			delete(remoteTxs, account)
-			localTxs[account] = txs
+	// Split the pending transactions into locals and remotes.
+	// Also separate blob transactions (Type 3) from legacy ones.
+	pending := w.pool.Pending(true)
+
+	localTxs := make(map[common.Address]types.Transactions)
+	remoteTxs := make(map[common.Address]types.Transactions)
+	localBlobTxs := make(map[common.Address]types.Transactions)
+	remoteBlobTxs := make(map[common.Address]types.Transactions)
+
+	locals := make(map[common.Address]struct{})
+	for _, addr := range w.pool.Locals() {
+		locals[addr] = struct{}{}
+	}
+
+	for addr, txs := range pending {
+		var legacyBuf, blobBuf types.Transactions
+		for _, tx := range txs {
+			if tx.Type() == types.BlobTxType {
+				blobBuf = append(blobBuf, tx)
+			} else {
+				legacyBuf = append(legacyBuf, tx)
+			}
+		}
+		if _, isLocal := locals[addr]; isLocal {
+			if len(legacyBuf) > 0 {
+				localTxs[addr] = legacyBuf
+			}
+			if len(blobBuf) > 0 {
+				localBlobTxs[addr] = blobBuf
+			}
+		} else {
+			if len(legacyBuf) > 0 {
+				remoteTxs[addr] = legacyBuf
+			}
+			if len(blobBuf) > 0 {
+				remoteBlobTxs[addr] = blobBuf
+			}
 		}
 	}
+
+	// Commit legacy transactions (locals first, then remotes).
 	if len(localTxs) > 0 {
 		txs := types.NewTransactionsByPriceAndNonce(env.signer, localTxs, env.header.BaseFee)
-
 		if err := w.commitTransactions(env, txs, interrupt, nil, nil); err != nil {
 			return err
 		}
 	}
 	if len(remoteTxs) > 0 {
 		txs := types.NewTransactionsByPriceAndNonce(env.signer, remoteTxs, env.header.BaseFee)
-
 		if err := w.commitTransactions(env, txs, interrupt, nil, nil); err != nil {
 			return err
+		}
+	}
+
+	// Commit blob transactions if Camellia is active, respecting MaxBlobGasPerBlock.
+	if w.chainConfig.IsCamellia(env.header.Number) {
+		if err := w.fillBlobTransactions(interrupt, env, localBlobTxs, remoteBlobTxs); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// fillBlobTransactions commits blob transactions up to the MaxBlobGasPerBlock limit.
+func (w *worker) fillBlobTransactions(interrupt *int32, env *environment, localBlobs, remoteBlobs map[common.Address]types.Transactions) error {
+	// Merge local and remote blob txs; locals get priority.
+	all := make(map[common.Address]types.Transactions)
+	for addr, txs := range localBlobs {
+		all[addr] = txs
+	}
+	for addr, txs := range remoteBlobs {
+		if _, ok := all[addr]; !ok {
+			all[addr] = txs
+		}
+	}
+
+	for addr, txs := range all {
+		for _, tx := range txs {
+			if interrupt != nil && atomic.LoadInt32(interrupt) != commitInterruptNone {
+				return nil
+			}
+			// Enforce per-block blob gas limit.
+			// Use break (not continue) to preserve nonce ordering: once a tx from
+			// this sender can't fit, subsequent txs from the same sender also can't.
+			blobGas := types.GetBlobGasUsed(uint64(len(tx.BlobHashes())))
+			if env.blobGasUsed+blobGas > params.MaxBlobGasPerBlock {
+				log.Trace("Skipping blob tx: block blob gas limit reached", "addr", addr, "hash", tx.Hash())
+				break
+			}
+			if _, err := w.commitTransaction(env, tx); err != nil {
+				log.Trace("Failed to commit blob tx", "addr", addr, "hash", tx.Hash(), "err", err)
+			}
 		}
 	}
 	return nil
@@ -1533,6 +1672,8 @@ func (w *worker) refreshPending(locked bool) {
 		log.Error("Failed to prepare header for mining", "err", err)
 		return
 	}
+	// EIP-4844: Initialize ExcessBlobGas for Camellia fork blocks.
+	initExcessBlobGas(w.chainConfig, header, parent.Header())
 	if env, err := w.makeEnv(parent, header, header.Coinbase); err == nil {
 		env.blockInterval = blockInterval
 		env.blockGasLimit = blockGasLimit
@@ -1552,6 +1693,10 @@ func (w *worker) generateWork(params *generateParams) (*types.Block, error) {
 
 	if !params.noTxs {
 		w.fillTransactions(nil, work)
+	}
+	// EIP-4844: set BlobGasUsed before block assembly (must be explicit, even when 0).
+	if w.chainConfig.IsCamellia(work.header.Number) {
+		work.header.BlobGasUsed = new(big.Int).SetUint64(work.blobGasUsed)
 	}
 	return w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, work.txs, work.unclelist(), work.receipts)
 }
@@ -1773,6 +1918,10 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		// Create a local environment copy, avoid the data race with snapshot state.
 		// https://github.com/ethereum/go-ethereum/issues/24299
 		env := env.copy()
+		// EIP-4844: set BlobGasUsed header field before block assembly (must be explicit, even when 0).
+		if w.chainConfig.IsCamellia(env.header.Number) {
+			env.header.BlobGasUsed = new(big.Int).SetUint64(env.blobGasUsed)
+		}
 		block, err := w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, env.txs, env.unclelist(), env.receipts)
 		if err != nil {
 			return err
@@ -1816,6 +1965,10 @@ func (w *worker) commitEx(env *environment, interval func(), update bool, start 
 		// Create a local environment copy, avoid the data race with snapshot state.
 		// https://github.com/ethereum/go-ethereum/issues/24299
 		env := env.copy()
+		// EIP-4844: set BlobGasUsed header field before block assembly (must be explicit, even when 0).
+		if w.chainConfig.IsCamellia(env.header.Number) {
+			env.header.BlobGasUsed = new(big.Int).SetUint64(env.blobGasUsed)
+		}
 		block, err := w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, env.txs, env.unclelist(), env.receipts)
 		if err != nil {
 			return err

@@ -82,6 +82,9 @@ type Message interface {
 	AccessList() types.AccessList
 	// fee delegation
 	FeePayer() *common.Address
+	// EIP-4844: blob transaction
+	BlobHashes() []common.Hash
+	MaxFeePerBlobGas() *big.Int
 }
 
 // ExecutionResult includes all output after executing given evm
@@ -295,6 +298,22 @@ func (st *StateTransition) preCheck() error {
 			}
 		}
 	}
+
+	// EIP-4844: Validate blob transaction fields
+	if st.evm.ChainConfig().IsCamellia(st.evm.Context.BlockNumber) && len(st.msg.BlobHashes()) > 0 {
+		// Validate MaxFeePerBlobGas
+		blobBaseFee := types.CalcBlobBaseFee(st.evm.Context.ExcessBlobGas)
+		if st.msg.MaxFeePerBlobGas() == nil || st.msg.MaxFeePerBlobGas().Cmp(blobBaseFee) < 0 {
+			return fmt.Errorf("%w: address %v, maxFeePerBlobGas: %v, blobBaseFee: %v",
+				ErrBlobFeeCapTooLow, st.msg.From().Hex(), st.msg.MaxFeePerBlobGas(), blobBaseFee)
+		}
+		// Validate blob count
+		if len(st.msg.BlobHashes()) > int(params.MaxBlobsPerTransaction) {
+			return fmt.Errorf("%w: address %v, blobCount: %d, maxBlobs: %d",
+				ErrBlobCountExceeded, st.msg.From().Hex(), len(st.msg.BlobHashes()), params.MaxBlobsPerTransaction)
+		}
+	}
+
 	return st.buyGas()
 }
 
@@ -359,6 +378,10 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	// Set up the initial access list.
 	if rules.IsBerlin {
 		st.state.PrepareAccessList(msg.From(), msg.To(), vm.ActivePrecompiles(rules), msg.AccessList())
+		// EIP-3651: Warm COINBASE
+		if rules.IsCamellia {
+			st.state.AddAddressToAccessList(st.evm.Context.Coinbase)
+		}
 	}
 	var (
 		ret   []byte

@@ -47,7 +47,7 @@ var (
 		Name:      "init",
 		Usage:     "Bootstrap and initialize a new genesis block",
 		ArgsUsage: "<genesisPath>",
-		Flags:     utils.DatabasePathFlags,
+		Flags:     append([]cli.Flag{utils.ConsensusMethodFlag}, utils.DatabasePathFlags...),
 		Category:  "BLOCKCHAIN COMMANDS",
 		Description: `
 The init command initializes a new genesis block and definition for the network.

@@ -45,6 +45,7 @@ const (
 	LegacyTxType = iota
 	AccessListTxType
 	DynamicFeeTxType
+	BlobTxType                  = 3  // EIP-4844
 	FeeDelegateDynamicFeeTxType = 22 // fee delegation
 )
 
@@ -95,6 +96,9 @@ type TxData interface {
 	// fee delegation
 	feePayer() *common.Address
 	rawFeePayerSignatureValues() (v, r, s *big.Int)
+	// EIP-4844 blob transactions
+	blobHashes() []common.Hash
+	blobGasCost() *big.Int
 }
 
 // EncodeRLP implements rlp.Encoder
@@ -192,6 +196,10 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		return &inner, err
 	case DynamicFeeTxType:
 		var inner DynamicFeeTx
+		err := rlp.DecodeBytes(b[1:], &inner)
+		return &inner, err
+	case BlobTxType:
+		var inner BlobTx
 		err := rlp.DecodeBytes(b[1:], &inner)
 		return &inner, err
 	// fee delegation
@@ -310,7 +318,22 @@ func (tx *Transaction) To() *common.Address {
 	return copyAddressPtr(tx.inner.to())
 }
 
-// Cost returns gas * gasPrice + value.
+// BlobHashes returns the versioned hashes of the blobs committed to by the transaction.
+// Returns nil for non-blob transactions.
+func (tx *Transaction) BlobHashes() []common.Hash {
+	return tx.inner.blobHashes()
+}
+
+// MaxFeePerBlobGas returns the maximum fee per blob gas for the transaction.
+// Returns nil for non-blob transactions.
+func (tx *Transaction) MaxFeePerBlobGas() *big.Int {
+	if b, ok := tx.inner.(*BlobTx); ok && b.MaxFeePerBlobGas != nil {
+		return b.MaxFeePerBlobGas.ToBig()
+	}
+	return nil
+}
+
+// Cost returns gas * gasPrice + value + blob gas cost.
 func (tx *Transaction) Cost() *big.Int {
 	// fee delegation
 	if tx.Type() == FeeDelegateDynamicFeeTxType {
@@ -322,11 +345,17 @@ func (tx *Transaction) Cost() *big.Int {
 		} else {
 			total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
 			total.Add(total, tx.Value())
+			if blobCost := tx.inner.blobGasCost(); blobCost != nil {
+				total.Add(total, blobCost)
+			}
 			return total
 		}
 	}
 	total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
 	total.Add(total, tx.Value())
+	if blobCost := tx.inner.blobGasCost(); blobCost != nil {
+		total.Add(total, blobCost)
+	}
 	return total
 }
 
@@ -677,6 +706,9 @@ type Message struct {
 	isFake     bool
 	// fee delegation
 	feePayer *common.Address
+	// EIP-4844: blob transaction fields
+	blobHashes       []common.Hash
+	maxFeePerBlobGas *big.Int
 }
 
 func NewMessage(from common.Address, to *common.Address, nonce uint64, amount *big.Int, gasLimit uint64, gasPrice, gasFeeCap, gasTipCap *big.Int, data []byte, accessList AccessList, isFake bool) Message {
@@ -713,6 +745,13 @@ func (tx *Transaction) AsMessage(s Signer, baseFee *big.Int) (Message, error) {
 	if tx.FeePayer() != nil {
 		msg.feePayer = tx.FeePayer()
 	}
+	// EIP-4844: blob transaction fields
+	if tx.Type() == BlobTxType {
+		msg.blobHashes = tx.BlobHashes()
+		if maxFeePerBlobGas := tx.MaxFeePerBlobGas(); maxFeePerBlobGas != nil {
+			msg.maxFeePerBlobGas = new(big.Int).Set(maxFeePerBlobGas)
+		}
+	}
 	// If baseFee provided, set gasPrice to effectiveGasPrice.
 	if baseFee != nil {
 		msg.gasPrice = math.BigMin(msg.gasPrice.Add(msg.gasTipCap, baseFee), msg.gasFeeCap)
@@ -737,6 +776,10 @@ func (m Message) IsFake() bool           { return m.isFake }
 // fee delegation
 func (m Message) FeePayer() *common.Address { return m.feePayer }
 
+// EIP-4844: blob transaction accessors
+func (m Message) BlobHashes() []common.Hash { return m.blobHashes }
+func (m Message) MaxFeePerBlobGas() *big.Int { return m.maxFeePerBlobGas }
+
 // copyAddressPtr copies an address.
 func copyAddressPtr(a *common.Address) *common.Address {
 	if a == nil {
@@ -744,4 +787,32 @@ func copyAddressPtr(a *common.Address) *common.Address {
 	}
 	cpy := *a
 	return &cpy
+}
+
+// EIP-4844 blob transaction helper methods
+
+// blobHashes returns nil for non-blob transactions
+func (*LegacyTx) blobHashes() []common.Hash {
+	return nil
+}
+
+func (*AccessListTx) blobHashes() []common.Hash {
+	return nil
+}
+
+func (*DynamicFeeTx) blobHashes() []common.Hash {
+	return nil
+}
+
+// blobGasCost returns nil for non-blob transactions
+func (*LegacyTx) blobGasCost() *big.Int {
+	return nil
+}
+
+func (*AccessListTx) blobGasCost() *big.Int {
+	return nil
+}
+
+func (*DynamicFeeTx) blobGasCost() *big.Int {
+	return nil
 }

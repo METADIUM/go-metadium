@@ -92,6 +92,12 @@ type Header struct {
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
 	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
 
+	// ExcessBlobGas was added by EIP-4844 for blob transaction support.
+	ExcessBlobGas *big.Int `json:"excessBlobGas" rlp:"optional"`
+
+	// BlobGasUsed tracks the total blob gas consumed by blob transactions in the block.
+	BlobGasUsed *big.Int `json:"blobGasUsed" rlp:"optional"`
+
 	/*
 		TODO (MariusVanDerWijden) Add this field once needed
 		// Random was added during the merge and contains the BeaconState randomness
@@ -124,6 +130,12 @@ type headerRlp struct {
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
 	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
 
+	// ExcessBlobGas was added by EIP-4844 for blob transaction support.
+	ExcessBlobGas *big.Int `json:"excessBlobGas" rlp:"optional"`
+
+	// BlobGasUsed tracks the total blob gas consumed by blob transactions in the block.
+	BlobGasUsed *big.Int `json:"blobGasUsed" rlp:"optional"`
+
 	/*
 		TODO (MariusVanDerWijden) Add this field once needed
 		// Random was added during the merge and contains the BeaconState randomness
@@ -143,8 +155,10 @@ type headerMarshaling struct {
 	Rewards      hexutil.Bytes
 	MinerNodeId  hexutil.Bytes
 	MinerNodeSig hexutil.Bytes
-	BaseFee      *hexutil.Big
-	Hash         common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
+	BaseFee       *hexutil.Big
+	ExcessBlobGas *hexutil.Big
+	BlobGasUsed   *hexutil.Big
+	Hash          common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
 }
 
 // HeaderLegacy represents a legacy block header in the Ethereum blockchain.
@@ -168,11 +182,8 @@ type HeaderLegacy struct {
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
 	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
 
-	/*
-		TODO (MariusVanDerWijden) Add this field once needed
-		// Random was added during the merge and contains the BeaconState randomness
-		Random common.Hash `json:"random" rlp:"optional"`
-	*/
+	// ExcessBlobGas was added by EIP-4844 for blob transaction support.
+	ExcessBlobGas *big.Int `json:"excessBlobGas" rlp:"optional"`
 }
 
 func headerToHeaderRlp(h *Header) *headerRlp {
@@ -196,7 +207,9 @@ func headerToHeaderRlp(h *Header) *headerRlp {
 		Nonce:        h.Nonce,
 		MinerNodeId:  h.MinerNodeId,
 		MinerNodeSig: h.MinerNodeSig,
-		BaseFee:      h.BaseFee,
+		BaseFee:       h.BaseFee,
+		ExcessBlobGas: h.ExcessBlobGas,
+		BlobGasUsed:   h.BlobGasUsed,
 	}
 	return hh
 }
@@ -222,7 +235,9 @@ func headerRlpToHeader(h *headerRlp) *Header {
 		Nonce:        h.Nonce,
 		MinerNodeId:  h.MinerNodeId,
 		MinerNodeSig: h.MinerNodeSig,
-		BaseFee:      h.BaseFee,
+		BaseFee:       h.BaseFee,
+		ExcessBlobGas: h.ExcessBlobGas,
+		BlobGasUsed:   h.BlobGasUsed,
 	}
 	return hh
 }
@@ -244,29 +259,31 @@ func HeaderToHeaderLegacy(h *Header) *HeaderLegacy {
 		Extra:       h.Extra,
 		MixDigest:   h.MixDigest,
 		Nonce:       h.Nonce,
-		BaseFee:     h.BaseFee,
+		BaseFee:       h.BaseFee,
+		ExcessBlobGas: h.ExcessBlobGas,
 	}
 	return hh
 }
 
 func HeaderLegacyToHeader(h *HeaderLegacy) *Header {
 	hh := &Header{
-		ParentHash:  h.ParentHash,
-		UncleHash:   h.UncleHash,
-		Coinbase:    h.Coinbase,
-		Root:        h.Root,
-		TxHash:      h.TxHash,
-		ReceiptHash: h.ReceiptHash,
-		Bloom:       h.Bloom,
-		Difficulty:  h.Difficulty,
-		Number:      h.Number,
-		GasLimit:    h.GasLimit,
-		GasUsed:     h.GasUsed,
-		Time:        h.Time,
-		Extra:       h.Extra,
-		MixDigest:   h.MixDigest,
-		Nonce:       h.Nonce,
-		BaseFee:     h.BaseFee,
+		ParentHash:    h.ParentHash,
+		UncleHash:     h.UncleHash,
+		Coinbase:      h.Coinbase,
+		Root:          h.Root,
+		TxHash:        h.TxHash,
+		ReceiptHash:   h.ReceiptHash,
+		Bloom:         h.Bloom,
+		Difficulty:    h.Difficulty,
+		Number:        h.Number,
+		GasLimit:      h.GasLimit,
+		GasUsed:       h.GasUsed,
+		Time:          h.Time,
+		Extra:         h.Extra,
+		MixDigest:     h.MixDigest,
+		Nonce:         h.Nonce,
+		BaseFee:       h.BaseFee,
+		ExcessBlobGas: h.ExcessBlobGas,
 	}
 	return hh
 }
@@ -444,6 +461,12 @@ func CopyHeader(h *Header) *Header {
 	}
 	if h.BaseFee != nil {
 		cpy.BaseFee = new(big.Int).Set(h.BaseFee)
+	}
+	if h.ExcessBlobGas != nil {
+		cpy.ExcessBlobGas = new(big.Int).Set(h.ExcessBlobGas)
+	}
+	if h.BlobGasUsed != nil {
+		cpy.BlobGasUsed = new(big.Int).Set(h.BlobGasUsed)
 	}
 	if len(h.Extra) > 0 {
 		cpy.Extra = make([]byte, len(h.Extra))

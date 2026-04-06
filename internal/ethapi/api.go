@@ -699,7 +699,25 @@ func (s *PublicBlockChainAPI) BlockNumber() hexutil.Uint64 {
 	return hexutil.Uint64(header.Number.Uint64())
 }
 
-// GetBlockReceipts returns all the transaction receipts for the given block hash.
+// BlobBaseFee returns the base fee for blob transactions in the latest block (EIP-4844).
+func (s *PublicBlockChainAPI) BlobBaseFee(ctx context.Context) (*hexutil.Big, error) {
+	header, err := s.b.HeaderByNumber(ctx, rpc.LatestBlockNumber)
+	if err != nil {
+		return nil, err
+	}
+	return (*hexutil.Big)(types.CalcBlobBaseFee(header.ExcessBlobGas)), nil
+}
+
+// GetBlockReceipts returns all the transaction receipts for the given block number or hash (EIP-4844 era standard).
+func (s *PublicBlockChainAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) ([]map[string]interface{}, error) {
+	block, err := s.b.BlockByNumberOrHash(ctx, blockNrOrHash)
+	if block == nil || err != nil {
+		return nil, err
+	}
+	return s.GetReceiptsByHash(ctx, block.Hash())
+}
+
+// GetReceiptsByHash returns all the transaction receipts for the given block hash.
 func (s *PublicBlockChainAPI) GetReceiptsByHash(ctx context.Context, blockHash common.Hash) ([]map[string]interface{}, error) {
 
 	block, err1 := s.b.BlockByHash(ctx, blockHash)
@@ -1292,6 +1310,9 @@ func RPCMarshalHeader(head *types.Header) map[string]interface{} {
 	if head.BaseFee != nil {
 		result["baseFeePerGas"] = (*hexutil.Big)(head.BaseFee)
 	}
+	if head.ExcessBlobGas != nil {
+		result["excessBlobGas"] = (*hexutil.Big)(head.ExcessBlobGas)
+	}
 
 	return result
 }
@@ -1880,14 +1901,78 @@ func (s *PublicTransactionPoolAPI) FillTransaction(ctx context.Context, args Tra
 	return &SignTransactionResult{data, tx}, nil
 }
 
+// blobBackend is an optional interface for backends that support blob transactions with sidecars.
+type blobBackend interface {
+	SendBlobTx(ctx context.Context, signedTx *types.Transaction, sidecar *types.BlobTxSidecar) error
+}
+
 // SendRawTransaction will add the signed transaction to the transaction pool.
 // The sender is responsible for signing the transaction and using the correct nonce.
+// For EIP-4844 blob transactions, the network encoding with sidecar is supported:
+// 0x03 || rlp([[tx_fields], blobs, commitments, proofs])
 func (s *PublicTransactionPoolAPI) SendRawTransaction(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
+	// Try blob tx network encoding (with sidecar) first.
+	if len(input) > 0 && input[0] == types.BlobTxType {
+		if tx, sidecar, err := types.DecodeBlobTxNetworkEncoding(input); err == nil && len(sidecar.Blobs) > 0 {
+			if bb, ok := s.b.(blobBackend); ok {
+				if err := checkTxFee(tx.GasPrice(), tx.Gas(), s.b.RPCTxFeeCap()); err != nil {
+					return common.Hash{}, err
+				}
+				if err := bb.SendBlobTx(ctx, tx, sidecar); err != nil {
+					return common.Hash{}, err
+				}
+				log.Info("Submitted blob transaction", "hash", tx.Hash().Hex(), "blobs", len(sidecar.Blobs))
+				return tx.Hash(), nil
+			}
+		}
+	}
 	tx := new(types.Transaction)
 	if err := tx.UnmarshalBinary(input); err != nil {
 		return common.Hash{}, err
 	}
 	return SubmitTransaction(ctx, s.b, tx)
+}
+
+// sidecarBackend is an optional interface for backends that can retrieve stored blob sidecars.
+type sidecarBackend interface {
+	GetBlobSidecar(txHash common.Hash) *types.BlobTxSidecar
+}
+
+// BlobSidecarResult is the JSON response for eth_getBlobSidecar.
+type BlobSidecarResult struct {
+	TxHash      common.Hash      `json:"txHash"`
+	Blobs       []hexutil.Bytes  `json:"blobs"`
+	Commitments []hexutil.Bytes  `json:"commitments"`
+	Proofs      []hexutil.Bytes  `json:"proofs"`
+	BlobHashes  []common.Hash    `json:"blobHashes"`
+}
+
+// GetBlobSidecar returns the stored KZG sidecar (blobs, commitments, proofs) for a pending
+// blob transaction by its hash. Returns null if the transaction is not found or has no sidecar.
+// Note: sidecars are only stored for pending transactions; they are not persisted after mining.
+func (s *PublicTransactionPoolAPI) GetBlobSidecar(ctx context.Context, txHash common.Hash) (*BlobSidecarResult, error) {
+	sb, ok := s.b.(sidecarBackend)
+	if !ok {
+		return nil, nil
+	}
+	sidecar := sb.GetBlobSidecar(txHash)
+	if sidecar == nil {
+		return nil, nil
+	}
+	result := &BlobSidecarResult{
+		TxHash:     txHash,
+		BlobHashes: sidecar.BlobHashes,
+	}
+	for _, b := range sidecar.Blobs {
+		result.Blobs = append(result.Blobs, hexutil.Bytes(b))
+	}
+	for _, c := range sidecar.Commitments {
+		result.Commitments = append(result.Commitments, hexutil.Bytes(c))
+	}
+	for _, p := range sidecar.Proofs {
+		result.Proofs = append(result.Proofs, hexutil.Bytes(p))
+	}
+	return result, nil
 }
 
 // SendRawTransactions will add the signed transactions to the transaction pool.
@@ -2072,6 +2157,52 @@ type PublicDebugAPI struct {
 // of the Ethereum service.
 func NewPublicDebugAPI(b Backend) *PublicDebugAPI {
 	return &PublicDebugAPI{b: b}
+}
+
+// GetRawHeader retrieves the RLP-encoded block header for the given block number or hash.
+func (api *PublicDebugAPI) GetRawHeader(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
+	var hash common.Hash
+	if h, ok := blockNrOrHash.Hash(); ok {
+		hash = h
+	} else {
+		block, err := api.b.BlockByNumberOrHash(ctx, blockNrOrHash)
+		if err != nil {
+			return nil, err
+		}
+		hash = block.Hash()
+	}
+	header, err := api.b.HeaderByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if header == nil {
+		return nil, fmt.Errorf("header not found: %v", blockNrOrHash)
+	}
+	return rlp.EncodeToBytes(header)
+}
+
+// GetRawBlock retrieves the RLP-encoded block for the given block number or hash.
+func (api *PublicDebugAPI) GetRawBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
+	block, err := api.b.BlockByNumberOrHash(ctx, blockNrOrHash)
+	if err != nil {
+		return nil, err
+	}
+	if block == nil {
+		return nil, fmt.Errorf("block not found: %v", blockNrOrHash)
+	}
+	return rlp.EncodeToBytes(block)
+}
+
+// GetRawTransaction returns the binary-encoded bytes of the transaction for the given hash.
+func (api *PublicDebugAPI) GetRawTransaction(ctx context.Context, hash common.Hash) (hexutil.Bytes, error) {
+	tx, _, _, _, err := api.b.GetTransaction(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if tx == nil {
+		return nil, nil
+	}
+	return tx.MarshalBinary()
 }
 
 // GetHeaderRlp retrieves the RLP encoded for of a single header.

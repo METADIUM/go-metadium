@@ -36,6 +36,7 @@ var (
 	ErrGasUintOverflow          = errors.New("gas uint64 overflow")
 	ErrInvalidCode              = errors.New("invalid code: must not begin with 0xef")
 	ErrNonceUintOverflow        = errors.New("nonce uint64 overflow")
+	ErrMaxInitCodeSizeExceeded  = errors.New("max initcode size exceeded")
 
 	// errStopToken is an internal token indicating interpreter loop termination,
 	// never returned to outside callers.

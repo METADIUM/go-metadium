@@ -148,18 +148,15 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		quitSync:       make(chan struct{}),
 	}
 	if config.Sync == downloader.FullSync {
-		// The database seems empty as the current block is the genesis. Yet the snap
-		// block is ahead, so snap sync was enabled for this node at a certain point.
-		// The scenarios where this can happen is
-		// * if the user manually (or via a bad block) rolled back a snap sync node
-		//   below the sync point.
-		// * the last snap sync is not finished while user specifies a full sync this
-		//   time. But we don't have any recent state for full sync.
-		// In these cases however it's safe to reenable snap sync.
+		// Metadium: Respect the user's explicit --syncmode full flag.
+		// The original geth logic auto-switches to snap sync when
+		// fullBlock==0 && fastBlock>0, but Metadium network peers do not
+		// support the snap protocol, making snap sync impossible.
+		// Instead, reset fastBlock to allow clean full sync.
 		fullBlock, fastBlock := h.chain.CurrentBlock(), h.chain.CurrentFastBlock()
 		if fullBlock.NumberU64() == 0 && fastBlock.NumberU64() > 0 {
-			h.snapSync = uint32(1)
-			log.Warn("Switch sync mode from full sync to snap sync")
+			log.Warn("Previous snap sync data detected but full sync requested, honoring full sync mode",
+				"fullBlock", fullBlock.NumberU64(), "fastBlock", fastBlock.NumberU64())
 		}
 	} else {
 		if h.chain.CurrentBlock().NumberU64() > 0 {
@@ -332,10 +329,15 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	reject := false // reserved peer slots
 	if atomic.LoadUint32(&h.snapSync) == 1 {
 		if snap == nil {
-			// If we are running snap-sync, we want to reserve roughly half the peer
-			// slots for peers supporting the snap protocol.
-			// The logic here is; we only allow up to 5 more non-snap peers than snap-peers.
-			if all, snp := h.peers.len(), h.peers.snapLen(); all-snp > snp+5 {
+			// Metadium: If we have enough non-snap peers and zero snap peers,
+			// the network likely doesn't support snap protocol. Disable snap
+			// sync and fall back to full sync instead of rejecting peers.
+			all, snp := h.peers.len(), h.peers.snapLen()
+			if snp == 0 && all >= 5 {
+				log.Warn("No snap-capable peers found after connecting to multiple peers, disabling snap sync and falling back to full sync",
+					"totalPeers", all, "snapPeers", snp)
+				atomic.StoreUint32(&h.snapSync, 0)
+			} else if all-snp > snp+5 {
 				reject = true
 			}
 		}

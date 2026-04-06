@@ -73,6 +73,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 	blockContext := NewEVMBlockContext(header, p.bc, nil)
 	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg)
+
+	// EIP-4844: Track blob gas usage for block (currently for logging/validation)
+	var totalBlobGasUsed uint64
+
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
@@ -86,9 +90,31 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
+
+		// EIP-4844: Accumulate blob gas used
+		if len(tx.BlobHashes()) > 0 {
+			totalBlobGasUsed += uint64(len(tx.BlobHashes())) * params.BlobTxPerBlobGas
+		}
 	}
+
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	p.engine.Finalize(p.bc, header, statedb, block.Transactions(), block.Uncles())
+
+	// EIP-4844: Verify blob gas against per-block limit and header BlobGasUsed
+	if p.config.IsCamellia(blockNumber) {
+		if totalBlobGasUsed > params.MaxBlobGasPerBlock {
+			return nil, nil, 0, big.NewInt(0), fmt.Errorf("%w: have %d, limit %d", ErrBlobGasLimitExceeded, totalBlobGasUsed, params.MaxBlobGasPerBlock)
+		}
+		// Verify the header's BlobGasUsed matches what we actually computed during execution.
+		// Treat nil as 0 for legacy PoW headers (HeaderLegacy does not carry BlobGasUsed).
+		var headerBlobGasUsed uint64
+		if header.BlobGasUsed != nil {
+			headerBlobGasUsed = header.BlobGasUsed.Uint64()
+		}
+		if headerBlobGasUsed != totalBlobGasUsed {
+			return nil, nil, 0, big.NewInt(0), fmt.Errorf("invalid blobGasUsed: header=%d, computed=%d", headerBlobGasUsed, totalBlobGasUsed)
+		}
+	}
 
 	return receipts, allLogs, *usedGas, fees, nil
 }

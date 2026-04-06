@@ -17,7 +17,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/charlanxcc/logrot"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
@@ -667,10 +668,10 @@ func logrota(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	syscall.Close(syscall.Stdout)
-	syscall.Close(syscall.Stdout)
-	syscall.Dup2(int(w.Fd()), syscall.Stdout)
-	syscall.Dup2(int(w.Fd()), syscall.Stderr)
+	unix.Close(1) // stdout
+	unix.Close(2) // stderr
+	unix.Dup2(int(w.Fd()), 1)
+	unix.Dup2(int(w.Fd()), 2)
 
 	go logrot.LogRotate(r, logFile, logSize, logCount)
 

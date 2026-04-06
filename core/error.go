@@ -112,4 +112,14 @@ var (
 	// Add TRS
 	// ErrIncludedTRSList is returned if the address included in the TRSList.
 	ErrIncludedTRSList = errors.New("included in the TRSList")
+
+	// EIP-4844: Blob transaction errors
+	// ErrBlobFeeCapTooLow is returned if the blob fee cap is less than the current blob base fee
+	ErrBlobFeeCapTooLow = errors.New("max fee per blob gas less than blob base fee")
+
+	// ErrBlobCountExceeded is returned if a transaction has more blobs than allowed
+	ErrBlobCountExceeded = errors.New("blob count exceeds per-transaction limit")
+
+	// ErrBlobGasLimitExceeded is returned if the total blob gas in a block exceeds the per-block limit
+	ErrBlobGasLimitExceeded = errors.New("blob gas exceeds per-block limit")
 )

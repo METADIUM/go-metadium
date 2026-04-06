@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -261,7 +262,21 @@ func (api *ConsensusAPI) GetPayloadV1(payloadID beacon.PayloadID) (*beacon.Execu
 // NewPayloadV1 creates an Eth1 block, inserts it in the chain, and returns the status of the chain.
 func (api *ConsensusAPI) NewPayloadV1(params beacon.ExecutableDataV1) (beacon.PayloadStatusV1, error) {
 	log.Trace("Engine API request received", "method", "ExecutePayload", "number", params.Number, "hash", params.BlockHash)
-	block, err := beacon.ExecutableDataToBlock(params)
+	// Metadium: compute ExcessBlobGas for Camellia fork blocks.
+	// In PoW test mode the block hash includes ExcessBlobGas (via HeaderLegacy), so we must
+	// pass the correct value when reconstructing the block for hash verification.
+	var excessBlobGas *big.Int
+	blockNum := new(big.Int).SetUint64(params.Number)
+	if api.eth.BlockChain().Config().IsCamellia(blockNum) {
+		if parentBlock := api.eth.BlockChain().GetBlockByHash(params.ParentHash); parentBlock != nil {
+			parentExcess := parentBlock.Header().ExcessBlobGas
+			if parentExcess == nil {
+				parentExcess = new(big.Int)
+			}
+			excessBlobGas = types.CalcExcessBlobGas(parentExcess, 0)
+		}
+	}
+	block, err := beacon.ExecutableDataToBlock(params, excessBlobGas)
 	if err != nil {
 		log.Debug("Invalid NewPayload params", "params", params, "error", err)
 		return beacon.PayloadStatusV1{Status: beacon.INVALIDBLOCKHASH}, nil

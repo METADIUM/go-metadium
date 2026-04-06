@@ -329,29 +329,27 @@ func detectDb(file string) int {
 }
 
 func NewDB(file string, cache int, handles int, namespace string, readonly bool) (ethdb.Database, error) {
-	switch detectDb(file) {
-	case 1:
-		return NewLevelDBDatabase(file, cache, handles, namespace, readonly)
-	case 2:
-		return NewRocksDBDatabase(file, cache, handles, namespace, readonly)
-	}
+	// If --userocksdb is explicitly set, honor it regardless of LOG file contents.
 	if params.UseRocksDb != 0 {
 		return NewRocksDBDatabase(file, cache, handles, namespace, readonly)
-	} else {
+	}
+	switch detectDb(file) {
+	case 2:
+		return NewRocksDBDatabase(file, cache, handles, namespace, readonly)
+	default:
 		return NewLevelDBDatabase(file, cache, handles, namespace, readonly)
 	}
 }
 
 func NewDBWithFreezer(file string, cache int, handles int, freezer string, namespace string, readonly bool) (ethdb.Database, error) {
-	switch detectDb(file) {
-	case 1:
-		return NewLevelDBDatabaseWithFreezer(file, cache, handles, freezer, namespace, readonly)
-	case 2:
-		return NewRocksDBDatabaseWithFreezer(file, cache, handles, freezer, namespace, readonly)
-	}
+	// If --userocksdb is explicitly set, honor it regardless of LOG file contents.
 	if params.UseRocksDb != 0 {
 		return NewRocksDBDatabaseWithFreezer(file, cache, handles, freezer, namespace, readonly)
-	} else {
+	}
+	switch detectDb(file) {
+	case 2:
+		return NewRocksDBDatabaseWithFreezer(file, cache, handles, freezer, namespace, readonly)
+	default:
 		return NewLevelDBDatabaseWithFreezer(file, cache, handles, freezer, namespace, readonly)
 	}
 }

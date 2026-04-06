@@ -73,6 +73,29 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 		}
 		return consensus.ErrPrunedAncestor
 	}
+
+	// EIP-4844: Validate blob gas and BlobGasUsed header field
+	if v.bc.Config().IsCamellia(header.Number) {
+		var totalBlobGas uint64
+		for _, tx := range block.Transactions() {
+			if len(tx.BlobHashes()) > 0 {
+				totalBlobGas += uint64(len(tx.BlobHashes())) * params.BlobTxPerBlobGas
+			}
+		}
+		if totalBlobGas > params.MaxBlobGasPerBlock {
+			return fmt.Errorf("%w: have %d, limit %d", ErrBlobGasLimitExceeded, totalBlobGas, params.MaxBlobGasPerBlock)
+		}
+		// Validate that the header BlobGasUsed field matches actual blob gas consumed.
+		// Treat nil as 0 for legacy PoW headers (HeaderLegacy does not carry BlobGasUsed).
+		var headerBlobGasUsed uint64
+		if header.BlobGasUsed != nil {
+			headerBlobGasUsed = header.BlobGasUsed.Uint64()
+		}
+		if headerBlobGasUsed != totalBlobGas {
+			return fmt.Errorf("invalid blobGasUsed: have %d, want %d", headerBlobGasUsed, totalBlobGas)
+		}
+	}
+
 	return nil
 }
 

@@ -99,6 +99,12 @@ type StateDB struct {
 	// Per-transaction access list
 	accessList *accessList
 
+	// Per-transaction transient storage (EIP-1153)
+	transientStorage transientStorage
+
+	// Per-transaction created accounts (EIP-6780)
+	created map[common.Address]struct{}
+
 	// Journal of state modifications. This is the backbone of
 	// Snapshot and RevertToSnapshot.
 	journal        *journal
@@ -142,6 +148,8 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 		preimages:           make(map[common.Hash][]byte),
 		journal:             newJournal(),
 		accessList:          newAccessList(),
+		transientStorage:    newTransientStorage(),
+		created:             make(map[common.Address]struct{}),
 		hasher:              crypto.NewKeccakState(),
 	}
 	if sdb.snaps != nil {
@@ -610,6 +618,15 @@ func (s *StateDB) CreateAccount(addr common.Address) {
 	if prev != nil {
 		newObj.setBalance(prev.data.Balance)
 	}
+	// EIP-6780: Track accounts created in this transaction
+	s.created[addr] = struct{}{}
+}
+
+// CreatedInTx returns whether the given address was created in the current transaction.
+// Used by EIP-6780 to restrict SELFDESTRUCT behavior.
+func (s *StateDB) CreatedInTx(addr common.Address) bool {
+	_, ok := s.created[addr]
+	return ok
 }
 
 func (db *StateDB) ForEachStorage(addr common.Address, cb func(key, value common.Hash) bool) error {
@@ -995,6 +1012,8 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 func (s *StateDB) PrepareAccessList(sender common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList) {
 	// Clear out any leftover from previous executions
 	s.accessList = newAccessList()
+	s.transientStorage = newTransientStorage()
+	s.created = make(map[common.Address]struct{})
 
 	s.AddAddressToAccessList(sender)
 	if dst != nil {
@@ -1045,4 +1064,29 @@ func (s *StateDB) AddressInAccessList(addr common.Address) bool {
 // SlotInAccessList returns true if the given (address, slot)-tuple is in the access list.
 func (s *StateDB) SlotInAccessList(addr common.Address, slot common.Hash) (addressPresent bool, slotPresent bool) {
 	return s.accessList.Contains(addr, slot)
+}
+
+// GetTransientState gets a value from the transient storage for the given address and key.
+func (s *StateDB) GetTransientState(addr common.Address, key common.Hash) common.Hash {
+	return s.transientStorage.Get(addr, key)
+}
+
+// SetTransientState sets a value in the transient storage for the given address and key.
+func (s *StateDB) SetTransientState(addr common.Address, key, value common.Hash) {
+	prev := s.GetTransientState(addr, key)
+	if prev == value {
+		return
+	}
+	s.journal.append(transientStorageChange{
+		account:  &addr,
+		key:      key,
+		prevalue: prev,
+	})
+	s.setTransientState(addr, key, value)
+}
+
+// setTransientState is a lower level setter for transient storage. It
+// is called during a revert to prevent journaling of the revert.
+func (s *StateDB) setTransientState(addr common.Address, key, value common.Hash) {
+	s.transientStorage.Set(addr, key, value)
 }

@@ -47,8 +47,14 @@ type StateDB interface {
 	GetState(common.Address, common.Hash) common.Hash
 	SetState(common.Address, common.Hash, common.Hash)
 
+	// EIP-1153 transient storage
+	GetTransientState(addr common.Address, key common.Hash) common.Hash
+	SetTransientState(addr common.Address, key, value common.Hash)
+
 	Suicide(common.Address) bool
 	HasSuicided(common.Address) bool
+	// EIP-6780: Check if account was created in current transaction
+	CreatedInTx(common.Address) bool
 
 	// Exist reports whether the given account exists in state.
 	// Notably this should also return true for suicided accounts.

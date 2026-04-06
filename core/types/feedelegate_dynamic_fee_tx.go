@@ -134,3 +134,12 @@ func (tx *FeeDelegateDynamicFeeTx) rawSignatureValues() (v, r, s *big.Int) {
 func (tx *FeeDelegateDynamicFeeTx) setSignatureValues(chainID, v, r, s *big.Int) {
 	tx.FV, tx.FR, tx.FS = v, r, s
 }
+
+// EIP-4844 blob methods (not used in fee delegation)
+func (tx *FeeDelegateDynamicFeeTx) blobHashes() []common.Hash {
+	return nil
+}
+
+func (tx *FeeDelegateDynamicFeeTx) blobGasCost() *big.Int {
+	return nil
+}

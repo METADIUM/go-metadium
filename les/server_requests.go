@@ -23,6 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/light"
 	"github.com/ethereum/go-ethereum/log"
@@ -36,7 +37,7 @@ type serverBackend interface {
 	ArchiveMode() bool
 	AddTxsSync() bool
 	BlockChain() *core.BlockChain
-	TxPool() *core.TxPool
+	TxPool() *txpool.TxPool
 	GetHelperTrie(typ uint, index uint64) *trie.Trie
 }
 

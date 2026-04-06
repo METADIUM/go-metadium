@@ -1252,6 +1252,9 @@ func (ma *metaAdmin) update() error {
 }
 
 func StartAdmin(stack *node.Node, datadir string) {
+	if params.ConsensusMethod == params.ConsensusPoW {
+		return
+	}
 	if !(params.ConsensusMethod == params.ConsensusPoA ||
 		params.ConsensusMethod == params.ConsensusETCD ||
 		params.ConsensusMethod == params.ConsensusPBFT) {

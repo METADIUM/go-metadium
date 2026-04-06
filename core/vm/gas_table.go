@@ -439,3 +439,8 @@ func gasSelfdestruct(evm *EVM, contract *Contract, stack *Stack, mem *Memory, me
 	}
 	return gas, nil
 }
+
+// gasMcopy implements EIP-5656 gas calculation for MCOPY
+func gasMcopy(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
+	return memoryCopierGas(0)(evm, contract, stack, mem, memorySize)
+}

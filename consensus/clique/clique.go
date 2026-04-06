@@ -345,6 +345,27 @@ func (c *Clique) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 		// Verify the header's EIP-1559 attributes.
 		return err
 	}
+
+	// EIP-4844: Verify ExcessBlobGas field
+	if !chain.Config().IsCamellia(header.Number) {
+		if header.ExcessBlobGas != nil {
+			return fmt.Errorf("invalid excessBlobGas: have %v, expected <nil> (before Camellia)", header.ExcessBlobGas)
+		}
+	} else {
+		if header.ExcessBlobGas == nil {
+			return fmt.Errorf("invalid excessBlobGas: expected non-nil value (Camellia active)")
+		}
+		// Verify ExcessBlobGas is correctly computed from parent's ExcessBlobGas and BlobGasUsed.
+		var parentBlobGasUsed uint64
+		if parent.BlobGasUsed != nil {
+			parentBlobGasUsed = parent.BlobGasUsed.Uint64()
+		}
+		expectedExcessBlobGas := types.CalcExcessBlobGas(parent.ExcessBlobGas, parentBlobGasUsed)
+		if header.ExcessBlobGas.Cmp(expectedExcessBlobGas) != 0 {
+			return fmt.Errorf("invalid excessBlobGas: have %v, want %v", header.ExcessBlobGas, expectedExcessBlobGas)
+		}
+	}
+
 	// Retrieve the snapshot needed to verify this header and cache it
 	snap, err := c.snapshot(chain, number-1, header.ParentHash, parents)
 	if err != nil {
@@ -496,6 +517,17 @@ func (c *Clique) verifySeal(snap *Snapshot, header *types.Header, parents []*typ
 
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
+// calcBlobGasUsed calculates the blob gas used by a block's transactions
+func calcBlobGasUsed(txs []*types.Transaction) uint64 {
+	var totalBlobGas uint64
+	for _, tx := range txs {
+		if len(tx.BlobHashes()) > 0 {
+			totalBlobGas += uint64(len(tx.BlobHashes())) * params.BlobTxPerBlobGas
+		}
+	}
+	return totalBlobGas
+}
+
 func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
 	// If the block isn't a checkpoint, cast a random vote (good enough for now)
 	header.Coinbase = common.Address{}
@@ -555,6 +587,22 @@ func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 	header.Time = parent.Time + c.config.Period
 	if header.Time < uint64(time.Now().Unix()) {
 		header.Time = uint64(time.Now().Unix())
+	}
+
+	// EIP-4844: Set ExcessBlobGas for Camellia fork.
+	// Metadium does not use blob transactions, so blobGasUsed is always 0.
+	// ExcessBlobGas = max(0, parentExcessBlobGas + parentBlobGasUsed - TARGET_BLOB_GAS_PER_BLOCK)
+	// With blobGasUsed=0 this stays at 0 perpetually, which is correct.
+	if chain.Config().IsCamellia(header.Number) {
+		parentBlock := chain.GetHeader(header.ParentHash, number-1)
+		var parentExcessBlobGas *big.Int
+		if parentBlock != nil && parentBlock.ExcessBlobGas != nil {
+			parentExcessBlobGas = parentBlock.ExcessBlobGas
+		} else {
+			// Fork transition: parent was pre-Camellia (ExcessBlobGas=nil), or genesis.
+			parentExcessBlobGas = big.NewInt(0)
+		}
+		header.ExcessBlobGas = types.CalcExcessBlobGas(parentExcessBlobGas, 0)
 	}
 	return nil
 }

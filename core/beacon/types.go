@@ -142,7 +142,7 @@ func decodeTransactions(enc [][]byte) ([]*types.Transaction, error) {
 //	difficulty = 0
 //
 // and that the blockhash of the constructed block matches the parameters.
-func ExecutableDataToBlock(params ExecutableDataV1) (*types.Block, error) {
+func ExecutableDataToBlock(params ExecutableDataV1, excessBlobGas ...*big.Int) (*types.Block, error) {
 	txs, err := decodeTransactions(params.Transactions)
 	if err != nil {
 		return nil, err
@@ -166,6 +166,10 @@ func ExecutableDataToBlock(params ExecutableDataV1) (*types.Block, error) {
 		BaseFee:     params.BaseFeePerGas,
 		Extra:       params.ExtraData,
 		MixDigest:   params.Random,
+	}
+	// Set ExcessBlobGas if provided (needed for Metadium Camellia fork hash computation)
+	if len(excessBlobGas) > 0 {
+		header.ExcessBlobGas = excessBlobGas[0]
 	}
 	block := types.NewBlockWithHeader(header).WithBody(txs, nil /* uncles */)
 	if block.Hash() != params.BlockHash {

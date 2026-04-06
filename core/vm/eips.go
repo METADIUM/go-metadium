@@ -192,3 +192,75 @@ func opPush0(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]by
 	scope.Stack.push(new(uint256.Int))
 	return nil, nil
 }
+
+// enable3651 applies EIP-3651 (Warm COINBASE)
+// - Makes COINBASE warm at the start of each transaction
+func enable3651(jt *JumpTable) {
+	// Gas cost change is handled in state_transition.go, not in jump table
+	// The COINBASE opcode itself doesn't change, only access list initialization
+}
+
+// enable3860 applies EIP-3860 (Limit and meter initcode)
+// - Limits initcode to 2 * MAX_CODE_SIZE
+// Validation is done in evm.go Create/Create2, not in jump table
+func enable3860(jt *JumpTable) {
+	// Handled in EVM.Create and EVM.Create2
+}
+
+// enable1153 applies EIP-1153 (Transient Storage)
+// - Adds TLOAD and TSTORE opcodes for transient (within-transaction) storage
+func enable1153(jt *JumpTable) {
+	jt[TLOAD] = &operation{
+		execute:     opTload,
+		constantGas: params.WarmStorageReadCostEIP2929,
+		minStack:    minStack(1, 1),
+		maxStack:    maxStack(1, 1),
+	}
+	jt[TSTORE] = &operation{
+		execute:     opTstore,
+		constantGas: params.WarmStorageReadCostEIP2929,
+		minStack:    minStack(2, 0),
+		maxStack:    maxStack(2, 0),
+	}
+}
+
+// enable5656 applies EIP-5656 (MCOPY instruction)
+// - Adds MCOPY opcode for efficient memory copying
+func enable5656(jt *JumpTable) {
+	jt[MCOPY] = &operation{
+		execute:     opMcopy,
+		constantGas: GasFastestStep,
+		dynamicGas:  gasMcopy,
+		minStack:    minStack(3, 0),
+		maxStack:    maxStack(3, 0),
+		memorySize:  memoryMcopy,
+	}
+}
+
+// enable6780 applies EIP-6780 (SELFDESTRUCT only in same transaction)
+// - SELFDESTRUCT only deletes account if created in same transaction
+func enable6780(jt *JumpTable) {
+	jt[SELFDESTRUCT] = &operation{
+		execute:    opSelfdestruct6780,
+		dynamicGas: jt[SELFDESTRUCT].dynamicGas,
+		minStack:   minStack(1, 0),
+		maxStack:   maxStack(1, 0),
+	}
+}
+
+// enable4844 applies EIP-4844 (Shard Blob Transactions)
+// - Adds BLOBHASH and BLOBBASEFEE opcodes
+func enable4844(jt *JumpTable) {
+	jt[BLOBHASH] = &operation{
+		execute:     opBlobHash,
+		constantGas: GasFastestStep,
+		minStack:    minStack(1, 1),
+		maxStack:    maxStack(1, 1),
+	}
+	jt[BLOBBASEFEE] = &operation{
+		execute:     opBlobBaseFee,
+		constantGas: GasQuickStep,
+		minStack:    minStack(0, 1),
+		maxStack:    maxStack(0, 1),
+	}
+}

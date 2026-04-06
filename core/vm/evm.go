@@ -44,6 +44,8 @@ type (
 func (evm *EVM) precompile(addr common.Address) (PrecompiledContract, bool) {
 	var precompiles map[common.Address]PrecompiledContract
 	switch {
+	case evm.chainRules.IsCamellia: // EIP-4844
+		precompiles = PrecompiledContractsCamellia
 	case evm.chainRules.IsBerlin:
 		precompiles = PrecompiledContractsBerlin
 	case evm.chainRules.IsIstanbul:
@@ -69,13 +71,14 @@ type BlockContext struct {
 	GetHash GetHashFunc
 
 	// Block information
-	Coinbase    common.Address // Provides information for COINBASE
-	GasLimit    uint64         // Provides information for GASLIMIT
-	BlockNumber *big.Int       // Provides information for NUMBER
-	Time        *big.Int       // Provides information for TIME
-	Difficulty  *big.Int       // Provides information for DIFFICULTY
-	BaseFee     *big.Int       // Provides information for BASEFEE
-	Random      *common.Hash   // Provides information for RANDOM
+	Coinbase      common.Address // Provides information for COINBASE
+	GasLimit      uint64         // Provides information for GASLIMIT
+	BlockNumber   *big.Int       // Provides information for NUMBER
+	Time          *big.Int       // Provides information for TIME
+	Difficulty    *big.Int       // Provides information for DIFFICULTY
+	BaseFee       *big.Int       // Provides information for BASEFEE
+	Random        *common.Hash   // Provides information for RANDOM
+	ExcessBlobGas *big.Int       // Provides information for BLOBBASEFEE (EIP-4844)
 }
 
 // TxContext provides the EVM with information about a transaction.
@@ -84,6 +87,9 @@ type TxContext struct {
 	// Message information
 	Origin   common.Address // Provides information for ORIGIN
 	GasPrice *big.Int       // Provides information for GASPRICE
+
+	// EIP-4844: Blob transaction information
+	BlobHashes []common.Hash // Provides information for BLOBHASH
 }
 
 // EVM is the Ethereum Virtual Machine base object and provides
@@ -417,6 +423,17 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 		return nil, common.Address{}, gas, ErrNonceUintOverflow
 	}
 	evm.StateDB.SetNonce(caller.Address(), nonce+1)
+	// EIP-3860: Limit and meter initcode (after nonce increment, per EIP spec)
+	if evm.chainRules.IsCamellia && len(codeAndHash.code) > int(params.MaxInitCodeSize) {
+		return nil, common.Address{}, gas, ErrMaxInitCodeSizeExceeded
+	}
+	if evm.chainRules.IsCamellia {
+		initCodeCost := toWordSize(uint64(len(codeAndHash.code))) * params.InitCodeWordGas
+		if gas < initCodeCost {
+			return nil, common.Address{}, gas, ErrOutOfGas
+		}
+		gas -= initCodeCost
+	}
 	// We add this to the access list _before_ taking a snapshot. Even if the creation fails,
 	// the access-list change should not be rolled back
 	if evm.chainRules.IsBerlin {

@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/blake2b"
 	"github.com/ethereum/go-ethereum/crypto/bls12381"
 	"github.com/ethereum/go-ethereum/crypto/bn256"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/crypto/vrf"
 	"github.com/ethereum/go-ethereum/params"
 
@@ -93,6 +94,22 @@ var PrecompiledContractsBerlin = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{9}): &blake2F{},
 }
 
+// PrecompiledContractsCamellia contains the default set of pre-compiled Ethereum
+// contracts used in the Camellia release (Shanghai + Cancun). This includes EIP-4844
+// KZG point evaluation precompile at address 0x0a.
+var PrecompiledContractsCamellia = map[common.Address]PrecompiledContract{
+	common.BytesToAddress([]byte{1}):  &ecrecover{},
+	common.BytesToAddress([]byte{2}):  &sha256hash{},
+	common.BytesToAddress([]byte{3}):  &ripemd160hash{},
+	common.BytesToAddress([]byte{4}):  &dataCopy{},
+	common.BytesToAddress([]byte{5}):  &bigModExp{eip2565: true},
+	common.BytesToAddress([]byte{6}):  &bn256AddIstanbul{},
+	common.BytesToAddress([]byte{7}):  &bn256ScalarMulIstanbul{},
+	common.BytesToAddress([]byte{8}):  &bn256PairingIstanbul{},
+	common.BytesToAddress([]byte{9}):  &blake2F{},
+	common.BytesToAddress([]byte{10}): &kzg4844PointEvaluation{}, // EIP-4844
+}
+
 // PrecompiledContractsBLS contains the set of pre-compiled Ethereum
 // contracts specified in EIP-2537. These are exported for testing purposes.
 var PrecompiledContractsBLS = map[common.Address]PrecompiledContract{
@@ -109,10 +126,11 @@ var PrecompiledContractsBLS = map[common.Address]PrecompiledContract{
 }
 
 var (
-	PrecompiledAddressesBerlin    []common.Address
-	PrecompiledAddressesIstanbul  []common.Address
-	PrecompiledAddressesByzantium []common.Address
-	PrecompiledAddressesHomestead []common.Address
+	PrecompiledAddressesBerlin       []common.Address
+	PrecompiledAddressesCamellia  []common.Address
+	PrecompiledAddressesIstanbul     []common.Address
+	PrecompiledAddressesByzantium    []common.Address
+	PrecompiledAddressesHomestead    []common.Address
 )
 
 func init() {
@@ -127,6 +145,9 @@ func init() {
 	}
 	for k := range PrecompiledContractsBerlin {
 		PrecompiledAddressesBerlin = append(PrecompiledAddressesBerlin, k)
+	}
+	for k := range PrecompiledContractsCamellia {
+		PrecompiledAddressesCamellia = append(PrecompiledAddressesCamellia, k)
 	}
 }
 
@@ -1080,4 +1101,75 @@ func (c *vrfVerify) Run(input []byte) ([]byte, error) {
 		return true32Byte, nil
 	}
 	return false32Byte, nil
+}
+
+// kzg4844PointEvaluation implements the KZG point evaluation precompile (0x0a) for EIP-4844.
+// This precompile verifies a KZG proof for a blob point evaluation.
+type kzg4844PointEvaluation struct{}
+
+// RequiredGas returns the gas required to execute the KZG point evaluation precompile.
+// EIP-4844 specifies a fixed cost of 50000 gas.
+func (c *kzg4844PointEvaluation) RequiredGas(input []byte) uint64 {
+	return params.BlobVerificationGas
+}
+
+// Run executes the KZG point evaluation precompile.
+// Input format (per EIP-4844):
+//   - versioned_hash (32 bytes)
+//   - z (field element, 32 bytes)
+//   - y (field element, 32 bytes)
+//   - commitment (48 bytes)
+//   - proof (48 bytes)
+//
+// Total: 192 bytes
+//
+// Output on success (64 bytes):
+//   - FIELD_ELEMENTS_PER_BLOB as uint256 (32 bytes, big-endian)
+//   - BLS_MODULUS as uint256 (32 bytes, big-endian)
+//
+// Returns error if inputs are invalid or KZG proof verification fails.
+func (c *kzg4844PointEvaluation) Run(input []byte) ([]byte, error) {
+	// EIP-4844 requires exactly 192 bytes of input.
+	if len(input) != 192 {
+		return nil, errors.New("invalid input length for KZG point evaluation")
+	}
+
+	// Parse input fields:
+	//   [0:32]   versioned_hash
+	//   [32:64]  z (evaluation point, big-endian field element)
+	//   [64:96]  y (claimed value, big-endian field element)
+	//   [96:144] commitment (48-byte G1 point, compressed)
+	//   [144:192] proof     (48-byte G1 point, compressed)
+	var versionedHash [32]byte
+	var z, y [32]byte
+	var commitment, proof [48]byte
+
+	copy(versionedHash[:], input[0:32])
+	copy(z[:], input[32:64])
+	copy(y[:], input[64:96])
+	copy(commitment[:], input[96:144])
+	copy(proof[:], input[144:192])
+
+	// Verify the KZG proof (includes commitment→versioned_hash check).
+	if err := kzg4844.VerifyKZGProof(versionedHash, z, y, commitment, proof); err != nil {
+		return nil, err
+	}
+
+	// On success, return FIELD_ELEMENTS_PER_BLOB || BLS_MODULUS (64 bytes total).
+	// FIELD_ELEMENTS_PER_BLOB as a 32-byte big-endian uint256.
+	result := make([]byte, 64)
+	fieldElements := uint64(kzg4844.FieldElementsPerBlob)
+	result[24] = byte(fieldElements >> 56)
+	result[25] = byte(fieldElements >> 48)
+	result[26] = byte(fieldElements >> 40)
+	result[27] = byte(fieldElements >> 32)
+	result[28] = byte(fieldElements >> 24)
+	result[29] = byte(fieldElements >> 16)
+	result[30] = byte(fieldElements >> 8)
+	result[31] = byte(fieldElements)
+	// BLS_MODULUS as a 32-byte big-endian uint256.
+	blsModulus := kzg4844.BLSModulus
+	copy(result[32:64], blsModulus[:])
+
+	return result, nil
 }

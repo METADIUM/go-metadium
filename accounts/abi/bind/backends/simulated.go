@@ -816,6 +816,10 @@ func (m callMsg) AccessList() types.AccessList { return m.CallMsg.AccessList }
 // fee delegation
 func (m callMsg) FeePayer() *common.Address { return m.CallMsg.FeePayer }
 
+// EIP-4844: blob transaction fields
+func (m callMsg) BlobHashes() []common.Hash { return nil }
+func (m callMsg) MaxFeePerBlobGas() *big.Int { return nil }
+
 // filterBackend implements filters.Backend to support filtering for logs without
 // taking bloom-bits acceleration structures into account.
 type filterBackend struct {

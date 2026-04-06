@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/bloombits"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -55,7 +56,11 @@ func (b *EthAPIBackend) ChainConfig() *params.ChainConfig {
 }
 
 func (b *EthAPIBackend) CurrentBlock() *types.Block {
-	return b.eth.blockchain.CurrentBlock()
+	current := b.eth.blockchain.CurrentBlock()
+	if fast := b.eth.blockchain.CurrentFastBlock(); fast != nil && fast.NumberU64() > current.NumberU64() {
+		return fast
+	}
+	return current
 }
 
 func (b *EthAPIBackend) SetHead(number uint64) {
@@ -73,7 +78,14 @@ func (b *EthAPIBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumb
 	}
 	// Otherwise resolve and return the block
 	if number == rpc.LatestBlockNumber {
-		return b.eth.blockchain.CurrentBlock().Header(), nil
+		// During snap/fast sync, CurrentBlock() stays at genesis while
+		// CurrentFastBlock() tracks actual sync progress. Use the higher
+		// of the two so RPC reflects the real chain head.
+		current := b.eth.blockchain.CurrentBlock()
+		if fast := b.eth.blockchain.CurrentFastBlock(); fast != nil && fast.NumberU64() > current.NumberU64() {
+			return fast.Header(), nil
+		}
+		return current.Header(), nil
 	}
 	if number == rpc.FinalizedBlockNumber {
 		return b.eth.blockchain.CurrentFinalizedBlock().Header(), nil
@@ -110,7 +122,11 @@ func (b *EthAPIBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumbe
 	}
 	// Otherwise resolve and return the block
 	if number == rpc.LatestBlockNumber {
-		return b.eth.blockchain.CurrentBlock(), nil
+		current := b.eth.blockchain.CurrentBlock()
+		if fast := b.eth.blockchain.CurrentFastBlock(); fast != nil && fast.NumberU64() > current.NumberU64() {
+			return fast, nil
+		}
+		return current, nil
 	}
 	if number == rpc.FinalizedBlockNumber {
 		return b.eth.blockchain.CurrentFinalizedBlock(), nil
@@ -250,6 +266,19 @@ func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction)
 	return b.eth.txPool.AddLocal(signedTx)
 }
 
+// SendBlobTx submits a blob (Type 3) transaction along with its sidecar to the blob pool.
+// This satisfies the optional BlobBackend interface checked in SendRawTransaction.
+func (b *EthAPIBackend) SendBlobTx(ctx context.Context, signedTx *types.Transaction, sidecar *types.BlobTxSidecar) error {
+	return b.eth.txPool.AddBlobWithSidecar(signedTx, sidecar)
+}
+
+// GetBlobSidecar returns the stored KZG sidecar for a pending blob transaction.
+// Returns nil if the transaction is unknown or has no stored sidecar.
+// This satisfies the optional sidecarBackend interface checked in GetBlobSidecar RPC.
+func (b *EthAPIBackend) GetBlobSidecar(txHash common.Hash) *types.BlobTxSidecar {
+	return b.eth.txPool.GetSidecar(txHash)
+}
+
 func (b *EthAPIBackend) GetPoolTransactions() (types.Transactions, error) {
 	pending := b.eth.txPool.Pending(false)
 	var txs types.Transactions
@@ -277,19 +306,19 @@ func (b *EthAPIBackend) Stats() (pending int, queued int) {
 }
 
 func (b *EthAPIBackend) TxPoolContent() (map[common.Address]types.Transactions, map[common.Address]types.Transactions) {
-	return b.eth.TxPool().Content()
+	return b.eth.TxPoolFull().Content()
 }
 
 func (b *EthAPIBackend) TxPoolContentFrom(addr common.Address) (types.Transactions, types.Transactions) {
-	return b.eth.TxPool().ContentFrom(addr)
+	return b.eth.TxPoolFull().ContentFrom(addr)
 }
 
-func (b *EthAPIBackend) TxPool() *core.TxPool {
-	return b.eth.TxPool()
+func (b *EthAPIBackend) TxPool() *txpool.TxPool {
+	return b.eth.TxPoolFull()
 }
 
 func (b *EthAPIBackend) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.Subscription {
-	return b.eth.TxPool().SubscribeNewTxsEvent(ch)
+	return b.eth.TxPoolFull().SubscribeNewTxsEvent(ch)
 }
 
 func (b *EthAPIBackend) SyncProgress() ethereum.SyncProgress {

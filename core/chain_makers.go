@@ -257,6 +257,16 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 			gen(i, b)
 		}
 		if b.engine != nil {
+			// EIP-4844: Compute BlobGasUsed from transactions and set in header.
+			if config.IsCamellia(b.header.Number) {
+				var blobGasUsed uint64
+				for _, tx := range b.txs {
+					if len(tx.BlobHashes()) > 0 {
+						blobGasUsed += uint64(len(tx.BlobHashes())) * params.BlobTxPerBlobGas
+					}
+				}
+				b.header.BlobGasUsed = new(big.Int).SetUint64(blobGasUsed)
+			}
 			// Finalize and seal the block
 			block, _ := b.engine.FinalizeAndAssemble(chainreader, b.header, statedb, b.txs, b.uncles, b.receipts)
 
@@ -316,6 +326,18 @@ func makeHeader(chain consensus.ChainReader, parent *types.Block, state *state.S
 				header.GasLimit = parent.GasLimit()
 			}
 		}
+	}
+	// EIP-4844: Initialize ExcessBlobGas for Camellia fork using parent's actual BlobGasUsed.
+	if chain.Config().IsCamellia(header.Number) {
+		parentExcessBlobGas := parent.Header().ExcessBlobGas
+		if parentExcessBlobGas == nil {
+			parentExcessBlobGas = big.NewInt(0)
+		}
+		var parentBlobGasUsed uint64
+		if parent.Header().BlobGasUsed != nil {
+			parentBlobGasUsed = parent.Header().BlobGasUsed.Uint64()
+		}
+		header.ExcessBlobGas = types.CalcExcessBlobGas(parentExcessBlobGas, parentBlobGasUsed)
 	}
 	return header
 }

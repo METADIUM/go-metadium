@@ -69,6 +69,8 @@ func NewEVMInterpreter(evm *EVM, cfg Config) *EVMInterpreter {
 	// If jump table was not initialised we set the default one.
 	if cfg.JumpTable == nil {
 		switch {
+		case evm.chainRules.IsCamellia:
+			cfg.JumpTable = &camelliaInstructionSet
 		case evm.chainRules.IsMerge:
 			cfg.JumpTable = &mergeInstructionSet
 		case evm.chainRules.IsLondon:

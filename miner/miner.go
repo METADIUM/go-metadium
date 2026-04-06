@@ -35,12 +35,29 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
+// TxPool defines the methods the miner requires from any tx pool implementation.
+// Both *core.TxPool and *txpool.TxPool satisfy this interface.
+type TxPool interface {
+	Pending(enforceTips bool) map[common.Address]types.Transactions
+	Locals() []common.Address
+	SubscribeNewTxsEvent(chan<- core.NewTxsEvent) event.Subscription
+	AddLocal(tx *types.Transaction) error
+	Stats() (int, int)
+}
+
 // Backend wraps all methods required for mining. Only full node is capable
 // to offer all the functions here.
 type Backend interface {
 	BlockChain() *core.BlockChain
 	TxPool() *core.TxPool
 	StateAtBlock(block *types.Block, reexec uint64, base *state.StateDB, checkLive bool, preferDisk bool) (statedb *state.StateDB, err error)
+}
+
+// BlobAwareBackend is an optional extension of Backend for backends that support
+// blob transactions (EIP-4844). Production nodes implement this; test mocks need not.
+type BlobAwareBackend interface {
+	// FullTxPool returns the full tx pool (legacy + blob) as a TxPool interface.
+	FullTxPool() TxPool
 }
 
 // Config is the configuration parameters of mining.

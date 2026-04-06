@@ -157,6 +157,15 @@ type blockChain interface {
 	SubscribeChainHeadEvent(ch chan<- ChainHeadEvent) event.Subscription
 }
 
+// LegacyPoolBlockChain is the exported version of the blockChain interface.
+// legacypool 패키지가 순환 임포트 없이 *core.BlockChain을 수용할 수 있도록 공개한다.
+type LegacyPoolBlockChain interface {
+	CurrentBlock() *types.Block
+	GetBlock(hash common.Hash, number uint64) *types.Block
+	StateAt(root common.Hash) (*state.StateDB, error)
+	SubscribeChainHeadEvent(ch chan<- ChainHeadEvent) event.Subscription
+}
+
 // TxPoolConfig are the configuration parameters of the transaction pool.
 type TxPoolConfig struct {
 	Locals    []common.Address // Addresses that should be treated by default as local
@@ -253,6 +262,8 @@ type TxPool struct {
 	eip1559  bool // Fork indicator whether we are using EIP-1559 type transactions.
 	// fee delegation
 	feedelegation bool // Fork indicator whether we are using fee delegation type transactions.
+	// EIP-4844: Blob transaction support
+	camellia bool // Fork indicator whether we are in the camellia stage (blob transactions).
 	// Add TRS
 	trsListMap   map[common.Address]bool
 	trsSubscribe bool
@@ -772,6 +783,33 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	if tx.Gas() < intrGas {
 		return ErrIntrinsicGas
 	}
+
+	// EIP-4844: Validate blob transaction fields
+	if tx.Type() == types.BlobTxType {
+		if !pool.camellia {
+			return ErrTxTypeNotSupported
+		}
+		// Check that blob transaction has blobs
+		if len(tx.BlobHashes()) == 0 {
+			return fmt.Errorf("blob transaction must have at least one blob hash")
+		}
+		// Check blob count limit
+		if uint64(len(tx.BlobHashes())) > params.MaxBlobsPerTransaction {
+			return ErrBlobCountExceeded
+		}
+		// Check that blob transaction has a recipient (can't be contract creation)
+		if tx.To() == nil {
+			return fmt.Errorf("blob transaction must have a recipient address")
+		}
+		// Check MaxFeePerBlobGas against current blob base fee
+		if currentHead := pool.chain.CurrentBlock(); currentHead != nil && currentHead.Header().ExcessBlobGas != nil {
+			blobBaseFee := types.CalcBlobBaseFee(currentHead.Header().ExcessBlobGas)
+			if tx.MaxFeePerBlobGas() == nil || tx.MaxFeePerBlobGas().Cmp(blobBaseFee) < 0 {
+				return ErrBlobFeeCapTooLow
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1439,6 +1477,8 @@ func (pool *TxPool) reset(oldHead, newHead *types.Header) {
 	pool.eip1559 = pool.chainconfig.IsLondon(next)
 	// fee delegation
 	pool.feedelegation = pool.chainconfig.IsApplepie(next)
+	// EIP-4844: Blob transactions
+	pool.camellia = pool.chainconfig.IsCamellia(next)
 	// Add TRS
 	if !metaminer.IsPoW() {
 		pool.trsListMap, pool.trsSubscribe, _ = metaminer.GetTRSListMap(newHead.Number)

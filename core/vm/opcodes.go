@@ -26,7 +26,7 @@ type OpCode byte
 // IsPush specifies if an opcode is a PUSH opcode.
 func (op OpCode) IsPush() bool {
 	switch op {
-	case PUSH1, PUSH2, PUSH3, PUSH4, PUSH5, PUSH6, PUSH7, PUSH8, PUSH9, PUSH10, PUSH11, PUSH12, PUSH13, PUSH14, PUSH15, PUSH16, PUSH17, PUSH18, PUSH19, PUSH20, PUSH21, PUSH22, PUSH23, PUSH24, PUSH25, PUSH26, PUSH27, PUSH28, PUSH29, PUSH30, PUSH31, PUSH32:
+	case PUSH0, PUSH1, PUSH2, PUSH3, PUSH4, PUSH5, PUSH6, PUSH7, PUSH8, PUSH9, PUSH10, PUSH11, PUSH12, PUSH13, PUSH14, PUSH15, PUSH16, PUSH17, PUSH18, PUSH19, PUSH20, PUSH21, PUSH22, PUSH23, PUSH24, PUSH25, PUSH26, PUSH27, PUSH28, PUSH29, PUSH30, PUSH31, PUSH32:
 		return true
 	}
 	return false
@@ -103,6 +103,8 @@ const (
 	CHAINID     OpCode = 0x46
 	SELFBALANCE OpCode = 0x47
 	BASEFEE     OpCode = 0x48
+	BLOBHASH    OpCode = 0x49 // EIP-4844: blob hash
+	BLOBBASEFEE OpCode = 0x4A // EIP-4844: blob basefee
 )
 
 // 0x50 range - 'storage' and execution.
@@ -119,7 +121,10 @@ const (
 	MSIZE    OpCode = 0x59
 	GAS      OpCode = 0x5a
 	JUMPDEST OpCode = 0x5b
-	PUSH0    OpCode = 0x5f
+	TLOAD    OpCode = 0x5c // EIP-1153: transient storage load
+	TSTORE   OpCode = 0x5d // EIP-1153: transient storage store
+	MCOPY    OpCode = 0x5e // EIP-5656: memory copy
+	PUSH0    OpCode = 0x5f // EIP-3855: push zero
 )
 
 // 0x60 range - pushes.
@@ -285,6 +290,8 @@ var opCodeToString = map[OpCode]string{
 	CHAINID:     "CHAINID",
 	SELFBALANCE: "SELFBALANCE",
 	BASEFEE:     "BASEFEE",
+	BLOBHASH:    "BLOBHASH",
+	BLOBBASEFEE: "BLOBBASEFEE",
 
 	// 0x50 range - 'storage' and execution.
 	POP: "POP",
@@ -301,6 +308,9 @@ var opCodeToString = map[OpCode]string{
 	MSIZE:    "MSIZE",
 	GAS:      "GAS",
 	JUMPDEST: "JUMPDEST",
+	TLOAD:    "TLOAD",
+	TSTORE:   "TSTORE",
+	MCOPY:    "MCOPY",
 	PUSH0:    "PUSH0",
 
 	// 0x60 range - push.
@@ -436,6 +446,8 @@ var stringToOp = map[string]OpCode{
 	"CALLDATACOPY":   CALLDATACOPY,
 	"CHAINID":        CHAINID,
 	"BASEFEE":        BASEFEE,
+	"BLOBHASH":       BLOBHASH,
+	"BLOBBASEFEE":    BLOBBASEFEE,
 	"DELEGATECALL":   DELEGATECALL,
 	"STATICCALL":     STATICCALL,
 	"CODESIZE":       CODESIZE,
@@ -465,6 +477,9 @@ var stringToOp = map[string]OpCode{
 	"MSIZE":          MSIZE,
 	"GAS":            GAS,
 	"JUMPDEST":       JUMPDEST,
+	"TLOAD":          TLOAD,
+	"TSTORE":         TSTORE,
+	"MCOPY":          MCOPY,
 	"PUSH0":          PUSH0,
 	"PUSH1":          PUSH1,
 	"PUSH2":          PUSH2,
