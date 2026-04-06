@@ -56,3 +56,42 @@ vendor/*
 /metadium/admin_abi.go
 /metadium/governance_abi.go
 /metadium/governance_legacy_abi.go
+
+# Auto-generated files (conflicts with custom implementations)
+core/types/gen_header_rlp.go
+
+# Agent Team worktrees
+.worktrees/
+.claude/.pipeline-state
+
+# Local build artifacts
+/geth
+/geth-*
+/gmet-*
+/dist/
+
+# Test artifacts
+/testnet-docker-data/
+/testnet-*.log
+/testnet-geth.pid
+/start-testnet.sh
+Dockerfile.rocksdb-test
+
+# Local development artifacts
+genesis-test-local.json
+.mcp.json
+
+# AI assistant configuration (personal/local)
+.claude/
+
+# AI-generated planning documents
+docs/plans/composed-brewing-flute.md
+docs/plans/swirling-churning-ullman.md
+docs/system/
+
+# Runtime data from private network tests
+tests/private-net-poa/data/
+tests/private-net-poa/genesis.json
+tests/private-net-poa/static-nodes.json
+tests/private-net-poa/passwords.txt
+tests/private-net-poa/gmet
