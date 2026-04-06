@@ -184,6 +184,9 @@ type HeaderLegacy struct {
 
 	// ExcessBlobGas was added by EIP-4844 for blob transaction support.
 	ExcessBlobGas *big.Int `json:"excessBlobGas" rlp:"optional"`
+
+	// BlobGasUsed tracks the total blob gas consumed by blob transactions in the block.
+	BlobGasUsed *big.Int `json:"blobGasUsed" rlp:"optional"`
 }
 
 func headerToHeaderRlp(h *Header) *headerRlp {
@@ -261,6 +264,7 @@ func HeaderToHeaderLegacy(h *Header) *HeaderLegacy {
 		Nonce:       h.Nonce,
 		BaseFee:       h.BaseFee,
 		ExcessBlobGas: h.ExcessBlobGas,
+		BlobGasUsed:   h.BlobGasUsed,
 	}
 	return hh
 }
@@ -284,6 +288,7 @@ func HeaderLegacyToHeader(h *HeaderLegacy) *Header {
 		Nonce:         h.Nonce,
 		BaseFee:       h.BaseFee,
 		ExcessBlobGas: h.ExcessBlobGas,
+		BlobGasUsed:   h.BlobGasUsed,
 	}
 	return hh
 }

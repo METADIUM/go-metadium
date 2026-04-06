@@ -37,6 +37,7 @@ func (h Header) MarshalJSON() ([]byte, error) {
 		MinerNodeSig  hexutil.Bytes  `json:"minerNodeSig"`
 		BaseFee       *hexutil.Big   `json:"baseFeePerGas" rlp:"optional"`
 		ExcessBlobGas *hexutil.Big   `json:"excessBlobGas" rlp:"optional"`
+		BlobGasUsed   *hexutil.Big   `json:"blobGasUsed" rlp:"optional"`
 		Hash          common.Hash    `json:"hash"`
 	}
 	var enc Header
@@ -61,6 +62,7 @@ func (h Header) MarshalJSON() ([]byte, error) {
 	enc.MinerNodeSig = h.MinerNodeSig
 	enc.BaseFee = (*hexutil.Big)(h.BaseFee)
 	enc.ExcessBlobGas = (*hexutil.Big)(h.ExcessBlobGas)
+	enc.BlobGasUsed = (*hexutil.Big)(h.BlobGasUsed)
 	enc.Hash = h.Hash()
 	return json.Marshal(&enc)
 }
@@ -89,6 +91,7 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 		MinerNodeSig  *hexutil.Bytes  `json:"minerNodeSig"`
 		BaseFee       *hexutil.Big    `json:"baseFeePerGas" rlp:"optional"`
 		ExcessBlobGas *hexutil.Big    `json:"excessBlobGas" rlp:"optional"`
+		BlobGasUsed   *hexutil.Big    `json:"blobGasUsed" rlp:"optional"`
 	}
 	var dec Header
 	if err := json.Unmarshal(input, &dec); err != nil {
@@ -170,6 +173,9 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 	}
 	if dec.ExcessBlobGas != nil {
 		h.ExcessBlobGas = (*big.Int)(dec.ExcessBlobGas)
+	}
+	if dec.BlobGasUsed != nil {
+		h.BlobGasUsed = new(big.Int).Set((*big.Int)(dec.BlobGasUsed))
 	}
 	return nil
 }

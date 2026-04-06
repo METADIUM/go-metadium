@@ -23,6 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	params2 "github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -167,9 +168,15 @@ func ExecutableDataToBlock(params ExecutableDataV1, excessBlobGas ...*big.Int) (
 		Extra:       params.ExtraData,
 		MixDigest:   params.Random,
 	}
-	// Set ExcessBlobGas if provided (needed for Metadium Camellia fork hash computation)
+	// Set ExcessBlobGas and BlobGasUsed if provided (needed for Metadium Camellia fork hash computation)
 	if len(excessBlobGas) > 0 {
 		header.ExcessBlobGas = excessBlobGas[0]
+		// BlobGasUsed is computed from blob transactions (same as miner/worker.go)
+		var blobGasUsed uint64
+		for _, tx := range txs {
+			blobGasUsed += uint64(len(tx.BlobHashes())) * params2.BlobTxPerBlobGas
+		}
+		header.BlobGasUsed = new(big.Int).SetUint64(blobGasUsed)
 	}
 	block := types.NewBlockWithHeader(header).WithBody(txs, nil /* uncles */)
 	if block.Hash() != params.BlockHash {
