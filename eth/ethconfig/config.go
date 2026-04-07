@@ -169,6 +169,14 @@ func CreateConsensusEngine(config *params.ChainConfig, db ethdb.Database) (conse
 	if config.Clique != nil {
 		return beacon.New(clique.New(config.Clique, db)), nil
 	}
+	// Metadium networks (ChainID 11=mainnet, 12=testnet) use Ethash as a
+	// placeholder while implementing their own PoA consensus layer on top.
+	if config.ChainID != nil {
+		chainID := config.ChainID.Int64()
+		if chainID == 11 || chainID == 12 {
+			return ethash.NewFaker(), nil
+		}
+	}
 	// If defaulting to proof-of-work, enforce an already merged network since
 	// we cannot run PoW algorithms anymore, so we cannot even follow a chain
 	// not coordinated by a beacon node.
