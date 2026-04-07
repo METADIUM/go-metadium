@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 // TestBlobGasCalculation tests blob gas calculations from EIP-4844
@@ -146,7 +147,7 @@ func TestFeeDelegationAfterCamellia(t *testing.T) {
 			feePayerAddr: {Balance: initialFeePayerBalance},
 		},
 	}
-	genesis := gspec.MustCommit(db)
+	genesis := gspec.MustCommit(db, nil)
 
 	// Build sender tx (DynamicFee) and sign with sender
 	londonSigner := types.NewLondonSigner(chainID)
@@ -197,7 +198,7 @@ func TestFeeDelegationAfterCamellia(t *testing.T) {
 	}
 
 	// Execute via GenerateChain + InsertChain
-	blockchain, _ := NewBlockChain(db, nil, chainCfg, ethash.NewFaker(), vm.Config{}, nil, nil)
+	blockchain, _ := NewBlockChain(db, nil, gspec, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
 	defer blockchain.Stop()
 
 	chain, _ := GenerateChain(chainCfg, genesis, ethash.NewFaker(), db, 1, func(i int, gen *BlockGen) {
@@ -213,7 +214,10 @@ func TestFeeDelegationAfterCamellia(t *testing.T) {
 	senderBalance := st.GetBalance(senderAddr)
 
 	// feePayer should have paid gas, sender should not
-	if feePayerBalance.Cmp(initialFeePayerBalance) >= 0 {
+	initialFeePayerBalanceU256, _ := uint256.FromBig(initialFeePayerBalance)
+	initialSenderBalanceU256, _ := uint256.FromBig(initialSenderBalance)
+
+	if feePayerBalance.Cmp(initialFeePayerBalanceU256) >= 0 {
 		t.Errorf("T-08: feePayer balance should have decreased (was %d, now %d)",
 			initialFeePayerBalance, feePayerBalance)
 	} else {
@@ -221,7 +225,7 @@ func TestFeeDelegationAfterCamellia(t *testing.T) {
 	}
 
 	// Sender sent 0 value, should still have ~initialSenderBalance (no gas deducted from sender)
-	if senderBalance.Cmp(initialSenderBalance) != 0 {
+	if senderBalance.Cmp(initialSenderBalanceU256) != 0 {
 		t.Errorf("T-09: sender balance should not change for gas (was %d, now %d)",
 			initialSenderBalance, senderBalance)
 	} else {
@@ -239,9 +243,9 @@ func TestBlobGasConstants(t *testing.T) {
 		value    uint64
 		expected uint64
 	}{
-		{"BlobTxPerBlobGas", params.BlobTxPerBlobGas, 131072},
+		{"BlobTxPerBlobGas", params.BlobTxBlobGasPerBlob, 131072},
 		{"MaxBlobGasPerBlock", params.MaxBlobGasPerBlock, 262144},  // 2 blobs × 131072
-		{"MaxBlobsPerTransaction", params.MaxBlobsPerTransaction, 4}, // max 4 blobs/tx
+		{"MaxBlobsPerTransaction", params.MaxBlobsPerTransaction, 2}, // max 2 blobs/tx (Metadium: 2 blobs/block)
 	}
 
 	for _, tt := range tests {
@@ -255,15 +259,22 @@ func TestBlobGasConstants(t *testing.T) {
 	}
 }
 
-// blobTestMsg is a minimal Message implementation for testing blob tx validation paths.
-type blobTestMsg struct {
-	types.Message            // embed for non-blob method defaults
-	blobHashes       []common.Hash
-	maxFeePerBlobGas *big.Int
+// makeBlobMsg creates a Message with blob fields for testing blob tx validation paths.
+func makeBlobMsg(from common.Address, blobHashes []common.Hash, maxFeePerBlobGas *big.Int) *Message {
+	to := from
+	return &Message{
+		From:          from,
+		To:            &to,
+		Nonce:         0,
+		Value:         big.NewInt(0),
+		GasLimit:      30000,
+		GasPrice:      big.NewInt(1e9),
+		GasFeeCap:     big.NewInt(1e9),
+		GasTipCap:     big.NewInt(1e9),
+		BlobHashes:    blobHashes,
+		BlobGasFeeCap: maxFeePerBlobGas,
+	}
 }
-
-func (m blobTestMsg) BlobHashes() []common.Hash { return m.blobHashes }
-func (m blobTestMsg) MaxFeePerBlobGas() *big.Int { return m.maxFeePerBlobGas }
 
 // TestBlobTxPreCheckErrors verifies that blob transaction validation in preCheck()
 // correctly rejects txs with insufficient MaxFeePerBlobGas or too many blobs.
@@ -279,8 +290,8 @@ func TestBlobTxPreCheckErrors(t *testing.T) {
 		Config: cfg,
 		Alloc:  GenesisAlloc{addr: {Balance: big.NewInt(1e18)}},
 	}
-	gspec.MustCommit(db)
-	chain, _ := NewBlockChain(db, nil, cfg, ethash.NewFaker(), vm.Config{}, nil, nil)
+	gspec.MustCommit(db, nil)
+	chain, _ := NewBlockChain(db, nil, gspec, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
 	defer chain.Stop()
 
 	// excessBlobGas=0 → blobBaseFee = MinBlobBaseFee (1 wei)
@@ -289,7 +300,7 @@ func TestBlobTxPreCheckErrors(t *testing.T) {
 
 	makeEVM := func() *vm.EVM {
 		blockCtx := NewEVMBlockContext(chain.CurrentBlock(), chain, &addr)
-		blockCtx.ExcessBlobGas = excessBlobGas
+		blockCtx.BlobBaseFee = blobBaseFee
 		statedb, _ := chain.StateAt(chain.CurrentBlock().Root)
 		return vm.NewEVM(blockCtx, vm.TxContext{Origin: addr}, statedb, cfg, vm.Config{})
 	}
@@ -299,14 +310,7 @@ func TestBlobTxPreCheckErrors(t *testing.T) {
 		if tooLow.Sign() < 0 {
 			tooLow = big.NewInt(0)
 		}
-		base := types.NewMessage(addr, &addr, 0, big.NewInt(0), 30000,
-			big.NewInt(1e9), big.NewInt(1e9), big.NewInt(1e9), nil, nil, true)
-		msg := blobTestMsg{
-			Message:          base,
-			blobHashes:       []common.Hash{{0x01}},
-			maxFeePerBlobGas: tooLow,
-		}
-		st := NewStateTransition(makeEVM(), msg, new(GasPool).AddGas(1e9))
+		st := NewStateTransition(makeEVM(), makeBlobMsg(addr, []common.Hash{{0x01}}, tooLow), new(GasPool).AddGas(1e9))
 		err := st.preCheck()
 		if err == nil {
 			t.Fatal("expected ErrBlobFeeCapTooLow, got nil")
@@ -319,14 +323,7 @@ func TestBlobTxPreCheckErrors(t *testing.T) {
 		for i := range tooMany {
 			tooMany[i] = common.Hash{byte(i + 1)}
 		}
-		base := types.NewMessage(addr, &addr, 0, big.NewInt(0), 30000,
-			big.NewInt(1e9), big.NewInt(1e9), big.NewInt(1e9), nil, nil, true)
-		msg := blobTestMsg{
-			Message:          base,
-			blobHashes:       tooMany,
-			maxFeePerBlobGas: new(big.Int).Set(blobBaseFee),
-		}
-		st := NewStateTransition(makeEVM(), msg, new(GasPool).AddGas(1e9))
+		st := NewStateTransition(makeEVM(), makeBlobMsg(addr, tooMany, new(big.Int).Set(blobBaseFee)), new(GasPool).AddGas(1e9))
 		err := st.preCheck()
 		if err == nil {
 			t.Fatal("expected ErrBlobCountExceeded, got nil")

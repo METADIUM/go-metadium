@@ -132,7 +132,7 @@ func (bc *testBlockChain) CurrentBlock() *types.Header {
 		Time:          blockTime,
 		GasLimit:      gasLimit,
 		BaseFee:       baseFee,
-		ExcessBlobGas: &excessBlobGas,
+		ExcessBlobGas: new(big.Int).SetUint64(excessBlobGas),
 	}
 }
 
@@ -188,19 +188,21 @@ func makeTx(nonce uint64, gasTipCap uint64, gasFeeCap uint64, blobFeeCap uint64,
 // makeUnsignedTx is a utility method to construct a random blob transaction
 // without signing it.
 func makeUnsignedTx(nonce uint64, gasTipCap uint64, gasFeeCap uint64, blobFeeCap uint64) *types.BlobTx {
+	to := common.Address{0xde, 0xad} // blob txs require a non-nil To (EIP-4844)
 	return &types.BlobTx{
-		ChainID:    uint256.MustFromBig(testChainConfig.ChainID),
-		Nonce:      nonce,
-		GasTipCap:  uint256.NewInt(gasTipCap),
-		GasFeeCap:  uint256.NewInt(gasFeeCap),
-		Gas:        21000,
-		BlobFeeCap: uint256.NewInt(blobFeeCap),
-		BlobHashes: []common.Hash{emptyBlobVHash},
-		Value:      uint256.NewInt(100),
+		ChainID:          uint256.MustFromBig(testChainConfig.ChainID),
+		Nonce:            nonce,
+		GasTipCap:        uint256.NewInt(gasTipCap),
+		GasFeeCap:        uint256.NewInt(gasFeeCap),
+		Gas:              21000,
+		To:               &to,
+		MaxFeePerBlobGas: uint256.NewInt(blobFeeCap),
+		BlobHashes:       []common.Hash{emptyBlobVHash},
+		Value:            uint256.NewInt(100),
 		Sidecar: &types.BlobTxSidecar{
-			Blobs:       []kzg4844.Blob{emptyBlob},
-			Commitments: []kzg4844.Commitment{emptyBlobCommit},
-			Proofs:      []kzg4844.Proof{emptyBlobProof},
+			Blobs:       [][]byte{emptyBlob[:]},
+			Commitments: [][]byte{emptyBlobCommit[:]},
+			Proofs:      [][]byte{emptyBlobProof[:]},
 		},
 	}
 }
@@ -338,7 +340,7 @@ func TestOpenDrops(t *testing.T) {
 		Gas:        0,
 		Value:      new(uint256.Int),
 		Data:       nil,
-		BlobFeeCap: new(uint256.Int),
+		MaxFeePerBlobGas: new(uint256.Int),
 		V:          new(uint256.Int),
 		R:          new(uint256.Int),
 		S:          new(uint256.Int),
@@ -656,7 +658,7 @@ func TestOpenIndex(t *testing.T) {
 
 		txExecTipCaps = []uint64{10, 25, 5, 7, 1, 100}
 		txExecFeeCaps = []uint64{100, 90, 200, 10, 80, 300}
-		txBlobFeeCaps = []uint64{55, 66, 77, 33, 22, 11}
+		txMaxFeePerBlobGas = []uint64{55, 66, 77, 33, 22, 11}
 
 		//basefeeJumps = []float64{39.098, 38.204, 44.983, 19.549, 37.204, 48.426} // log 1.125 (exec fee cap)
 		//blobfeeJumps = []float64{34.023, 35.570, 36.879, 29.686, 26.243, 20.358} // log 1.125 (blob fee cap)
@@ -668,7 +670,7 @@ func TestOpenIndex(t *testing.T) {
 		totalSpent = uint256.NewInt(21000*(100+90+200+10+80+300) + blobSize*(55+66+77+33+22+11) + 100*6) // 21000 gas x price + 128KB x blobprice + value
 	)
 	for _, i := range []int{5, 3, 4, 2, 0, 1} { // Randomize the tx insertion order to force sorting on load
-		tx := makeTx(uint64(i), txExecTipCaps[i], txExecFeeCaps[i], txBlobFeeCaps[i], key)
+		tx := makeTx(uint64(i), txExecTipCaps[i], txExecFeeCaps[i], txMaxFeePerBlobGas[i], key)
 		blob, _ := rlp.EncodeToBytes(tx)
 		store.Put(blob)
 	}

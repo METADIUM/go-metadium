@@ -301,7 +301,7 @@ func benchReadChain(b *testing.B, full bool, count uint64) {
 	genesis := &Genesis{Config: params.AllEthashProtocolChanges}
 	makeChainForBench(db, genesis, full, count)
 	db.Close()
-	cacheConfig := *DefaultCacheConfig
+	cacheConfig := DefaultCacheConfigWithScheme(rawdb.HashScheme)
 	cacheConfig.TrieDirtyDisabled = true
 
 	b.ReportAllocs()
@@ -312,7 +312,7 @@ func benchReadChain(b *testing.B, full bool, count uint64) {
 		if err != nil {
 			b.Fatalf("error opening database at %v: %v", dir, err)
 		}
-		chain, err := NewBlockChain(db, &cacheConfig, genesis, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
+		chain, err := NewBlockChain(db, cacheConfig, genesis, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
 		if err != nil {
 			b.Fatalf("error creating chain: %v", err)
 		}

@@ -512,7 +512,7 @@ func (b *Block) DecodeRLP(s *rlp.Stream) error {
 		return err
 	}
 	b.header, b.uncles, b.transactions, b.withdrawals = eb.Header, eb.Uncles, eb.Txs, eb.Withdrawals
-	b.size.Store(common.StorageSize(rlp.ListSize(size)))
+	b.size.Store(uint64(rlp.ListSize(size)))
 	return nil
 }
 
@@ -573,6 +573,7 @@ func (b *Block) Rewards() []byte          { return common.CopyBytes(b.header.Rew
 
 func (b *Block) MinerNodeId() []byte  { return b.header.MinerNodeId }
 func (b *Block) MinerNodeSig() []byte { return b.header.MinerNodeSig }
+func (b *Block) BeaconRoot() *common.Hash { return b.header.ParentBeaconRoot }
 
 func (b *Block) BaseFee() *big.Int {
 	if b.header.BaseFee == nil {
@@ -604,14 +605,14 @@ func (b *Block) Body() *Body { return &Body{b.transactions, b.uncles, b.withdraw
 
 // Size returns the true RLP encoded storage size of the block, either by encoding
 // and returning it, or returning a previsouly cached value.
-func (b *Block) Size() common.StorageSize {
+func (b *Block) Size() uint64 {
 	if size := b.size.Load(); size != nil {
-		return size.(common.StorageSize)
+		return size.(uint64)
 	}
 	c := writeCounter(0)
 	rlp.Encode(&c, b)
-	b.size.Store(common.StorageSize(c))
-	return common.StorageSize(c)
+	b.size.Store(uint64(c))
+	return uint64(c)
 }
 
 // SanityCheck can be used to prevent that unbounded fields are

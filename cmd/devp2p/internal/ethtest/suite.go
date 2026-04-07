@@ -22,10 +22,8 @@ import (
 	"reflect"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/internal/utesting"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -748,21 +746,29 @@ the transactions using a GetPooledTransactions request.`)
 
 func makeSidecar(data ...byte) *types.BlobTxSidecar {
 	var (
-		blobs       = make([]kzg4844.Blob, len(data))
-		commitments []kzg4844.Commitment
-		proofs      []kzg4844.Proof
+		blobs       [][]byte
+		commitments [][]byte
+		proofs      [][]byte
+		hashes      []common.Hash
 	)
-	for i := range blobs {
-		blobs[i][0] = data[i]
-		c, _ := kzg4844.BlobToCommitment(blobs[i])
-		p, _ := kzg4844.ComputeBlobProof(blobs[i], c)
-		commitments = append(commitments, c)
-		proofs = append(proofs, p)
+	for _, d := range data {
+		blob := make([]byte, types.BlobSize)
+		blob[0] = d
+		commitment := make([]byte, 48)
+		proof := make([]byte, 48)
+		blobs = append(blobs, blob)
+		commitments = append(commitments, commitment)
+		proofs = append(proofs, proof)
+		var h common.Hash
+		h[0] = 0x01 // KZG version byte
+		h[1] = d
+		hashes = append(hashes, h)
 	}
 	return &types.BlobTxSidecar{
 		Blobs:       blobs,
 		Commitments: commitments,
 		Proofs:      proofs,
+		BlobHashes:  hashes,
 	}
 }
 
@@ -781,8 +787,8 @@ func (s *Suite) makeBlobTxs(count, blobs int, discriminator byte) (txs types.Tra
 			GasTipCap:  uint256.NewInt(1),
 			GasFeeCap:  uint256.MustFromBig(s.chain.Head().BaseFee()),
 			Gas:        100000,
-			BlobFeeCap: uint256.MustFromBig(eip4844.CalcBlobFee(*s.chain.Head().ExcessBlobGas())),
-			BlobHashes: makeSidecar(blobdata...).BlobHashes(),
+			MaxFeePerBlobGas: uint256.NewInt(1e6),
+			BlobHashes: makeSidecar(blobdata...).BlobHashes,
 			Sidecar:    makeSidecar(blobdata...),
 		}
 		tx, err := s.chain.SignTx(from, types.NewTx(inner))

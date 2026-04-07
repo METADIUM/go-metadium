@@ -1030,6 +1030,7 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 	}
 	// disallow setting Merge out of order
 	isMerge = isMerge && c.IsLondon(num)
+	isCamellia := c.IsCamellia(num)
 	return Rules{
 		ChainID:          new(big.Int).Set(chainID),
 		IsHomestead:      c.IsHomestead(num),
@@ -1043,14 +1044,14 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsBerlin:         c.IsBerlin(num),
 		IsLondon:         c.IsLondon(num),
 		IsMerge:          isMerge,
-		IsShanghai:       isMerge && c.IsShanghai(num, timestamp),
-		IsCancun:         isMerge && c.IsCancun(num, timestamp),
+		IsShanghai:       (isMerge && c.IsShanghai(num, timestamp)) || isCamellia,
+		IsCancun:         (isMerge && c.IsCancun(num, timestamp)) || isCamellia,
 		IsPrague:         isMerge && c.IsPrague(num, timestamp),
 		IsVerkle:         isMerge && c.IsVerkle(num, timestamp),
 		IsAvocado:        c.IsAvocado(num),
 		IsPangyo:         c.IsPangyo(num),
 		IsApplepie:       c.IsApplepie(num),
 		IsBokbunja:       c.IsBokbunja(num),
-		IsCamellia:       c.IsCamellia(num),
+		IsCamellia:       isCamellia,
 	}
 }

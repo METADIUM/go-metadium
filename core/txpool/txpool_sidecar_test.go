@@ -40,7 +40,7 @@ func newMockBlobSubPool() *mockBlobSubPool {
 func (m *mockBlobSubPool) Filter(tx *types.Transaction) bool {
 	return tx.Type() == types.BlobTxType
 }
-func (m *mockBlobSubPool) Init(*big.Int, *types.Header) error  { return nil }
+func (m *mockBlobSubPool) Init(_ uint64, _ *types.Header, _ AddressReserver) error { return nil }
 func (m *mockBlobSubPool) Close() error                        { return nil }
 func (m *mockBlobSubPool) Reset(_, _ *types.Header)            {}
 func (m *mockBlobSubPool) SetGasTip(*big.Int)                  {}
@@ -48,7 +48,7 @@ func (m *mockBlobSubPool) Has(hash common.Hash) bool           { _, ok := m.txs[
 func (m *mockBlobSubPool) Get(hash common.Hash) *types.Transaction {
 	m.mu.RLock(); defer m.mu.RUnlock(); return m.txs[hash]
 }
-func (m *mockBlobSubPool) Add(txs []*types.Transaction, _ bool) []error {
+func (m *mockBlobSubPool) Add(txs []*types.Transaction, _, _ bool) []error {
 	errs := make([]error, len(txs))
 	m.mu.Lock(); defer m.mu.Unlock()
 	for i, tx := range txs {
@@ -57,20 +57,20 @@ func (m *mockBlobSubPool) Add(txs []*types.Transaction, _ bool) []error {
 	}
 	return errs
 }
-func (m *mockBlobSubPool) Pending(_ bool) map[common.Address]types.Transactions { return nil }
-func (m *mockBlobSubPool) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.Subscription {
+func (m *mockBlobSubPool) Pending(_ PendingFilter) map[common.Address][]*LazyTransaction { return nil }
+func (m *mockBlobSubPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, _ bool) event.Subscription {
 	return event.NewSubscription(func(quit <-chan struct{}) error { <-quit; return nil })
 }
 func (m *mockBlobSubPool) Nonce(common.Address) uint64 { return 0 }
 func (m *mockBlobSubPool) Stats() (int, int)           { return 0, 0 }
-func (m *mockBlobSubPool) Content() (map[common.Address]types.Transactions, map[common.Address]types.Transactions) {
+func (m *mockBlobSubPool) Content() (map[common.Address][]*types.Transaction, map[common.Address][]*types.Transaction) {
 	return nil, nil
 }
-func (m *mockBlobSubPool) ContentFrom(common.Address) (types.Transactions, types.Transactions) {
+func (m *mockBlobSubPool) ContentFrom(common.Address) ([]*types.Transaction, []*types.Transaction) {
 	return nil, nil
 }
 func (m *mockBlobSubPool) Locals() []common.Address        { return nil }
-func (m *mockBlobSubPool) Status([]common.Hash) []core.TxStatus { return nil }
+func (m *mockBlobSubPool) Status(_ common.Hash) TxStatus { return TxStatusUnknown }
 
 // sidecarAdder duck-type — matches the interface checked in TxPool.AddBlobWithSidecar.
 func (m *mockBlobSubPool) AddWithSidecar(tx *types.Transaction, sidecar *types.BlobTxSidecar) error {

@@ -40,25 +40,25 @@ func TestCalcExcessBlobGas(t *testing.T) {
 		{
 			name:              "no excess, below target",
 			prevExcessBlobGas: big.NewInt(0),
-			prevBlobGasUsed:   params.TargetBlobGasPerBlock / 2,
+			prevBlobGasUsed:   params.BlobTxTargetBlobGasPerBlock / 2,
 			expectedExcessGas: big.NewInt(0),
 		},
 		{
 			name:              "excess at target",
 			prevExcessBlobGas: big.NewInt(0),
-			prevBlobGasUsed:   params.TargetBlobGasPerBlock,
+			prevBlobGasUsed:   params.BlobTxTargetBlobGasPerBlock,
 			expectedExcessGas: big.NewInt(0),
 		},
 		{
 			name:              "excess above target",
 			prevExcessBlobGas: big.NewInt(0),
-			prevBlobGasUsed:   params.TargetBlobGasPerBlock + 100000,
+			prevBlobGasUsed:   params.BlobTxTargetBlobGasPerBlock + 100000,
 			expectedExcessGas: big.NewInt(100000),
 		},
 		{
 			name:              "accumulated excess",
 			prevExcessBlobGas: big.NewInt(50000),
-			prevBlobGasUsed:   params.TargetBlobGasPerBlock + 50000,
+			prevBlobGasUsed:   params.BlobTxTargetBlobGasPerBlock + 50000,
 			expectedExcessGas: big.NewInt(100000),
 		},
 	}
@@ -84,17 +84,17 @@ func TestCalcBlobBaseFee(t *testing.T) {
 		{
 			name:            "nil excess blob gas",
 			excessBlobGas:   nil,
-			expectedMinimum: params.MinBlobBaseFee,
+			expectedMinimum: params.BlobTxMinBlobGasprice,
 		},
 		{
 			name:            "zero excess blob gas",
 			excessBlobGas:   big.NewInt(0),
-			expectedMinimum: params.MinBlobBaseFee,
+			expectedMinimum: params.BlobTxMinBlobGasprice,
 		},
 		{
 			name:            "small excess",
 			excessBlobGas:   big.NewInt(100000),
-			expectedMinimum: params.MinBlobBaseFee,
+			expectedMinimum: params.BlobTxMinBlobGasprice,
 		},
 	}
 
@@ -135,9 +135,9 @@ func TestGetBlobGasUsed(t *testing.T) {
 		expectedGas uint64
 	}{
 		{0, 0},
-		{1, params.BlobTxPerBlobGas},
-		{2, 2 * params.BlobTxPerBlobGas},
-		{6, 6 * params.BlobTxPerBlobGas},
+		{1, params.BlobTxBlobGasPerBlob},
+		{2, 2 * params.BlobTxBlobGasPerBlob},
+		{6, 6 * params.BlobTxBlobGasPerBlob},
 	}
 
 	for _, test := range tests {

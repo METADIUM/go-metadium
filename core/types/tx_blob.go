@@ -25,7 +25,7 @@ import (
 	"github.com/holiman/uint256"
 )
 
-// blobTxRLP is a helper struct for RLP encode/decode of BlobTx.
+// blobTxRLP is a helper struct for RLP encode/decode of BlobTx without sidecar.
 // It uses *big.Int which the RLP package handles correctly (unlike uint256.Int).
 type blobTxRLP struct {
 	ChainID          *big.Int
@@ -44,8 +44,18 @@ type blobTxRLP struct {
 	S                *big.Int
 }
 
-// EncodeRLP implements rlp.Encoder for BlobTx using the big.Int-based helper.
-func (tx *BlobTx) EncodeRLP(w io.Writer) error {
+// blobTxWithSidecarRLP is the RLP encoding format for a BlobTx WITH its sidecar.
+// The sidecar blobs/commitments/proofs are appended after the tx fields.
+// This format is used for blobpool storage so that sidecars survive restarts.
+type blobTxWithSidecarRLP struct {
+	Tx          blobTxRLP
+	Blobs       [][]byte
+	Commitments [][]byte
+	Proofs      [][]byte
+}
+
+// makeBlobTxRLP builds a blobTxRLP from the BlobTx fields.
+func (tx *BlobTx) makeBlobTxRLP() blobTxRLP {
 	enc := blobTxRLP{
 		Nonce:      tx.Nonce,
 		Gas:        tx.Gas,
@@ -78,22 +88,28 @@ func (tx *BlobTx) EncodeRLP(w io.Writer) error {
 	if tx.S != nil {
 		enc.S = tx.S.ToBig()
 	}
-	return rlp.Encode(w, enc)
+	return enc
 }
 
-// DecodeRLP implements rlp.Decoder for BlobTx.
-func (tx *BlobTx) DecodeRLP(s *rlp.Stream) error {
-	var dec blobTxRLP
-	if err := s.Decode(&dec); err != nil {
-		return err
+// EncodeRLP implements rlp.Encoder for BlobTx.
+// When a sidecar is present the encoding wraps the tx fields with the sidecar
+// data so that the sidecar can be recovered on decode (used by blobpool storage).
+// Without a sidecar only the canonical tx fields are encoded.
+func (tx *BlobTx) EncodeRLP(w io.Writer) error {
+	enc := tx.makeBlobTxRLP()
+	if tx.Sidecar == nil {
+		return rlp.Encode(w, enc)
 	}
-	tx.Nonce = dec.Nonce
-	tx.Gas = dec.Gas
-	tx.To = dec.To
-	tx.Data = dec.Data
-	tx.AccessList = dec.AccessList
-	tx.BlobHashes = dec.BlobHashes
+	return rlp.Encode(w, blobTxWithSidecarRLP{
+		Tx:          enc,
+		Blobs:       tx.Sidecar.Blobs,
+		Commitments: tx.Sidecar.Commitments,
+		Proofs:      tx.Sidecar.Proofs,
+	})
+}
 
+// applyBlobTxRLP sets the BlobTx fields from a decoded blobTxRLP.
+func (tx *BlobTx) applyBlobTxRLP(dec *blobTxRLP) {
 	fromBig := func(b *big.Int) *uint256.Int {
 		if b == nil {
 			return new(uint256.Int)
@@ -101,6 +117,12 @@ func (tx *BlobTx) DecodeRLP(s *rlp.Stream) error {
 		v, _ := uint256.FromBig(b)
 		return v
 	}
+	tx.Nonce = dec.Nonce
+	tx.Gas = dec.Gas
+	tx.To = dec.To
+	tx.Data = dec.Data
+	tx.AccessList = dec.AccessList
+	tx.BlobHashes = dec.BlobHashes
 	tx.ChainID = fromBig(dec.ChainID)
 	tx.GasTipCap = fromBig(dec.GasTipCap)
 	tx.GasFeeCap = fromBig(dec.GasFeeCap)
@@ -109,6 +131,48 @@ func (tx *BlobTx) DecodeRLP(s *rlp.Stream) error {
 	tx.V = fromBig(dec.V)
 	tx.R = fromBig(dec.R)
 	tx.S = fromBig(dec.S)
+}
+
+// DecodeRLP implements rlp.Decoder for BlobTx.
+// It supports two formats:
+//   - Flat list (blobTxRLP): canonical encoding without sidecar.
+//   - Nested list ([[tx_fields], blobs, commitments, proofs]): storage encoding with sidecar.
+func (tx *BlobTx) DecodeRLP(s *rlp.Stream) error {
+	raw, err := s.Raw()
+	if err != nil {
+		return err
+	}
+	// Check whether the first element of the RLP list is itself a list.
+	// If so, this is the with-sidecar format; otherwise it's the flat format.
+	content, _, err := rlp.SplitList(raw)
+	if err != nil {
+		return err
+	}
+	kind, _, _, err := rlp.Split(content)
+	if err != nil {
+		return err
+	}
+	if kind == rlp.List {
+		// With-sidecar format: [[tx_fields...], blobs, commitments, proofs]
+		var wb blobTxWithSidecarRLP
+		if err := rlp.DecodeBytes(raw, &wb); err != nil {
+			return err
+		}
+		tx.applyBlobTxRLP(&wb.Tx)
+		tx.Sidecar = &BlobTxSidecar{
+			Blobs:       wb.Blobs,
+			Commitments: wb.Commitments,
+			Proofs:      wb.Proofs,
+			BlobHashes:  tx.BlobHashes,
+		}
+		return nil
+	}
+	// Flat format: [tx_fields...]
+	var dec blobTxRLP
+	if err := rlp.DecodeBytes(raw, &dec); err != nil {
+		return err
+	}
+	tx.applyBlobTxRLP(&dec)
 	return nil
 }
 
@@ -188,6 +252,31 @@ func (tx *BlobTx) copy() TxData {
 	}
 	if tx.S != nil {
 		cpy.S.Set(tx.S)
+	}
+	if tx.Sidecar != nil {
+		sidecar := &BlobTxSidecar{
+			BlobHashes: make([]common.Hash, len(tx.Sidecar.BlobHashes)),
+		}
+		copy(sidecar.BlobHashes, tx.Sidecar.BlobHashes)
+		if len(tx.Sidecar.Blobs) > 0 {
+			sidecar.Blobs = make([][]byte, len(tx.Sidecar.Blobs))
+			for i, b := range tx.Sidecar.Blobs {
+				sidecar.Blobs[i] = common.CopyBytes(b)
+			}
+		}
+		if len(tx.Sidecar.Commitments) > 0 {
+			sidecar.Commitments = make([][]byte, len(tx.Sidecar.Commitments))
+			for i, c := range tx.Sidecar.Commitments {
+				sidecar.Commitments[i] = common.CopyBytes(c)
+			}
+		}
+		if len(tx.Sidecar.Proofs) > 0 {
+			sidecar.Proofs = make([][]byte, len(tx.Sidecar.Proofs))
+			for i, p := range tx.Sidecar.Proofs {
+				sidecar.Proofs[i] = common.CopyBytes(p)
+			}
+		}
+		cpy.Sidecar = sidecar
 	}
 	return cpy
 }

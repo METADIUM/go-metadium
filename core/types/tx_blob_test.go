@@ -320,3 +320,37 @@ func TestDecodeBlobTxNetworkEncoding(t *testing.T) {
 
 // Ensure unused import is referenced.
 var _ = big.NewInt
+
+// createEmptyBlobTxInner creates a minimal BlobTx for testing.
+// Used by transaction_signing_test.go.
+func createEmptyBlobTxInner(withSidecar bool) *BlobTx {
+	addr := common.HexToAddress("0x0304050000000000000000000000000000000000")
+	blobHash := common.HexToHash("0x0100000000000000000000000000000000000000000000000000000000000001")
+	inner := &BlobTx{
+		ChainID:          uint256.NewInt(1),
+		Nonce:            5,
+		GasTipCap:        uint256.NewInt(22),
+		GasFeeCap:        uint256.NewInt(5),
+		Gas:              25000,
+		To:               &addr,
+		Value:            uint256.NewInt(99),
+		Data:             make([]byte, 50),
+		MaxFeePerBlobGas: uint256.NewInt(15),
+		BlobHashes:       []common.Hash{blobHash},
+		V:                uint256.NewInt(0),
+		R:                uint256.NewInt(1),
+		S:                uint256.NewInt(1),
+	}
+	if withSidecar {
+		blob := make([]byte, BlobSize)
+		commitment := make([]byte, 48)
+		proof := make([]byte, 48)
+		inner.Sidecar = &BlobTxSidecar{
+			Blobs:       [][]byte{blob},
+			Commitments: [][]byte{commitment},
+			Proofs:      [][]byte{proof},
+			BlobHashes:  []common.Hash{blobHash},
+		}
+	}
+	return inner
+}

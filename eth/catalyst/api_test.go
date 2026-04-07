@@ -37,7 +37,6 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/eth"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
@@ -1550,9 +1549,9 @@ func TestBlockToPayloadWithBlobs(t *testing.T) {
 	txs = append(txs, types.NewTx(&inner))
 	sidecars := []*types.BlobTxSidecar{
 		{
-			Blobs:       make([]kzg4844.Blob, 1),
-			Commitments: make([]kzg4844.Commitment, 1),
-			Proofs:      make([]kzg4844.Proof, 1),
+			Blobs:       [][]byte{make([]byte, 131072)},
+			Commitments: [][]byte{make([]byte, 48)},
+			Proofs:      [][]byte{make([]byte, 48)},
 		},
 	}
 
