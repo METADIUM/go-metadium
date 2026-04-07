@@ -462,6 +462,28 @@ func (tx *Transaction) WithoutBlobTxSidecar() *Transaction {
 	return cpy
 }
 
+// WithBlobTxSidecar returns a copy of tx with the given sidecar attached.
+// Returns the original tx unchanged if it is not a blob transaction.
+func (tx *Transaction) WithBlobTxSidecar(sidecar *BlobTxSidecar) *Transaction {
+	blobtx, ok := tx.inner.(*BlobTx)
+	if !ok {
+		return tx
+	}
+	cpy := *blobtx
+	cpy.Sidecar = sidecar
+	newTx := &Transaction{
+		inner: &cpy,
+		time:  tx.time,
+	}
+	if h := tx.hash.Load(); h != nil {
+		newTx.hash.Store(h)
+	}
+	if f := tx.from.Load(); f != nil {
+		newTx.from.Store(f)
+	}
+	return newTx
+}
+
 // EffectiveGasTip returns the effective miner gasTipCap for the given base fee.
 // Note: if the effective gasTipCap is negative, this method returns both error
 // the actual negative value, _and_ ErrGasFeeCapTooLow
@@ -501,6 +523,8 @@ func (tx *Transaction) EffectiveGasTipIntCmp(other *big.Int, baseFee *big.Int) i
 }
 
 // Hash returns the transaction hash.
+// For blob transactions, the hash is always computed from the canonical encoding
+// (without sidecar), regardless of whether a sidecar is attached.
 func (tx *Transaction) Hash() common.Hash {
 	if hash := tx.hash.Load(); hash != nil {
 		return hash.(common.Hash)
@@ -509,6 +533,13 @@ func (tx *Transaction) Hash() common.Hash {
 	var h common.Hash
 	if tx.Type() == LegacyTxType {
 		h = rlpHash(tx.inner)
+	} else if tx.Type() == BlobTxType {
+		// Use canonical encoding (without sidecar) for blob tx hash.
+		if blobtx, ok := tx.inner.(*BlobTx); ok && blobtx.Sidecar != nil {
+			h = prefixedRlpHash(tx.Type(), blobtx.withoutSidecar())
+		} else {
+			h = prefixedRlpHash(tx.Type(), tx.inner)
+		}
 	} else {
 		h = prefixedRlpHash(tx.Type(), tx.inner)
 	}

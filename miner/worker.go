@@ -116,6 +116,7 @@ func (env *environment) copy() *environment {
 		coinbase: env.coinbase,
 		header:   types.CopyHeader(env.header),
 		receipts: copyReceipts(env.receipts),
+		blobs:    env.blobs,
 	}
 	if env.gasPool != nil {
 		gasPool := *env.gasPool
@@ -888,7 +889,10 @@ func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction) 
 	if env.header.BlobGasUsed == nil {
 		env.header.BlobGasUsed = new(big.Int)
 	}
-	env.header.BlobGasUsed.Add(env.header.BlobGasUsed, new(big.Int).SetUint64(receipt.BlobGasUsed))
+	// receipt.BlobGasUsed is not populated in Metadium's applyTransaction,
+	// so compute blob gas directly from the sidecar blob count.
+	blobGas := uint64(len(sc.Blobs)) * params.BlobTxBlobGasPerBlob
+	env.header.BlobGasUsed.Add(env.header.BlobGasUsed, new(big.Int).SetUint64(blobGas))
 	return receipt.Logs, nil
 }
 
