@@ -290,12 +290,12 @@ fi
 echo ""
 
 # ============================================================
-# I-07: EIP-3860 — initcode > 49152 bytes → CREATE rejected
+# I-07: EIP-3860 — initcode > MaxInitCodeSize (507904) bytes -> CREATE rejected
 # ============================================================
-log "--- EIP-3860: initcode size limit (49152 bytes) ---"
+log "--- EIP-3860: initcode size limit (Metadium: 507904 bytes) ---"
 
-# 49153 bytes initcode: STOP(0x00) × 49153
-INITCODE_HEX=$(python3 -c "print('0x' + '00' * 49153)" 2>/dev/null || true)
+# Metadium MaxInitCodeSize=507904 (2 * 253952), test with 507905 bytes
+INITCODE_HEX=$(python3 -c "print('0x' + '00' * 507905)" 2>/dev/null || true)
 
 if [[ -z "$INITCODE_HEX" ]]; then
   skip "I-07: python3 initcode generation failed"
@@ -311,9 +311,9 @@ else
     else
       STATUS=$(echo "$RECEIPT" | cut -d'|' -f2)
       if [[ "$STATUS" == "0x0" ]]; then
-        pass "I-07: EIP-3860 — 49153 bytes initcode CREATE rejected (status=0x0)"
+        pass "I-07: EIP-3860 — 507905 bytes initcode CREATE rejected (status=0x0)"
       else
-        fail "I-07: EIP-3860 not applied — 49153 bytes initcode was accepted (status=$STATUS)"
+        fail "I-07: EIP-3860 not applied — 507905 bytes initcode was accepted (status=$STATUS)"
       fi
     fi
   fi
