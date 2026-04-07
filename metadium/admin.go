@@ -1365,7 +1365,7 @@ func (ma *metaAdmin) checkMining() {
 	if on == *mining {
 		return
 	} else if on {
-		err := ma.rpcCli.CallContext(ctx, &mining, "miner_start", 1)
+		err := ma.rpcCli.CallContext(ctx, &mining, "miner_start")
 		if err != nil {
 			log.Error("Starting miner", "failed", err)
 			return
@@ -1373,7 +1373,7 @@ func (ma *metaAdmin) checkMining() {
 			log.Info("Started miner")
 		}
 	} else {
-		err := ma.rpcCli.CallContext(ctx, &mining, "miner_stop", 1)
+		err := ma.rpcCli.CallContext(ctx, &mining, "miner_stop")
 		if err != nil {
 			log.Error("Stopping miner", "failed", err)
 			return

@@ -169,9 +169,17 @@ func CreateConsensusEngine(config *params.ChainConfig, db ethdb.Database) (conse
 	if config.Clique != nil {
 		return beacon.New(clique.New(config.Clique, db)), nil
 	}
-	// If defaulting to proof-of-work, enforce an already merged network since
-	// we cannot run PoW algorithms anymore, so we cannot even follow a chain
-	// not coordinated by a beacon node.
+	// Metadium PoA: use ethash.NewFaker() as a placeholder engine. The actual
+	// sealing and block-signing is handled by the Metadium consensus layer
+	// (see consensus/ethash/ethash.go and consensus/ethash/consensus.go).
+	// This covers mainnet (ChainID 11), testnet (ChainID 12), and private
+	// networks (e.g. ChainID 1337) when --consensusmethod=2 is set.
+	// NOTE: SetMetadiumConfig() sets params.ConsensusMethod before eth.New()
+	// calls this function, so params.ConsensusMethod is reliable here.
+	if params.ConsensusMethod == params.ConsensusPoA {
+		return ethash.NewFaker(), nil
+	}
+	// Fallback: require an already-merged network for any remaining ethash usage.
 	if !config.TerminalTotalDifficultyPassed {
 		return nil, errors.New("ethash is only supported as a historical component of already merged networks")
 	}

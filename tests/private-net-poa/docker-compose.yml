@@ -61,6 +61,7 @@ services:
       --unlock 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
       --password /data/geth/password.txt
       --allow-insecure-unlock
+      --rpc.txfeecap 0
 
   node2:
     <<: *gmet-common

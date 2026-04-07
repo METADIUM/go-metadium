@@ -305,6 +305,16 @@ func (api *adminAPI) Peers() ([]*p2p.PeerInfo, error) {
 	return server.PeersInfo(), nil
 }
 
+// PeerInfo retrieves all the information we know about the peer node at the
+// protocol granularity. Used by Metadium governance to check peer status.
+func (api *adminAPI) PeerInfo(id enode.ID) (*p2p.PeerInfo, error) {
+	server := api.node.Server()
+	if server == nil {
+		return nil, ErrNodeStopped
+	}
+	return server.PeerInfo(id), nil
+}
+
 // NodeInfo retrieves all the information we know about the host node at the
 // protocol granularity.
 func (api *adminAPI) NodeInfo() (*p2p.NodeInfo, error) {

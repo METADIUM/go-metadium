@@ -318,7 +318,12 @@ func (c *Config) name() string {
 		if progname == "" {
 			panic("empty executable name, set Config.Name")
 		}
+		if strings.EqualFold(progname, "gmet") || strings.HasPrefix(strings.ToLower(progname), "gmet") {
+			progname = "geth"
+		}
 		return progname
+	} else if strings.EqualFold(c.Name, "gmet") {
+		return "geth"
 	}
 	return c.Name
 }

@@ -27,6 +27,7 @@ log "=== PoA private network initialization started (chainId=$NETWORKID, Camelli
 log "Cleaning up existing data..."
 rm -rf data/ passwords.txt static-nodes.json genesis.json
 mkdir -p data/node1/geth data/node2/geth data/node3/geth
+mkdir -p data/node1/gmet data/node2/gmet data/node3/gmet
 echo "$PASSWORD" > passwords.txt
 
 # Test account private keys (Hardhat defaults - for testing only)
@@ -60,8 +61,10 @@ done
 # Generate node1 nodekey (bootnode → ID goes into genesis extraData)
 log "Generating node1 nodekey..."
 NODEKEY=$(openssl rand -hex 32)
+# gmet uses DATADIR/gmet/nodekey at runtime; also write to geth/ for compatibility
+echo "$NODEKEY" > data/node1/gmet/nodekey
 echo "$NODEKEY" > data/node1/geth/nodekey
-chmod 600 data/node1/geth/nodekey
+chmod 600 data/node1/gmet/nodekey data/node1/geth/nodekey
 
 # Calculate node1's node ID using Python (secp256k1 public key 64 bytes = 128 hex chars)
 NODE1_ID=$(python3 - <<PYEOF
@@ -78,7 +81,7 @@ PYEOF
 ENODE="enode://${NODE1_ID}@172.31.0.11:30303"
 log "node1 enode: $ENODE"
 
-# Generate static-nodes.json (also copy to each node's geth directory - workaround for macOS virtiofs nested mount)
+# Generate static-nodes.json (copy to both geth/ and gmet/ - gmet uses gmet/ at runtime)
 cat > static-nodes.json <<EOF
 [
   "$ENODE"
@@ -86,6 +89,7 @@ cat > static-nodes.json <<EOF
 EOF
 for node in node1 node2 node3; do
   cp static-nodes.json "data/$node/geth/static-nodes.json"
+  cp static-nodes.json "data/$node/gmet/static-nodes.json"
 done
 log "static-nodes.json created"
 

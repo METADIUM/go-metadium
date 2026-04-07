@@ -1631,6 +1631,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 		timestamp: uint64(timestamp),
 		coinbase:  coinbase,
 	})
+	if err != nil {
+		return
+	}
 	if !metaminer.IsPoW() { // Metadium
 		if coinbase, err := metaminer.GetCoinbase(work.header.Number); err == nil {
 			work.coinbase = coinbase
@@ -1641,9 +1644,6 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 			work.trsListMap = trsListMap
 			work.trsSubscribe = trsSubscribe
 		}
-	}
-	if err != nil {
-		return
 	}
 
 	if !metaminer.IsPoW() { // Metadium

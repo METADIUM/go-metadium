@@ -20,8 +20,10 @@ package ethash
 import (
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -78,8 +80,22 @@ func (ethash *Ethash) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 }
 
 // Seal generates a new sealing request for the given input block and pushes
-// the result into the given channel. For the ethash engine, this method will
-// just panic as sealing is not supported anymore.
+// the result into the given channel. For Metadium PoA chains the block is
+// already signed in FinalizeAndAssemble; here we just attach a zero nonce and
+// pass the block on. For any other chain this panics because ethash PoW sealing
+// is no longer supported.
 func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
+	if !metaminer.IsPoW() {
+		// Metadium PoA: authentication is done via MinerNodeId/MinerNodeSig set in
+		// FinalizeAndAssemble. Just attach a zero nonce/mixdigest and return.
+		header := types.CopyHeader(block.Header())
+		header.Nonce = types.BlockNonce{}
+		header.MixDigest = common.Hash{}
+		select {
+		case results <- block.WithSeal(header):
+		default:
+		}
+		return nil
+	}
 	panic("ethash (pow) sealing not supported any more")
 }

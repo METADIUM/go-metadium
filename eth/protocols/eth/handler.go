@@ -175,6 +175,39 @@ var eth68 = map[uint64]msgHandler{
 	ReceiptsMsg:                   handleReceipts,
 	GetPooledTransactionsMsg:      handleGetPooledTransactions,
 	PooledTransactionsMsg:         handlePooledTransactions,
+	// Metadium extensions
+	GetPendingTxsMsg:  handleGetPendingTxs,
+	GetStatusExMsg:    handleGetStatusEx,
+	StatusExMsg:       handleStatusEx,
+	EtcdAddMemberMsg:  handleEtcdAddMember,
+	EtcdClusterMsg:    handleEtcdCluster,
+	TransactionsExMsg: handleTransactionsEx,
+}
+
+// eth66 is like eth68 but uses the old NewPooledTransactionHashes format (hashes only,
+// no type/size) and accepts GetNodeData/NodeData from peers that may still send them.
+var eth66 = map[uint64]msgHandler{
+	NewBlockHashesMsg:             handleNewBlockhashes,
+	NewBlockMsg:                   handleNewBlock,
+	TransactionsMsg:               handleTransactions,
+	NewPooledTransactionHashesMsg: handleNewPooledTransactionHashes66,
+	GetBlockHeadersMsg:            handleGetBlockHeaders,
+	BlockHeadersMsg:               handleBlockHeaders,
+	GetBlockBodiesMsg:             handleGetBlockBodies,
+	BlockBodiesMsg:                handleBlockBodies,
+	GetReceiptsMsg:                handleGetReceipts,
+	ReceiptsMsg:                   handleReceipts,
+	GetPooledTransactionsMsg:      handleGetPooledTransactions,
+	PooledTransactionsMsg:         handlePooledTransactions,
+	GetNodeDataMsg:                handleGetNodeData,
+	NodeDataMsg:                   handleNodeData,
+	// Metadium extensions
+	GetPendingTxsMsg:  handleGetPendingTxs,
+	GetStatusExMsg:    handleGetStatusEx,
+	StatusExMsg:       handleStatusEx,
+	EtcdAddMemberMsg:  handleEtcdAddMember,
+	EtcdClusterMsg:    handleEtcdCluster,
+	TransactionsExMsg: handleTransactionsEx,
 }
 
 // handleMessage is invoked whenever an inbound message is received from a remote
@@ -190,7 +223,12 @@ func handleMessage(backend Backend, peer *Peer) error {
 	}
 	defer msg.Discard()
 
-	var handlers = eth68
+	var handlers map[uint64]msgHandler
+	if peer.Version() >= ETH68 {
+		handlers = eth68
+	} else {
+		handlers = eth66
+	}
 
 	// Track the amount of time it takes to serve the request and run the handler
 	if metrics.Enabled {

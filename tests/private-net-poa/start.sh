@@ -30,6 +30,17 @@ done
 
 sleep 3
 
+# Add node1 as static peer to nodes 2 and 3 (static-nodes.json deprecated in v1.13+)
+BOOTNODE_ENODE=$(python3 -c "import json; print(json.load(open('static-nodes.json'))[0])" 2>/dev/null || true)
+if [[ -n "$BOOTNODE_ENODE" ]]; then
+  log "Connecting nodes 2/3 to bootnode..."
+  for port in 8546 8547; do
+    curl -sf -X POST -H "Content-Type: application/json" \
+      --data "{\"jsonrpc\":\"2.0\",\"method\":\"admin_addPeer\",\"params\":[\"$BOOTNODE_ENODE\"],\"id\":1}" \
+      "http://localhost:$port" &>/dev/null && log "  :$port addPeer OK" || warn "  :$port addPeer failed"
+  done
+fi
+
 log ""
 log "=== Network status ==="
 for port in 8545 8546 8547; do
