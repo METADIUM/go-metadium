@@ -265,24 +265,27 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	if diff := new(big.Int).Sub(header.Number, parent.Number); diff.Cmp(big.NewInt(1)) != 0 {
 		return consensus.ErrInvalidNumber
 	}
-	if chain.Config().IsShanghai(header.Number, header.Time) {
+	// Camellia fork activates Shanghai+Cancun EIPs on Metadium PoA — allow them.
+	if chain.Config().IsShanghai(header.Number, header.Time) && !chain.Config().IsCamellia(header.Number) {
 		return errors.New("ethash does not support shanghai fork")
 	}
-	// Verify the non-existence of withdrawalsHash.
-	if header.WithdrawalsHash != nil {
+	// Verify the non-existence of withdrawalsHash (not used in Metadium PoA).
+	if header.WithdrawalsHash != nil && !chain.Config().IsCamellia(header.Number) {
 		return fmt.Errorf("invalid withdrawalsHash: have %x, expected nil", header.WithdrawalsHash)
 	}
-	if chain.Config().IsCancun(header.Number, header.Time) {
+	if chain.Config().IsCancun(header.Number, header.Time) && !chain.Config().IsCamellia(header.Number) {
 		return errors.New("ethash does not support cancun fork")
 	}
-	// Verify the non-existence of cancun-specific header fields
-	switch {
-	case header.ExcessBlobGas != nil:
-		return fmt.Errorf("invalid excessBlobGas: have %d, expected nil", header.ExcessBlobGas)
-	case header.BlobGasUsed != nil:
-		return fmt.Errorf("invalid blobGasUsed: have %d, expected nil", header.BlobGasUsed)
-	case header.ParentBeaconRoot != nil:
-		return fmt.Errorf("invalid parentBeaconRoot, have %#x, expected nil", header.ParentBeaconRoot)
+	// Verify the non-existence of cancun-specific header fields (unless Camellia is active).
+	if !chain.Config().IsCamellia(header.Number) {
+		switch {
+		case header.ExcessBlobGas != nil:
+			return fmt.Errorf("invalid excessBlobGas: have %d, expected nil", header.ExcessBlobGas)
+		case header.BlobGasUsed != nil:
+			return fmt.Errorf("invalid blobGasUsed: have %d, expected nil", header.BlobGasUsed)
+		case header.ParentBeaconRoot != nil:
+			return fmt.Errorf("invalid parentBeaconRoot, have %#x, expected nil", header.ParentBeaconRoot)
+		}
 	}
 	// Add some fake checks for tests
 	if ethash.fakeDelay != nil {
@@ -530,7 +533,12 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 		header.MinerNodeSig = sig
 	}
 
-	// Header seems complete, assemble into a block and return
+	// Header seems complete, assemble into a block and return.
+	// Camellia (Shanghai+Cancun): WithdrawalsHash must be set before ExcessBlobGas in the
+	// RLP optional field sequence. Metadium PoA has no withdrawals, so use EmptyWithdrawalsHash.
+	if chain.Config().IsCamellia(header.Number) {
+		header.WithdrawalsHash = &types.EmptyWithdrawalsHash
+	}
 	return types.NewBlock(header, txs, uncles, receipts, trie.NewStackTrie(nil)), nil
 }
 
@@ -556,17 +564,19 @@ func (ethash *Ethash) SealHash(header *types.Header) (hash common.Hash) {
 	if header.BaseFee != nil {
 		enc = append(enc, header.BaseFee)
 	}
+	// Camellia fork enables Shanghai+Cancun EIPs on Metadium PoA.
+	// Include these fields in the seal hash when present (like beacon consensus does).
 	if header.WithdrawalsHash != nil {
-		panic("withdrawal hash set on ethash")
+		enc = append(enc, header.WithdrawalsHash)
 	}
 	if header.ExcessBlobGas != nil {
-		panic("excess blob gas set on ethash")
+		enc = append(enc, header.ExcessBlobGas)
 	}
 	if header.BlobGasUsed != nil {
-		panic("blob gas used set on ethash")
+		enc = append(enc, header.BlobGasUsed)
 	}
 	if header.ParentBeaconRoot != nil {
-		panic("parent beacon root set on ethash")
+		enc = append(enc, header.ParentBeaconRoot)
 	}
 	rlp.Encode(hasher, enc)
 	hasher.Sum(hash[:0])
