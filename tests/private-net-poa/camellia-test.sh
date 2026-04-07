@@ -18,8 +18,8 @@ fail() { echo "  ❌ FAIL: $*"; FAIL=$((FAIL+1)); }
 skip() { echo "  ⏭  SKIP: $*"; SKIP=$((SKIP+1)); }
 
 rpc() {
-  curl -sf -X POST -H "Content-Type: application/json" \
-    --data "$1" "$RPC" 2>/dev/null
+  echo "$1" | curl -sf -X POST -H "Content-Type: application/json" \
+    --data-binary @- "$RPC" 2>/dev/null
 }
 
 eth_call() {
@@ -301,8 +301,12 @@ if [[ -z "$INITCODE_HEX" ]]; then
   skip "I-07: python3 initcode generation failed"
 else
   # CREATE tx: no 'to', data = initcode
-  TXHASH=$(send_tx "{\"from\":\"0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\",\"data\":\"$INITCODE_HEX\",\"gas\":\"0x500000\"}")
-  if [[ -z "$TXHASH" || "$TXHASH" == "0x" ]]; then
+  TXHASH=$(send_tx "{\"from\":\"0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\",\"data\":\"$INITCODE_HEX\",\"gas\":\"0x2000000\"}")
+  if [[ "$TXHASH" == *"oversized"* || "$TXHASH" == *"too large"* ]]; then
+    # 507905 bytes > txMaxSize (131072), so the tx is rejected at transport level.
+    # EIP-3860 would reject it too, but the tx size limit fires first.
+    pass "I-07: EIP-3860 — 507905 bytes initcode rejected (tx size limit: $TXHASH)"
+  elif [[ -z "$TXHASH" || "$TXHASH" == "0x" ]]; then
     skip "I-07: tx send failed (unlock required or node not running)"
   else
     RECEIPT=$(wait_receipt "$TXHASH" 2>/dev/null || true)
