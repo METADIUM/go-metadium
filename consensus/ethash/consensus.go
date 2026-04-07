@@ -536,8 +536,11 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 	// Header seems complete, assemble into a block and return.
 	// Camellia (Shanghai+Cancun): WithdrawalsHash must be set before ExcessBlobGas in the
 	// RLP optional field sequence. Metadium PoA has no withdrawals, so use EmptyWithdrawalsHash.
+	// Pass empty (non-nil) withdrawals slice so peers can validate the block body correctly:
+	// block_validator.go checks header.WithdrawalsHash != nil && block.Withdrawals() == nil → error.
 	if chain.Config().IsCamellia(header.Number) {
 		header.WithdrawalsHash = &types.EmptyWithdrawalsHash
+		return types.NewBlockWithWithdrawals(header, txs, uncles, receipts, []*types.Withdrawal{}, trie.NewStackTrie(nil)), nil
 	}
 	return types.NewBlock(header, txs, uncles, receipts, trie.NewStackTrie(nil)), nil
 }
