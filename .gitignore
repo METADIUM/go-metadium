@@ -95,3 +95,7 @@ tests/private-net-poa/genesis.json
 tests/private-net-poa/static-nodes.json
 tests/private-net-poa/passwords.txt
 tests/private-net-poa/gmet
+/gmet
+/blob-tx-e2e
+/mixed-tx-e2e
+.gstack/

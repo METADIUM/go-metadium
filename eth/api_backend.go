@@ -55,9 +55,9 @@ func (b *EthAPIBackend) ChainConfig() *params.ChainConfig {
 	return b.eth.blockchain.Config()
 }
 
-func (b *EthAPIBackend) CurrentBlock() *types.Block {
+func (b *EthAPIBackend) CurrentBlock() *types.Header {
 	current := b.eth.blockchain.CurrentBlock()
-	if fast := b.eth.blockchain.CurrentFastBlock(); fast != nil && fast.NumberU64() > current.NumberU64() {
+	if fast := b.eth.blockchain.CurrentFastBlock(); fast != nil && fast.Number.Uint64() > current.Number.Uint64() {
 		return fast
 	}
 	return current
@@ -82,13 +82,13 @@ func (b *EthAPIBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumb
 		// CurrentFastBlock() tracks actual sync progress. Use the higher
 		// of the two so RPC reflects the real chain head.
 		current := b.eth.blockchain.CurrentBlock()
-		if fast := b.eth.blockchain.CurrentFastBlock(); fast != nil && fast.NumberU64() > current.NumberU64() {
-			return fast.Header(), nil
+		if fast := b.eth.blockchain.CurrentFastBlock(); fast != nil && fast.Number.Uint64() > current.Number.Uint64() {
+			return fast, nil
 		}
-		return current.Header(), nil
+		return current, nil
 	}
 	if number == rpc.FinalizedBlockNumber {
-		return b.eth.blockchain.CurrentFinalizedBlock().Header(), nil
+		return b.eth.blockchain.CurrentFinalBlock(), nil
 	}
 	return b.eth.blockchain.GetHeaderByNumber(uint64(number)), nil
 }
@@ -123,13 +123,17 @@ func (b *EthAPIBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumbe
 	// Otherwise resolve and return the block
 	if number == rpc.LatestBlockNumber {
 		current := b.eth.blockchain.CurrentBlock()
-		if fast := b.eth.blockchain.CurrentFastBlock(); fast != nil && fast.NumberU64() > current.NumberU64() {
-			return fast, nil
+		if fast := b.eth.blockchain.CurrentFastBlock(); fast != nil && fast.Number.Uint64() > current.Number.Uint64() {
+			return b.eth.blockchain.GetBlockByHash(fast.Hash()), nil
 		}
-		return current, nil
+		return b.eth.blockchain.GetBlockByHash(current.Hash()), nil
 	}
 	if number == rpc.FinalizedBlockNumber {
-		return b.eth.blockchain.CurrentFinalizedBlock(), nil
+		finalBlock := b.eth.blockchain.CurrentFinalBlock()
+		if finalBlock == nil {
+			return nil, nil
+		}
+		return b.eth.blockchain.GetBlockByHash(finalBlock.Hash()), nil
 	}
 	return b.eth.blockchain.GetBlockByNumber(uint64(number)), nil
 }

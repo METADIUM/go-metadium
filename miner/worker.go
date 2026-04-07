@@ -501,7 +501,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	for {
 		select {
 		case <-w.startCh:
-			clearPending(w.chain.CurrentBlock().NumberU64())
+			clearPending(w.chain.CurrentBlock().Number.Uint64())
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
 
@@ -588,7 +588,7 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 		select {
 		case <-w.startCh:
 			w.refreshPending(false)
-			clearPending(w.chain.CurrentBlock().NumberU64())
+			clearPending(w.chain.CurrentBlock().Number.Uint64())
 			commitSimple()
 
 		case head := <-w.chainHeadCh:
@@ -670,12 +670,12 @@ func (w *worker) mainLoop() {
 		case <-cleanTicker.C:
 			chainHead := w.chain.CurrentBlock()
 			for hash, uncle := range w.localUncles {
-				if uncle.NumberU64()+staleThreshold <= chainHead.NumberU64() {
+				if uncle.NumberU64()+staleThreshold <= chainHead.Number.Uint64() {
 					delete(w.localUncles, hash)
 				}
 			}
 			for hash, uncle := range w.remoteUncles {
-				if uncle.NumberU64()+staleThreshold <= chainHead.NumberU64() {
+				if uncle.NumberU64()+staleThreshold <= chainHead.Number.Uint64() {
 					delete(w.remoteUncles, hash)
 				}
 			}
@@ -1425,22 +1425,27 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	var till time.Time
 
 	// Find the parent block for sealing task
-	parent := w.chain.CurrentBlock()
+	var parent *types.Header
 	if genParams.parentHash != (common.Hash{}) {
-		parent = w.chain.GetBlockByHash(genParams.parentHash)
+		parentBlock := w.chain.GetBlockByHash(genParams.parentHash)
+		if parentBlock != nil {
+			parent = parentBlock.Header()
+		}
+	} else {
+		parent = w.chain.CurrentBlock()
 	}
 	if parent == nil {
 		return nil, fmt.Errorf("missing parent")
 	}
-	blockInterval, _, blockGasLimit, baseFeeMaxChangeRate, gasTargetPercentage, _ := metaminer.GetBlockBuildParameters(parent.Number())
+	blockInterval, _, blockGasLimit, baseFeeMaxChangeRate, gasTargetPercentage, _ := metaminer.GetBlockBuildParameters(parent.Number)
 	// Sanity check the timestamp correctness, recap the timestamp
 	// to parent+1 if the mutation is allowed.
 	timestamp := genParams.timestamp
-	if metaminer.IsPoW() && parent.Time() >= timestamp {
+	if metaminer.IsPoW() && parent.Time >= timestamp {
 		if genParams.forceTime {
-			return nil, fmt.Errorf("invalid timestamp, parent %d given %d", parent.Time(), timestamp)
+			return nil, fmt.Errorf("invalid timestamp, parent %d given %d", parent.Time, timestamp)
 		}
-		timestamp = parent.Time() + 1
+		timestamp = parent.Time + 1
 		// If the block timestamp is in the future, wait until that time.
 		// This prevents timestamp drift when multiple nodes mine in parallel
 		// at sub-second speed (hashimeta/nodag mode with avocadoBlock=0).
@@ -1449,7 +1454,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		}
 	}
 	// Construct the sealing block header, set the extra field if it's allowed
-	num := parent.Number()
+	num := new(big.Int).Set(parent.Number)
 	num.Add(num, common.Big1)
 
 	// metadium
@@ -1459,7 +1464,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	header := &types.Header{
 		ParentHash: parent.Hash(),
 		Number:     num,
-		GasLimit:   core.CalcGasLimit(parent.GasLimit(), w.config.GasCeil),
+		GasLimit:   core.CalcGasLimit(parent.GasLimit, w.config.GasCeil),
 		Fees:       big.NewInt(0),
 		Time:       timestamp,
 		Coinbase:   genParams.coinbase,
@@ -1468,7 +1473,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		header.Extra = w.extra
 	}
 	if !metaminer.IsPoW() {
-		header.GasLimit = core.CalcGasLimit(parent.GasLimit(), blockGasLimit.Uint64())
+		header.GasLimit = core.CalcGasLimit(parent.GasLimit, blockGasLimit.Uint64())
 	}
 	// Set the randomness field from the beacon chain if it's available.
 	if genParams.random != (common.Hash{}) {
@@ -1476,13 +1481,13 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	}
 	// Set baseFee and GasLimit if we are on an EIP-1559 chain
 	if w.chainConfig.IsLondon(header.Number) {
-		header.BaseFee = misc.CalcBaseFee(w.chainConfig, parent.Header())
-		if !w.chainConfig.IsLondon(parent.Number()) {
+		header.BaseFee = misc.CalcBaseFee(w.chainConfig, parent)
+		if !w.chainConfig.IsLondon(parent.Number) {
 			if metaminer.IsPoW() {
-				parentGasLimit := parent.GasLimit() * params.ElasticityMultiplier
+				parentGasLimit := parent.GasLimit * params.ElasticityMultiplier
 				header.GasLimit = core.CalcGasLimit(parentGasLimit, w.config.GasCeil)
 			} else {
-				header.GasLimit = parent.GasLimit()
+				header.GasLimit = parent.GasLimit
 			}
 		}
 	}
@@ -1492,11 +1497,15 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		return nil, err
 	}
 	// EIP-4844: Initialize ExcessBlobGas for Camellia fork blocks.
-	initExcessBlobGas(w.chainConfig, header, parent.Header())
+	initExcessBlobGas(w.chainConfig, header, parent)
 	// Could potentially happen if starting to mine in an odd state.
 	// Note genParams.coinbase can be different with header.Coinbase
 	// since clique algorithm can modify the coinbase field in header.
-	env, err := w.makeEnv(parent, header, genParams.coinbase)
+	parentBlock := w.chain.GetBlockByHash(parent.Hash())
+	if parentBlock == nil {
+		return nil, fmt.Errorf("parent block not found: %s", parent.Hash().Hex())
+	}
+	env, err := w.makeEnv(parentBlock, header, genParams.coinbase)
 	if err != nil {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err
@@ -1646,26 +1655,26 @@ func (w *worker) refreshPending(locked bool) {
 
 	parent := w.chain.CurrentBlock()
 
-	blockInterval, _, blockGasLimit, baseFeeMaxChangeRate, gasTargetPercentage, _ := metaminer.GetBlockBuildParameters(parent.Number())
-	num := parent.Number()
+	blockInterval, _, blockGasLimit, baseFeeMaxChangeRate, gasTargetPercentage, _ := metaminer.GetBlockBuildParameters(parent.Number)
+	num := new(big.Int).Set(parent.Number)
 	num.Add(num, common.Big1)
 	header := &types.Header{
 		ParentHash: parent.Hash(),
 		Number:     num,
-		GasLimit:   core.CalcGasLimit(parent.GasLimit(), w.config.GasCeil),
+		GasLimit:   core.CalcGasLimit(parent.GasLimit, w.config.GasCeil),
 		Extra:      w.extra,
 		Time:       uint64(time.Now().Unix()),
 		Fees:       big.NewInt(0),
 	}
 	if !metaminer.IsPoW() {
-		header.GasLimit = core.CalcGasLimit(parent.GasLimit(), blockGasLimit.Uint64())
+		header.GasLimit = core.CalcGasLimit(parent.GasLimit, blockGasLimit.Uint64())
 	}
 	header.Coinbase = w.coinbase
 	// Set baseFee and GasLimit if we are on an EIP-1559 chain
 	if w.chainConfig.IsLondon(header.Number) {
-		header.BaseFee = misc.CalcBaseFee(w.chainConfig, parent.Header())
-		if !w.chainConfig.IsLondon(parent.Number()) {
-			header.GasLimit = parent.GasLimit()
+		header.BaseFee = misc.CalcBaseFee(w.chainConfig, parent)
+		if !w.chainConfig.IsLondon(parent.Number) {
+			header.GasLimit = parent.GasLimit
 		}
 	}
 	if err := w.engine.Prepare(w.chain, header); err != nil {
@@ -1673,8 +1682,9 @@ func (w *worker) refreshPending(locked bool) {
 		return
 	}
 	// EIP-4844: Initialize ExcessBlobGas for Camellia fork blocks.
-	initExcessBlobGas(w.chainConfig, header, parent.Header())
-	if env, err := w.makeEnv(parent, header, header.Coinbase); err == nil {
+	initExcessBlobGas(w.chainConfig, header, parent)
+	parentBlock := w.chain.GetBlockByHash(parent.Hash())
+	if env, err := w.makeEnv(parentBlock, header, header.Coinbase); err == nil {
 		env.blockInterval = blockInterval
 		env.blockGasLimit = blockGasLimit
 		env.baseFeeMaxChangeRate = baseFeeMaxChangeRate
@@ -1710,7 +1720,7 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 	tooBehindMultiple := int64(2)        // ignore if > tooBehindMultiple * height * blockInterval
 
 	parent := w.chain.CurrentBlock()
-	num := parent.Number()
+	num := new(big.Int).Set(parent.Number)
 	num.Add(num, common.Big1)
 	now := time.Now()
 	nowInSeconds := now.Unix()
@@ -1764,8 +1774,8 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 		offset = 1
 	}
 	timestamp = uint64(nowInSeconds)
-	if timestamp < parent.Number().Uint64() {
-		timestamp = parent.Number().Uint64()
+	if timestamp < parent.Number.Uint64() {
+		timestamp = parent.Number.Uint64()
 	}
 	switch offset {
 	case -1: // behind, i.e. too few blocks so far, need to make more
@@ -1775,7 +1785,7 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 		} else {
 			tms += (blockInterval-1)*1000 + params.BlockMinBuildTime
 		}
-		if tms/1000 <= int64(parent.Time()) {
+		if tms/1000 <= int64(parent.Time) {
 			// make sure that no more than 2 blocks have the same timestamp
 			tms = (nowInSeconds + 1) * 1000
 		}
@@ -1814,7 +1824,7 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 	}
 	if !metaminer.IsPoW() {
 		parent := w.chain.CurrentBlock()
-		height := new(big.Int).Add(parent.Number(), common.Big1)
+		height := new(big.Int).Add(parent.Number, common.Big1)
 		if !w.chain.Config().IsBokbunja(height) {
 			if !metaminer.IsMiner() {
 				w.refreshPending(true)

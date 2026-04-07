@@ -29,13 +29,14 @@ import (
 
 // mockChain implements blobpool.BlockChain for testing.
 type mockChain struct {
-	block   *types.Block
+	block   *types.Header
+	full    *types.Block
 	statedb *state.StateDB
 	config  *params.ChainConfig
 }
 
-func (m *mockChain) CurrentBlock() *types.Block                  { return m.block }
-func (m *mockChain) GetBlock(common.Hash, uint64) *types.Block   { return m.block }
+func (m *mockChain) CurrentBlock() *types.Header { return m.block }
+func (m *mockChain) GetBlock(common.Hash, uint64) *types.Block   { return m.full }
 func (m *mockChain) StateAt(common.Hash) (*state.StateDB, error) { return m.statedb, nil }
 func (m *mockChain) Config() *params.ChainConfig                 { return m.config }
 func (m *mockChain) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription {
@@ -72,7 +73,8 @@ func newTestPool(t *testing.T, balance *big.Int) (*BlobPool, *ecdsa.PrivateKey, 
 	block := types.NewBlockWithHeader(header)
 
 	chain := &mockChain{
-		block:   block,
+		block:   header,
+		full:    block,
 		statedb: statedb,
 		config:  chainCfg,
 	}

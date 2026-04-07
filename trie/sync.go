@@ -155,7 +155,7 @@ func (s *Sync) AddSubTrie(root common.Hash, path []byte, parent common.Hash, cal
 	}
 	// If database says this is a duplicate, then at least the trie node is
 	// present, and we hold the assumption that it's NOT legacy contract code.
-	if rawdb.HasTrieNode(s.database, root) {
+	if rawdb.HasLegacyTrieNode(s.database, root) {
 		return
 	}
 	// Assemble the new sub-trie sync request
@@ -299,7 +299,7 @@ func (s *Sync) Process(result SyncResult) error {
 func (s *Sync) Commit(dbw ethdb.Batch) error {
 	// Dump the membatch into a database dbw
 	for key, value := range s.membatch.nodes {
-		rawdb.WriteTrieNode(dbw, key, value)
+		rawdb.WriteLegacyTrieNode(dbw, key, value)
 	}
 	for key, value := range s.membatch.codes {
 		rawdb.WriteCode(dbw, key, value)
@@ -400,7 +400,7 @@ func (s *Sync) children(req *request, object node) ([]*request, error) {
 			}
 			// If database says duplicate, then at least the trie node is present
 			// and we hold the assumption that it's NOT legacy contract code.
-			if rawdb.HasTrieNode(s.database, hash) {
+			if rawdb.HasLegacyTrieNode(s.database, hash) {
 				continue
 			}
 			// Locally unknown node, schedule for retrieval

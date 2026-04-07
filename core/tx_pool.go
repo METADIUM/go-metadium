@@ -150,7 +150,7 @@ const (
 // blockChain provides the state of blockchain and current gas limit to do
 // some pre checks in tx pool and event subscribers.
 type blockChain interface {
-	CurrentBlock() *types.Block
+	CurrentBlock() *types.Header
 	GetBlock(hash common.Hash, number uint64) *types.Block
 	StateAt(root common.Hash) (*state.StateDB, error)
 
@@ -160,7 +160,7 @@ type blockChain interface {
 // LegacyPoolBlockChain is the exported version of the blockChain interface.
 // legacypool 패키지가 순환 임포트 없이 *core.BlockChain을 수용할 수 있도록 공개한다.
 type LegacyPoolBlockChain interface {
-	CurrentBlock() *types.Block
+	CurrentBlock() *types.Header
 	GetBlock(hash common.Hash, number uint64) *types.Block
 	StateAt(root common.Hash) (*state.StateDB, error)
 	SubscribeChainHeadEvent(ch chan<- ChainHeadEvent) event.Subscription
@@ -332,7 +332,7 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 		pool.locals.add(addr)
 	}
 	pool.priced = newTxPricedList(pool.all)
-	pool.reset(nil, chain.CurrentBlock().Header())
+	pool.reset(nil, chain.CurrentBlock())
 
 	// Start the ecrecover helper
 	go pool.senderResolver.Run()
@@ -391,8 +391,8 @@ func (pool *TxPool) loop() {
 		// Handle ChainHeadEvent
 		case ev := <-pool.chainHeadCh:
 			if ev.Block != nil {
-				pool.requestReset(head.Header(), ev.Block.Header())
-				head = ev.Block
+				pool.requestReset(head, ev.Block.Header())
+				head = ev.Block.Header()
 			}
 
 		// System shutdown.
@@ -802,8 +802,8 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 			return fmt.Errorf("blob transaction must have a recipient address")
 		}
 		// Check MaxFeePerBlobGas against current blob base fee
-		if currentHead := pool.chain.CurrentBlock(); currentHead != nil && currentHead.Header().ExcessBlobGas != nil {
-			blobBaseFee := types.CalcBlobBaseFee(currentHead.Header().ExcessBlobGas)
+		if currentHead := pool.chain.CurrentBlock(); currentHead != nil && currentHead.ExcessBlobGas != nil {
+			blobBaseFee := types.CalcBlobBaseFee(currentHead.ExcessBlobGas)
 			if tx.MaxFeePerBlobGas() == nil || tx.MaxFeePerBlobGas().Cmp(blobBaseFee) < 0 {
 				return ErrBlobFeeCapTooLow
 			}
@@ -1454,7 +1454,7 @@ func (pool *TxPool) reset(oldHead, newHead *types.Header) {
 	}
 	// Initialize the internal state to the current head
 	if newHead == nil {
-		newHead = pool.chain.CurrentBlock().Header() // Special case during testing
+		newHead = pool.chain.CurrentBlock() // Special case during testing
 	}
 	statedb, err := pool.chain.StateAt(newHead.Root)
 	if err != nil {

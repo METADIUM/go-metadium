@@ -24,7 +24,7 @@ import (
 // BlockChain defines the minimal blockchain interface the pool needs.
 // *core.BlockChain satisfies this interface.
 type BlockChain interface {
-	CurrentBlock() *types.Block
+	CurrentBlock() *types.Header
 	GetBlock(hash common.Hash, number uint64) *types.Block
 	StateAt(root common.Hash) (*state.StateDB, error)
 	SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription

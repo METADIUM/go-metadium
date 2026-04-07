@@ -1188,7 +1188,7 @@ func TestFork(t *testing.T) {
 		sim.Commit()
 	}
 	// 3.
-	if sim.blockchain.CurrentBlock().NumberU64() != uint64(n) {
+	if sim.blockchain.CurrentBlock().Number.Uint64() != uint64(n) {
 		t.Error("wrong chain length")
 	}
 	// 4.
@@ -1198,7 +1198,7 @@ func TestFork(t *testing.T) {
 		sim.Commit()
 	}
 	// 6.
-	if sim.blockchain.CurrentBlock().NumberU64() != uint64(n+1) {
+	if sim.blockchain.CurrentBlock().Number.Uint64() != uint64(n+1) {
 		t.Error("wrong chain length")
 	}
 }

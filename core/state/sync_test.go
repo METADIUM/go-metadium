@@ -472,8 +472,8 @@ func TestIncompleteStateSync(t *testing.T) {
 			val = rawdb.ReadCode(dstDb, node)
 			rawdb.DeleteCode(dstDb, node)
 		} else {
-			val = rawdb.ReadTrieNode(dstDb, node)
-			rawdb.DeleteTrieNode(dstDb, node)
+			val = rawdb.ReadLegacyTrieNode(dstDb, node)
+			rawdb.DeleteLegacyTrieNode(dstDb, node)
 		}
 		if err := checkStateConsistency(dstDb, added[0]); err == nil {
 			t.Fatalf("trie inconsistency not caught, missing: %x", key)
@@ -481,7 +481,7 @@ func TestIncompleteStateSync(t *testing.T) {
 		if code {
 			rawdb.WriteCode(dstDb, node, val)
 		} else {
-			rawdb.WriteTrieNode(dstDb, node, val)
+			rawdb.WriteLegacyTrieNode(dstDb, node, val)
 		}
 	}
 }

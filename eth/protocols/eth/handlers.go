@@ -898,7 +898,7 @@ func handleTransactionsEx(backend Backend, msg Decoder, peer *Peer) error {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
 	f := func() error {
-		signer := types.MakeSigner(backend.Chain().Config(), backend.Chain().CurrentBlock().Number())
+		signer := types.MakeSigner(backend.Chain().Config(), backend.Chain().CurrentBlock().Number)
 		txs := types.TxExs2Txs(signer, txexs, metaminer.IsPartner(peer.ID()))
 		for i, tx := range txs {
 			// Validate and mark the remote transaction

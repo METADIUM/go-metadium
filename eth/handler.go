@@ -154,12 +154,12 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		// support the snap protocol, making snap sync impossible.
 		// Instead, reset fastBlock to allow clean full sync.
 		fullBlock, fastBlock := h.chain.CurrentBlock(), h.chain.CurrentFastBlock()
-		if fullBlock.NumberU64() == 0 && fastBlock.NumberU64() > 0 {
+		if fullBlock.Number.Uint64() == 0 && fastBlock.Number.Uint64() > 0 {
 			log.Warn("Previous snap sync data detected but full sync requested, honoring full sync mode",
-				"fullBlock", fullBlock.NumberU64(), "fastBlock", fastBlock.NumberU64())
+				"fullBlock", fullBlock.Number.Uint64(), "fastBlock", fastBlock.Number.Uint64())
 		}
 	} else {
-		if h.chain.CurrentBlock().NumberU64() > 0 {
+		if h.chain.CurrentBlock().Number.Uint64() > 0 {
 			// Print warning log if database is not empty to run snap sync.
 			log.Warn("Switch sync mode from snap sync to full sync")
 		} else {
@@ -184,10 +184,10 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		// If we've successfully finished a sync cycle and passed any required
 		// checkpoint, enable accepting transactions from the network
 		head := h.chain.CurrentBlock()
-		if head.NumberU64() >= h.checkpointNumber {
+		if head.Number.Uint64() >= h.checkpointNumber {
 			// Checkpoint passed, sanity check the timestamp to have a fallback mechanism
 			// for non-checkpointed (number = 0) private networks.
-			if head.Time() >= uint64(time.Now().AddDate(0, -1, 0).Unix()) {
+			if head.Time >= uint64(time.Now().AddDate(0, -1, 0).Unix()) {
 				atomic.StoreUint32(&h.acceptTxs, 1)
 			}
 		}
@@ -217,7 +217,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		return h.chain.Engine().VerifyHeader(h.chain, header, true)
 	}
 	heighter := func() uint64 {
-		return h.chain.CurrentBlock().NumberU64()
+		return h.chain.CurrentBlock().Number.Uint64()
 	}
 	inserter := func(blocks types.Blocks) (int, error) {
 		// All the block fetcher activities should be disabled
@@ -240,7 +240,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		// the propagated block if the head is too old. Unfortunately there is a corner
 		// case when starting new networks, where the genesis might be ancient (0 unix)
 		// which would prevent full nodes from accepting it.
-		if h.chain.CurrentBlock().NumberU64() < h.checkpointNumber {
+		if h.chain.CurrentBlock().Number.Uint64() < h.checkpointNumber {
 			log.Warn("Unsynced yet, discarded propagated block", "number", blocks[0].Number(), "hash", blocks[0].Hash())
 			return 0, nil
 		}

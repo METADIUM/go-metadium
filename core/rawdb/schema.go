@@ -25,6 +25,16 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 )
 
+// HashScheme is the legacy hash-based state scheme with which trie nodes are
+// stored in the disk with node hash as the database key. This is compatible
+// with all existing databases and is the default for hash-based nodes.
+const HashScheme = "hashScheme"
+
+// PathScheme is the new path-based state scheme with which trie nodes are stored
+// in the disk with node path as the database key. This scheme is not yet activated
+// in go-metadium; it is defined for upstream alignment only.
+const PathScheme = "pathScheme"
+
 // The fields below define the low level database schema prefixing.
 var (
 	// databaseVersionKey tracks the current database version.

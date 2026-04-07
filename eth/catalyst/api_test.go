@@ -216,12 +216,12 @@ func TestInvalidPayloadTimestamp(t *testing.T) {
 		shouldErr bool
 	}{
 		{0, true},
-		{parent.Time(), true},
-		{parent.Time() - 1, true},
+		{parent.Time, true},
+		{parent.Time - 1, true},
 
 		// TODO (MariusVanDerWijden) following tests are currently broken,
 		// fixed in upcoming merge-kiln-v2 pr
-		//{parent.Time() + 1, false},
+		//{parent.Time + 1, false},
 		//{uint64(time.Now().Unix()) + uint64(time.Minute), false},
 	}
 
@@ -230,7 +230,7 @@ func TestInvalidPayloadTimestamp(t *testing.T) {
 			params := beacon.PayloadAttributesV1{
 				Timestamp:             test.time,
 				Random:                crypto.Keccak256Hash([]byte{byte(123)}),
-				SuggestedFeeRecipient: parent.Coinbase(),
+				SuggestedFeeRecipient: parent.Coinbase,
 			}
 			fcState := beacon.ForkchoiceStateV1{
 				HeadBlockHash:      parent.Hash(),
@@ -286,7 +286,7 @@ func TestEth2NewBlock(t *testing.T) {
 		if err != nil || newResp.Status != "VALID" {
 			t.Fatalf("Failed to insert block: %v", err)
 		}
-		if ethservice.BlockChain().CurrentBlock().NumberU64() != block.NumberU64()-1 {
+		if ethservice.BlockChain().CurrentBlock().Number.Uint64() != block.NumberU64()-1 {
 			t.Fatalf("Chain head shouldn't be updated")
 		}
 		checkLogEvents(t, newLogCh, rmLogsCh, 0, 0)
@@ -298,7 +298,7 @@ func TestEth2NewBlock(t *testing.T) {
 		if _, err := api.ForkchoiceUpdatedV1(fcState, nil); err != nil {
 			t.Fatalf("Failed to insert block: %v", err)
 		}
-		if ethservice.BlockChain().CurrentBlock().NumberU64() != block.NumberU64() {
+		if ethservice.BlockChain().CurrentBlock().Number.Uint64() != block.NumberU64() {
 			t.Fatalf("Chain head should be updated")
 		}
 		checkLogEvents(t, newLogCh, rmLogsCh, 1, 0)
@@ -308,7 +308,7 @@ func TestEth2NewBlock(t *testing.T) {
 
 	// Introduce fork chain
 	var (
-		head = ethservice.BlockChain().CurrentBlock().NumberU64()
+		head = ethservice.BlockChain().CurrentBlock().Number.Uint64()
 	)
 	parent = preMergeBlocks[len(preMergeBlocks)-1]
 	for i := 0; i < 10; i++ {
@@ -326,7 +326,7 @@ func TestEth2NewBlock(t *testing.T) {
 		if err != nil || newResp.Status != "VALID" {
 			t.Fatalf("Failed to insert block: %v", err)
 		}
-		if ethservice.BlockChain().CurrentBlock().NumberU64() != head {
+		if ethservice.BlockChain().CurrentBlock().Number.Uint64() != head {
 			t.Fatalf("Chain head shouldn't be updated")
 		}
 
@@ -338,7 +338,7 @@ func TestEth2NewBlock(t *testing.T) {
 		if _, err := api.ForkchoiceUpdatedV1(fcState, nil); err != nil {
 			t.Fatalf("Failed to insert block: %v", err)
 		}
-		if ethservice.BlockChain().CurrentBlock().NumberU64() != block.NumberU64() {
+		if ethservice.BlockChain().CurrentBlock().Number.Uint64() != block.NumberU64() {
 			t.Fatalf("Chain head should be updated")
 		}
 		parent, head = block, block.NumberU64()
@@ -356,7 +356,7 @@ func TestEth2DeepReorg(t *testing.T) {
 		var (
 			api    = NewConsensusAPI(ethservice, nil)
 			parent = preMergeBlocks[len(preMergeBlocks)-core.TriesInMemory-1]
-			head   = ethservice.BlockChain().CurrentBlock().NumberU64()
+			head   = ethservice.BlockChain().CurrentBlock().Number.Uint64()
 		)
 		if ethservice.BlockChain().HasBlockAndState(parent.Hash(), parent.NumberU64()) {
 			t.Errorf("Block %d not pruned", parent.NumberU64())
@@ -364,7 +364,7 @@ func TestEth2DeepReorg(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			execData, err := api.assembleBlock(AssembleBlockParams{
 				ParentHash: parent.Hash(),
-				Timestamp:  parent.Time() + 5,
+				Timestamp:  parent.Time + 5,
 			})
 			if err != nil {
 				t.Fatalf("Failed to create the executable data %v", err)
@@ -377,13 +377,13 @@ func TestEth2DeepReorg(t *testing.T) {
 			if err != nil || newResp.Status != "VALID" {
 				t.Fatalf("Failed to insert block: %v", err)
 			}
-			if ethservice.BlockChain().CurrentBlock().NumberU64() != head {
+			if ethservice.BlockChain().CurrentBlock().Number.Uint64() != head {
 				t.Fatalf("Chain head shouldn't be updated")
 			}
 			if err := api.setHead(block.Hash()); err != nil {
 				t.Fatalf("Failed to set head: %v", err)
 			}
-			if ethservice.BlockChain().CurrentBlock().NumberU64() != block.NumberU64() {
+			if ethservice.BlockChain().CurrentBlock().Number.Uint64() != block.NumberU64() {
 				t.Fatalf("Chain head should be updated")
 			}
 			parent, head = block, block.NumberU64()
@@ -430,7 +430,7 @@ func TestFullAPI(t *testing.T) {
 	ethservice.Merger().ReachTTD()
 	defer n.Close()
 	var (
-		parent = ethservice.BlockChain().CurrentBlock()
+		parent = ethservice.BlockChain().GetBlockByHash(ethservice.BlockChain().CurrentBlock().Hash())
 		// This EVM code generates a log when the contract is created.
 		logCode = common.Hex2Bytes("60606040525b7f24ec1d3ff24c2f6ff210738839dbc339cd45a5294d85c79361016243157aae7b60405180905060405180910390a15b600a8060416000396000f360606040526008565b00")
 	)
@@ -467,13 +467,13 @@ func setupBlocks(t *testing.T, ethservice *eth.Ethereum, n int, parent *types.Bl
 		if _, err := api.ForkchoiceUpdatedV1(fcState, nil); err != nil {
 			t.Fatalf("Failed to insert block: %v", err)
 		}
-		if ethservice.BlockChain().CurrentBlock().NumberU64() != payload.Number {
+		if ethservice.BlockChain().CurrentBlock().Number.Uint64() != payload.Number {
 			t.Fatal("Chain head should be updated")
 		}
-		if ethservice.BlockChain().CurrentFinalizedBlock().NumberU64() != payload.Number-1 {
+		if ethservice.BlockChain().CurrentFinalizedBlock().Number.Uint64() != payload.Number-1 {
 			t.Fatal("Finalized block should be updated")
 		}
-		parent = ethservice.BlockChain().CurrentBlock()
+		parent = ethservice.BlockChain().GetBlockByHash(ethservice.BlockChain().CurrentBlock().Hash())
 	}
 }
 
@@ -554,15 +554,15 @@ func TestNewPayloadOnInvalidChain(t *testing.T) {
 		logCode = common.Hex2Bytes("60606040525b7f24ec1d3ff24c2f6ff210738839dbc339cd45a5294d85c79361016243157aae7b60405180905060405180910390a15b600a8060416000396000f360606040526008565b00")
 	)
 	for i := 0; i < 10; i++ {
-		statedb, _ := ethservice.BlockChain().StateAt(parent.Root())
+		statedb, _ := ethservice.BlockChain().StateAt(parent.Root)
 		nonce := statedb.GetNonce(testAddr)
 		tx, _ := types.SignTx(types.NewContractCreation(nonce, new(big.Int), 1000000, big.NewInt(2*params.InitialBaseFee), logCode), types.LatestSigner(ethservice.BlockChain().Config()), testKey)
 		ethservice.TxPool().AddLocal(tx)
 
 		params := beacon.PayloadAttributesV1{
-			Timestamp:             parent.Time() + 1,
+			Timestamp:             parent.Time + 1,
 			Random:                crypto.Keccak256Hash([]byte{byte(i)}),
-			SuggestedFeeRecipient: parent.Coinbase(),
+			SuggestedFeeRecipient: parent.Coinbase,
 		}
 
 		fcState := beacon.ForkchoiceStateV1{
@@ -601,7 +601,7 @@ func TestNewPayloadOnInvalidChain(t *testing.T) {
 		if _, err := api.ForkchoiceUpdatedV1(fcState, nil); err != nil {
 			t.Fatalf("Failed to insert block: %v", err)
 		}
-		if ethservice.BlockChain().CurrentBlock().NumberU64() != payload.Number {
+		if ethservice.BlockChain().CurrentBlock().Number.Uint64() != payload.Number {
 			t.Fatalf("Chain head should be updated")
 		}
 		parent = ethservice.BlockChain().CurrentBlock()
@@ -623,7 +623,7 @@ func TestEmptyBlocks(t *testing.T) {
 	ethservice.Merger().ReachTTD()
 	defer n.Close()
 
-	commonAncestor := ethservice.BlockChain().CurrentBlock()
+	commonAncestor := ethservice.BlockChain().GetBlockByHash(ethservice.BlockChain().CurrentBlock().Hash())
 	api := NewConsensusAPI(ethservice)
 
 	// Setup 10 blocks on the canonical chain
@@ -771,11 +771,11 @@ func TestTrickRemoteBlockCache(t *testing.T) {
 	apiA := NewConsensusAPI(ethserviceA)
 	apiB := NewConsensusAPI(ethserviceB)
 
-	commonAncestor := ethserviceA.BlockChain().CurrentBlock()
+	commonAncestor := ethserviceA.BlockChain().GetBlockByHash(ethserviceA.BlockChain().CurrentBlock().Hash())
 
 	// Setup 10 blocks on the canonical chain
 	setupBlocks(t, ethserviceA, 10, commonAncestor, func(parent *types.Block) {})
-	commonAncestor = ethserviceA.BlockChain().CurrentBlock()
+	commonAncestor = ethserviceA.BlockChain().GetBlockByHash(ethserviceA.BlockChain().CurrentBlock().Hash())
 
 	var invalidChain []*beacon.ExecutableDataV1
 	// create a valid payload (P1)

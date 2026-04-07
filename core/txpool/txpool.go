@@ -41,7 +41,7 @@ type TxPool struct {
 // New creates a new TxPool and initializes all sub-pools.
 // gasTip: 최소 gas tip. chain: 체인 인터페이스. subpools: SubPool 구현 목록 (순서 무관).
 func New(gasTip *big.Int, chain BlockChain, subpools []SubPool) (*TxPool, error) {
-	head := chain.CurrentBlock().Header()
+	head := chain.CurrentBlock()
 
 	pool := &TxPool{
 		subpools: subpools,

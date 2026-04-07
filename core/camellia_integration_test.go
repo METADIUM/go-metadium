@@ -288,9 +288,9 @@ func TestBlobTxPreCheckErrors(t *testing.T) {
 	blobBaseFee := types.CalcBlobBaseFee(excessBlobGas)
 
 	makeEVM := func() *vm.EVM {
-		blockCtx := NewEVMBlockContext(chain.CurrentBlock().Header(), chain, &addr)
+		blockCtx := NewEVMBlockContext(chain.CurrentBlock(), chain, &addr)
 		blockCtx.ExcessBlobGas = excessBlobGas
-		statedb, _ := chain.StateAt(chain.CurrentBlock().Root())
+		statedb, _ := chain.StateAt(chain.CurrentBlock().Root)
 		return vm.NewEVM(blockCtx, vm.TxContext{Origin: addr}, statedb, cfg, vm.Config{})
 	}
 

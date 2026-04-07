@@ -75,7 +75,7 @@ func (b *beaconBackfiller) suspend() *types.Header {
 
 	// Sync cycle was just terminated, retrieve and return the last filled header.
 	// Can't use `filled` as that contains a stale value from before cancellation.
-	return b.downloader.blockchain.CurrentFastBlock().Header()
+	return b.downloader.blockchain.CurrentFastBlock()
 }
 
 // resume starts the downloader threads for backfilling state and chain data.
@@ -100,7 +100,7 @@ func (b *beaconBackfiller) resume() {
 		defer func() {
 			b.lock.Lock()
 			b.filling = false
-			b.filled = b.downloader.blockchain.CurrentFastBlock().Header()
+			b.filled = b.downloader.blockchain.CurrentFastBlock()
 			b.lock.Unlock()
 		}()
 		// If the downloader fails, report an error as in beacon chain mode there
@@ -190,9 +190,9 @@ func (d *Downloader) findBeaconAncestor() (uint64, error) {
 
 	switch d.getMode() {
 	case FullSync:
-		chainHead = d.blockchain.CurrentBlock().Header()
+		chainHead = d.blockchain.CurrentBlock()
 	case SnapSync:
-		chainHead = d.blockchain.CurrentFastBlock().Header()
+		chainHead = d.blockchain.CurrentFastBlock()
 	default:
 		chainHead = d.lightchain.CurrentHeader()
 	}

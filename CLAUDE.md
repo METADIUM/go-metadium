@@ -18,8 +18,8 @@ Metadium 블록체인 노드 구현 (go-ethereum fork) — Camellia fork (Shangh
 - `scripts/` — 빌드/배포/RPC 테스트 스크립트
 
 ## 실행
-- 빌드 (LevelDB): `CGO_ENABLED=0 go build -o geth ./cmd/geth`
-- 빌드 (RocksDB): `CGO_ENABLED=1 CGO_LDFLAGS="-lrocksdb -lstdc++ -lm -lz -lbz2 -lsnappy -llz4 -lzstd" go build -tags rocksdb -o geth ./cmd/geth`
+- 빌드 (LevelDB): `CGO_ENABLED=0 go build -o gmet ./cmd/geth`
+- 빌드 (RocksDB): `CGO_ENABLED=1 CGO_LDFLAGS="-lrocksdb -lstdc++ -lm -lz -lbz2 -lsnappy -llz4 -lzstd" go build -tags rocksdb -o gmet ./cmd/geth`
 - 테스트: `go test ./core/...`
 - RPC 테스트: `bash scripts/rpc-test-full.sh`
 

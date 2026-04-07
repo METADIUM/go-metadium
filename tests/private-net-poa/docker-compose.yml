@@ -16,7 +16,7 @@ networks:
 x-gmet-common: &gmet-common
   image: gmet-poa:latest
   restart: unless-stopped
-  user: "1006:1006"
+  user: "1000:1000"
   networks:
     - gmet-poa-net
 

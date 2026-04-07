@@ -57,7 +57,7 @@ var (
 
 // BlockChain defines the blockchain methods the BlobPool needs.
 type BlockChain interface {
-	CurrentBlock() *types.Block
+	CurrentBlock() *types.Header
 	GetBlock(hash common.Hash, number uint64) *types.Block
 	StateAt(root common.Hash) (*state.StateDB, error)
 	SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription
@@ -142,7 +142,7 @@ func (p *BlobPool) Close() error {
 // Reset responds to a new head, evicting blob txs whose blobFeeCap is now too low.
 func (p *BlobPool) Reset(_, newHead *types.Header) {
 	if newHead == nil {
-		newHead = p.chain.CurrentBlock().Header()
+		newHead = p.chain.CurrentBlock()
 	}
 	// 새 헤드의 blobBaseFee 계산
 	var blobBaseFee *big.Int
@@ -331,8 +331,8 @@ func (p *BlobPool) validateTx(tx *types.Transaction) (common.Address, error) {
 		return common.Address{}, ErrUnderpriced
 	}
 	// 현재 헤드의 blobBaseFee 체크
-	if currentHead := p.chain.CurrentBlock(); currentHead != nil && currentHead.Header().ExcessBlobGas != nil {
-		blobBaseFee := types.CalcBlobBaseFee(currentHead.Header().ExcessBlobGas)
+	if currentHead := p.chain.CurrentBlock(); currentHead != nil && currentHead.ExcessBlobGas != nil {
+		blobBaseFee := types.CalcBlobBaseFee(currentHead.ExcessBlobGas)
 		if tx.MaxFeePerBlobGas() == nil || tx.MaxFeePerBlobGas().Cmp(blobBaseFee) < 0 {
 			return common.Address{}, ErrBlobFeeCapTooLow
 		}
@@ -343,7 +343,7 @@ func (p *BlobPool) validateTx(tx *types.Transaction) (common.Address, error) {
 		return common.Address{}, errors.New("invalid sender")
 	}
 	// StateAt: disk I/O — lock 없이 수행
-	statedb, err := p.chain.StateAt(p.chain.CurrentBlock().Root())
+	statedb, err := p.chain.StateAt(p.chain.CurrentBlock().Root)
 	if err != nil {
 		return common.Address{}, err
 	}
@@ -369,13 +369,13 @@ func (p *BlobPool) Pending(_ bool) map[common.Address]types.Transactions {
 	defer p.mu.RUnlock()
 
 	var blobBaseFee *big.Int
-	if head := p.chain.CurrentBlock(); head != nil && head.Header().ExcessBlobGas != nil {
-		blobBaseFee = types.CalcBlobBaseFee(head.Header().ExcessBlobGas)
+	if head := p.chain.CurrentBlock(); head != nil && head.ExcessBlobGas != nil {
+		blobBaseFee = types.CalcBlobBaseFee(head.ExcessBlobGas)
 	} else {
 		blobBaseFee = new(big.Int)
 	}
 
-	statedb, err := p.chain.StateAt(p.chain.CurrentBlock().Root())
+	statedb, err := p.chain.StateAt(p.chain.CurrentBlock().Root)
 	result := make(map[common.Address]types.Transactions)
 
 	for addr, txs := range p.pending {
