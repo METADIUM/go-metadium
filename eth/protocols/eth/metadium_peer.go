@@ -32,3 +32,19 @@ func (p *Peer) RequestEtcdAddMember() error {
 	requestTracker.Track(p.id, p.version, EtcdAddMemberMsg, EtcdClusterMsg, rand.Uint64())
 	return p2p.Send(p.rw, EtcdAddMemberMsg, common.Big1)
 }
+
+// SendNodeData sends a batch of state trie node data (response to GetNodeData, eth/66).
+func (p *Peer) SendNodeData(data [][]byte) error {
+	return p2p.Send(p.rw, NodeDataMsg, NodeDataPacket(data))
+}
+
+// sendPooledTransactionHashesVersioned sends transaction hashes using the appropriate
+// format for the negotiated protocol version. eth/68 includes type+size metadata;
+// eth/66 sends hashes only.
+func (p *Peer) sendPooledTransactionHashesVersioned(hashes []common.Hash, types []byte, sizes []uint32) error {
+	p.knownTxs.Add(hashes...)
+	if p.version >= ETH68 {
+		return p2p.Send(p.rw, NewPooledTransactionHashesMsg, NewPooledTransactionHashesPacket{Types: types, Sizes: sizes, Hashes: hashes})
+	}
+	return p2p.Send(p.rw, NewPooledTransactionHashesMsg, NewPooledTransactionHashesPacket66(hashes))
+}

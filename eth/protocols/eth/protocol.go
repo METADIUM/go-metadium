@@ -30,20 +30,24 @@ import (
 
 // Constants to match up protocol versions and messages
 const (
+	ETH66 = 66
 	ETH68 = 68
 )
 
 // ProtocolName is the official short name of the `eth` protocol used during
-// devp2p capability negotiation.
-const ProtocolName = "eth"
+// devp2p capability negotiation. Metadium uses "meta" to maintain compatibility
+// with existing mainnet nodes which speak meta/66.
+const ProtocolName = "meta"
 
 // ProtocolVersions are the supported versions of the `eth` protocol (first
-// is primary).
-var ProtocolVersions = []uint{ETH68}
+// is primary). ETH68 is primary; ETH66 is supported for backward compatibility
+// with existing Metadium mainnet nodes.
+var ProtocolVersions = []uint{ETH68, ETH66}
 
-// protocolLengths are the number of implemented message corresponding to
-// different protocol versions.
-var protocolLengths = map[uint]uint64{ETH68: 17}
+// protocolLengths are the number of message codes used by each protocol version.
+// Must cover the highest Metadium message code (TransactionsExMsg = 0x16 = 22),
+// so length is 23 for both versions.
+var protocolLengths = map[uint]uint64{ETH68: 23, ETH66: 23}
 
 // maxMessageSize is the maximum cap on the size of a protocol message.
 const maxMessageSize = 10 * 1024 * 1024
@@ -60,8 +64,11 @@ const (
 	NewPooledTransactionHashesMsg = 0x08
 	GetPooledTransactionsMsg      = 0x09
 	PooledTransactionsMsg         = 0x0a
-	GetReceiptsMsg                = 0x0f
-	ReceiptsMsg                   = 0x10
+	// 0x0b, 0x0c reserved
+	GetNodeDataMsg = 0x0d // eth/66 and earlier (removed in eth/67)
+	NodeDataMsg    = 0x0e // eth/66 and earlier (removed in eth/67)
+	GetReceiptsMsg = 0x0f
+	ReceiptsMsg    = 0x10
 
 	// Added by Metadium
 	GetPendingTxsMsg  = 0x11
@@ -297,6 +304,10 @@ type NewPooledTransactionHashesPacket struct {
 	Hashes []common.Hash
 }
 
+// NewPooledTransactionHashesPacket66 represents a transaction announcement packet on eth/66 and older.
+// It contains only hashes, without type and size information.
+type NewPooledTransactionHashesPacket66 []common.Hash
+
 // GetPooledTransactionsRequest represents a transaction query.
 type GetPooledTransactionsRequest []common.Hash
 
@@ -364,3 +375,12 @@ func (*GetReceiptsRequest) Kind() byte   { return GetReceiptsMsg }
 
 func (*ReceiptsResponse) Name() string { return "Receipts" }
 func (*ReceiptsResponse) Kind() byte   { return ReceiptsMsg }
+
+// GetNodeDataPacket represents a trie node data query (eth/66 and earlier).
+type GetNodeDataPacket []common.Hash
+
+// NodeDataPacket is the network packet for trie node data distribution (eth/66 and earlier).
+type NodeDataPacket [][]byte
+
+// TransactionsExPacket is the network packet for extended Metadium transactions.
+type TransactionsExPacket []*types.TransactionEx
