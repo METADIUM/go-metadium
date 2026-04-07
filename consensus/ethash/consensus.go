@@ -234,11 +234,13 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	if header.Time <= parent.Time {
 		return errOlderBlockTime
 	}
-	// Verify the block's difficulty based on its timestamp and parent's difficulty
-	expected := ethash.CalcDifficulty(chain, header.Time, parent)
-
-	if expected.Cmp(header.Difficulty) != 0 {
-		return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expected)
+	// Verify the block's difficulty based on its timestamp and parent's difficulty.
+	// Metadium PoA uses fixed difficulty=1 so skip PoW difficulty calculation.
+	if metaminer.IsPoW() {
+		expected := ethash.CalcDifficulty(chain, header.Time, parent)
+		if expected.Cmp(header.Difficulty) != 0 {
+			return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expected)
+		}
 	}
 	// Verify that the gas limit is <= 2^63-1
 	if header.GasLimit > params.MaxGasLimit {
@@ -536,8 +538,11 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 	// Header seems complete, assemble into a block and return.
 	// Camellia (Shanghai+Cancun): WithdrawalsHash must be set before ExcessBlobGas in the
 	// RLP optional field sequence. Metadium PoA has no withdrawals, so use EmptyWithdrawalsHash.
+	// Pass empty (non-nil) withdrawals slice so peers can validate the block body correctly:
+	// block_validator.go checks header.WithdrawalsHash != nil && block.Withdrawals() == nil → error.
 	if chain.Config().IsCamellia(header.Number) {
 		header.WithdrawalsHash = &types.EmptyWithdrawalsHash
+		return types.NewBlockWithWithdrawals(header, txs, uncles, receipts, []*types.Withdrawal{}, trie.NewStackTrie(nil)), nil
 	}
 	return types.NewBlock(header, txs, uncles, receipts, trie.NewStackTrie(nil)), nil
 }
@@ -600,6 +605,43 @@ func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header 
 	}
 	if config.IsConstantinople(header.Number) {
 		blockReward = ConstantinopleBlockReward
+	}
+	if !metaminer.IsPoW() {
+		// Metadium PoA: governance contract handles rewards; block reward is zero.
+		// CalculateRewards uses big.Int callbacks; bridge to uint256 state.AddBalance.
+		metaReward := new(big.Int)
+		fees := header.Fees
+		if fees == nil {
+			fees = new(big.Int)
+		}
+		coinbase, rewards, err := metaminer.CalculateRewards(
+			header.Number, metaReward, fees,
+			func(addr common.Address, amt *big.Int) {
+				if amt == nil || amt.Sign() <= 0 {
+					return
+				}
+				u, _ := uint256.FromBig(amt)
+				if u == nil {
+					return
+				}
+				state.AddBalance(addr, u)
+			})
+		if err == nil {
+			header.Rewards = rewards
+			if coinbase != nil {
+				header.Coinbase = *coinbase
+			}
+		} else if err == metaminer.ErrNotInitialized {
+			// Not initialized yet (e.g. genesis sync): add fees only.
+			var feeReward *uint256.Int
+			if header.Fees != nil {
+				feeReward, _ = uint256.FromBig(header.Fees)
+			} else {
+				feeReward = new(uint256.Int)
+			}
+			state.AddBalance(header.Coinbase, feeReward)
+		}
+		return
 	}
 	// Accumulate the rewards for the miner and any included uncles
 	reward := new(uint256.Int).Set(blockReward)

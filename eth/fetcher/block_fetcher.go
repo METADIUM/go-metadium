@@ -603,6 +603,12 @@ func (f *BlockFetcher) loop() {
 							log.Trace("Block empty, skipping body retrieval", "peer", announce.origin, "number", header.Number, "hash", header.Hash())
 
 							block := types.NewBlockWithHeader(header)
+							// Metadium Camellia fork: blocks have WithdrawalsHash set to EmptyWithdrawalsHash
+							// even though there are no withdrawals. The block validator requires a non-nil
+							// Withdrawals slice when WithdrawalsHash is set. Set an empty slice to satisfy it.
+							if header.WithdrawalsHash != nil {
+								block = block.WithWithdrawals([]*types.Withdrawal{})
+							}
 							block.ReceivedAt = task.time
 
 							complete = append(complete, block)
@@ -687,6 +693,10 @@ func (f *BlockFetcher) loop() {
 						matched = true
 						if f.getBlock(hash) == nil {
 							block := types.NewBlockWithHeader(announce.header).WithBody(task.transactions[i], task.uncles[i])
+							// Metadium Camellia fork: set empty withdrawals when header requires it.
+							if announce.header.WithdrawalsHash != nil {
+								block = block.WithWithdrawals([]*types.Withdrawal{})
+							}
 							block.ReceivedAt = task.time
 							blocks = append(blocks, block)
 						} else {
