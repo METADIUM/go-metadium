@@ -610,10 +610,20 @@ func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header 
 		// Metadium PoA: governance contract handles rewards; block reward is zero.
 		// CalculateRewards uses big.Int callbacks; bridge to uint256 state.AddBalance.
 		metaReward := new(big.Int)
+		fees := header.Fees
+		if fees == nil {
+			fees = new(big.Int)
+		}
 		coinbase, rewards, err := metaminer.CalculateRewards(
-			header.Number, metaReward, header.Fees,
+			header.Number, metaReward, fees,
 			func(addr common.Address, amt *big.Int) {
+				if amt == nil || amt.Sign() <= 0 {
+					return
+				}
 				u, _ := uint256.FromBig(amt)
+				if u == nil {
+					return
+				}
 				state.AddBalance(addr, u)
 			})
 		if err == nil {
