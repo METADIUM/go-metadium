@@ -26,6 +26,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
+	metaapi "github.com/ethereum/go-ethereum/metadium/api"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -140,4 +142,51 @@ func (api *AdminAPI) ImportChain(file string) (bool, error) {
 		blocks = blocks[:0]
 	}
 	return true, nil
+}
+
+// Metadium-specific admin methods
+
+// RequestMinerStatus sends GetStatusEx to the given peer.
+func (api *AdminAPI) RequestMinerStatus(id enode.ID) error {
+	return api.eth.handler.RequestMinerStatus(id)
+}
+
+// RequestEtcdAddMember asks the given peer to add this node to the etcd cluster.
+func (api *AdminAPI) RequestEtcdAddMember(id enode.ID) error {
+	return api.eth.handler.RequestEtcdAddMember(id)
+}
+
+// EtcdInit initializes an etcd cluster on this node.
+func (api *AdminAPI) EtcdInit() error {
+	return metaapi.EtcdInit()
+}
+
+// EtcdAddMember manually adds a node to the etcd cluster.
+func (api *AdminAPI) EtcdAddMember(name string) (string, error) {
+	return metaapi.EtcdAddMember(name)
+}
+
+// EtcdRemoveMember manually removes a node from the etcd cluster.
+func (api *AdminAPI) EtcdRemoveMember(name string) (string, error) {
+	return metaapi.EtcdRemoveMember(name)
+}
+
+// EtcdJoin manually joins an etcd cluster.
+func (api *AdminAPI) EtcdJoin(cluster string) error {
+	return metaapi.EtcdJoin(cluster)
+}
+
+// EtcdMoveLeader moves the etcd leader to the named node.
+func (api *AdminAPI) EtcdMoveLeader(name string) error {
+	return metaapi.EtcdMoveLeader(name)
+}
+
+// EtcdGetWork returns the latest logged mining work from etcd.
+func (api *AdminAPI) EtcdGetWork() (string, error) {
+	return metaapi.EtcdGetWork()
+}
+
+// EtcdDeleteWork removes the latest logged mining work from etcd.
+func (api *AdminAPI) EtcdDeleteWork() error {
+	return metaapi.EtcdDeleteWork()
 }
