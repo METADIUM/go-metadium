@@ -17,6 +17,7 @@
 package rawdb
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -31,7 +32,9 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb/leveldb"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/ethdb/pebble"
+	"github.com/ethereum/go-ethereum/ethdb/rocksdb"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/olekukonko/tablewriter"
 )
 
@@ -322,6 +325,21 @@ func NewLevelDBDatabase(file string, cache int, handles int, namespace string, r
 	return NewDatabase(db), nil
 }
 
+// NewLevelDBDatabaseWithFreezer creates a persistent key-value database with a
+// freezer moving immutable chain segments into cold storage.
+func NewLevelDBDatabaseWithFreezer(file string, cache int, handles int, freezer string, namespace string, readonly bool) (ethdb.Database, error) {
+	kvdb, err := leveldb.New(file, cache, handles, namespace, readonly)
+	if err != nil {
+		return nil, err
+	}
+	frdb, err := NewDatabaseWithFreezer(kvdb, freezer, namespace, readonly)
+	if err != nil {
+		kvdb.Close()
+		return nil, err
+	}
+	return frdb, nil
+}
+
 // NewPebbleDBDatabase creates a persistent key-value database without a freezer
 // moving immutable chain segments into cold storage.
 func NewPebbleDBDatabase(file string, cache int, handles int, namespace string, readonly, ephemeral bool) (ethdb.Database, error) {
@@ -417,6 +435,70 @@ func Open(o OpenOptions) (ethdb.Database, error) {
 		return nil, err
 	}
 	return frdb, nil
+}
+
+// NewRocksDBDatabase creates a persistent key-value database without a freezer
+// moving immutable chain segments into cold storage.
+func NewRocksDBDatabase(file string, cache int, handles int, namespace string, readonly bool) (ethdb.Database, error) {
+	db, err := rocksdb.New(file, cache, handles, namespace, readonly)
+	if err != nil {
+		return nil, err
+	}
+	return NewDatabase(db), nil
+}
+
+// NewRocksDBDatabaseWithFreezer creates a persistent key-value database with a
+// freezer moving immutable chain segments into cold storage.
+func NewRocksDBDatabaseWithFreezer(file string, cache int, handles int, freezer string, namespace string, readonly bool) (ethdb.Database, error) {
+	kvdb, err := rocksdb.New(file, cache, handles, namespace, readonly)
+	if err != nil {
+		return nil, err
+	}
+	frdb, err := NewDatabaseWithFreezer(kvdb, freezer, namespace, readonly)
+	if err != nil {
+		kvdb.Close()
+		return nil, err
+	}
+	return frdb, nil
+}
+
+func detectDb(file string) int {
+	if f, err := os.Open(path.Join(file, "LOG")); err != nil {
+		return 0
+	} else if s, err := bufio.NewReader(f).ReadString('\n'); err != nil {
+		return 0
+	} else if strings.Contains(s, "RocksDB version") {
+		return 2
+	}
+	return 1
+}
+
+// NewDB opens a database using LevelDB or RocksDB based on existing data or UseRocksDb param.
+func NewDB(file string, cache int, handles int, namespace string, readonly bool) (ethdb.Database, error) {
+	switch detectDb(file) {
+	case 1:
+		return NewLevelDBDatabase(file, cache, handles, namespace, readonly)
+	case 2:
+		return NewRocksDBDatabase(file, cache, handles, namespace, readonly)
+	}
+	if params.UseRocksDb != 0 {
+		return NewRocksDBDatabase(file, cache, handles, namespace, readonly)
+	}
+	return NewLevelDBDatabase(file, cache, handles, namespace, readonly)
+}
+
+// NewDBWithFreezer opens a database with freezer using LevelDB or RocksDB based on existing data or UseRocksDb param.
+func NewDBWithFreezer(file string, cache int, handles int, freezer string, namespace string, readonly bool) (ethdb.Database, error) {
+	switch detectDb(file) {
+	case 1:
+		return NewLevelDBDatabaseWithFreezer(file, cache, handles, freezer, namespace, readonly)
+	case 2:
+		return NewRocksDBDatabaseWithFreezer(file, cache, handles, freezer, namespace, readonly)
+	}
+	if params.UseRocksDb != 0 {
+		return NewRocksDBDatabaseWithFreezer(file, cache, handles, freezer, namespace, readonly)
+	}
+	return NewLevelDBDatabaseWithFreezer(file, cache, handles, freezer, namespace, readonly)
 }
 
 type counter uint64

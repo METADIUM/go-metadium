@@ -725,14 +725,7 @@ func (n *Node) OpenDatabase(name string, cache, handles int, namespace string, r
 	if n.config.DataDir == "" {
 		db = rawdb.NewMemoryDatabase()
 	} else {
-		db, err = rawdb.Open(rawdb.OpenOptions{
-			Type:      n.config.DBEngine,
-			Directory: n.ResolvePath(name),
-			Namespace: namespace,
-			Cache:     cache,
-			Handles:   handles,
-			ReadOnly:  readonly,
-		})
+		db, err = rawdb.NewDB(n.ResolvePath(name), cache, handles, namespace, readonly)
 	}
 
 	if err == nil {
@@ -757,15 +750,14 @@ func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient 
 	if n.config.DataDir == "" {
 		db = rawdb.NewMemoryDatabase()
 	} else {
-		db, err = rawdb.Open(rawdb.OpenOptions{
-			Type:              n.config.DBEngine,
-			Directory:         n.ResolvePath(name),
-			AncientsDirectory: n.ResolveAncient(name, ancient),
-			Namespace:         namespace,
-			Cache:             cache,
-			Handles:           handles,
-			ReadOnly:          readonly,
-		})
+		root := n.ResolvePath(name)
+		switch {
+		case ancient == "":
+			ancient = filepath.Join(root, "ancient")
+		case !filepath.IsAbs(ancient):
+			ancient = n.ResolvePath(ancient)
+		}
+		db, err = rawdb.NewDBWithFreezer(root, cache, handles, ancient, namespace, readonly)
 	}
 
 	if err == nil {
