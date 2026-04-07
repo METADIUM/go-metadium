@@ -760,22 +760,31 @@ func setBlockhash(data *engine.ExecutableData) *engine.ExecutableData {
 	txs, _ := decodeTransactions(data.Transactions)
 	number := big.NewInt(0)
 	number.SetUint64(data.Number)
+	var excessBlobGas, blobGasUsed *big.Int
+	if data.ExcessBlobGas != nil {
+		excessBlobGas = new(big.Int).SetUint64(*data.ExcessBlobGas)
+	}
+	if data.BlobGasUsed != nil {
+		blobGasUsed = new(big.Int).SetUint64(*data.BlobGasUsed)
+	}
 	header := &types.Header{
-		ParentHash:  data.ParentHash,
-		UncleHash:   types.EmptyUncleHash,
-		Coinbase:    data.FeeRecipient,
-		Root:        data.StateRoot,
-		TxHash:      types.DeriveSha(types.Transactions(txs), trie.NewStackTrie(nil)),
-		ReceiptHash: data.ReceiptsRoot,
-		Bloom:       types.BytesToBloom(data.LogsBloom),
-		Difficulty:  common.Big0,
-		Number:      number,
-		GasLimit:    data.GasLimit,
-		GasUsed:     data.GasUsed,
-		Time:        data.Timestamp,
-		BaseFee:     data.BaseFeePerGas,
-		Extra:       data.ExtraData,
-		MixDigest:   data.Random,
+		ParentHash:    data.ParentHash,
+		UncleHash:     types.EmptyUncleHash,
+		Coinbase:      data.FeeRecipient,
+		Root:          data.StateRoot,
+		TxHash:        types.DeriveSha(types.Transactions(txs), trie.NewStackTrie(nil)),
+		ReceiptHash:   data.ReceiptsRoot,
+		Bloom:         types.BytesToBloom(data.LogsBloom),
+		Difficulty:    common.Big0,
+		Number:        number,
+		GasLimit:      data.GasLimit,
+		GasUsed:       data.GasUsed,
+		Time:          data.Timestamp,
+		BaseFee:       data.BaseFeePerGas,
+		Extra:         data.ExtraData,
+		MixDigest:     data.Random,
+		ExcessBlobGas: excessBlobGas,
+		BlobGasUsed:   blobGasUsed,
 	}
 	block := types.NewBlockWithHeader(header).WithBody(txs, nil /* uncles */)
 	data.BlockHash = block.Hash()
@@ -917,22 +926,31 @@ func TestNewPayloadOnInvalidTerminalBlock(t *testing.T) {
 	data := *payload.Resolve().ExecutionPayload
 	// We need to recompute the blockhash, since the miner computes a wrong (correct) blockhash
 	txs, _ := decodeTransactions(data.Transactions)
+	var excessBlobGas, blobGasUsed *big.Int
+	if data.ExcessBlobGas != nil {
+		excessBlobGas = new(big.Int).SetUint64(*data.ExcessBlobGas)
+	}
+	if data.BlobGasUsed != nil {
+		blobGasUsed = new(big.Int).SetUint64(*data.BlobGasUsed)
+	}
 	header := &types.Header{
-		ParentHash:  data.ParentHash,
-		UncleHash:   types.EmptyUncleHash,
-		Coinbase:    data.FeeRecipient,
-		Root:        data.StateRoot,
-		TxHash:      types.DeriveSha(types.Transactions(txs), trie.NewStackTrie(nil)),
-		ReceiptHash: data.ReceiptsRoot,
-		Bloom:       types.BytesToBloom(data.LogsBloom),
-		Difficulty:  common.Big0,
-		Number:      new(big.Int).SetUint64(data.Number),
-		GasLimit:    data.GasLimit,
-		GasUsed:     data.GasUsed,
-		Time:        data.Timestamp,
-		BaseFee:     data.BaseFeePerGas,
-		Extra:       data.ExtraData,
-		MixDigest:   data.Random,
+		ParentHash:    data.ParentHash,
+		UncleHash:     types.EmptyUncleHash,
+		Coinbase:      data.FeeRecipient,
+		Root:          data.StateRoot,
+		TxHash:        types.DeriveSha(types.Transactions(txs), trie.NewStackTrie(nil)),
+		ReceiptHash:   data.ReceiptsRoot,
+		Bloom:         types.BytesToBloom(data.LogsBloom),
+		Difficulty:    common.Big0,
+		Number:        new(big.Int).SetUint64(data.Number),
+		GasLimit:      data.GasLimit,
+		GasUsed:       data.GasUsed,
+		Time:          data.Timestamp,
+		BaseFee:       data.BaseFeePerGas,
+		Extra:         data.ExtraData,
+		MixDigest:     data.Random,
+		ExcessBlobGas: excessBlobGas,
+		BlobGasUsed:   blobGasUsed,
 	}
 	block := types.NewBlockWithHeader(header).WithBody(txs, nil /* uncles */)
 	data.BlockHash = block.Hash()

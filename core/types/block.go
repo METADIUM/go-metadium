@@ -293,6 +293,9 @@ func HeaderLegacyToHeader(h *HeaderLegacy) *Header {
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
 // RLP encoding.
 func (h *Header) Hash() common.Hash {
+	if h == nil {
+		return common.Hash{}
+	}
 	if metaminer.IsPoW() {
 		return rlpHash(HeaderToHeaderLegacy(h))
 	}
