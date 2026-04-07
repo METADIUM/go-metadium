@@ -16,7 +16,11 @@
 
 package params
 
-import "math/big"
+import (
+	"math/big"
+
+	"github.com/ethereum/go-ethereum/common"
+)
 
 const (
 	GasLimitBoundDivisor uint64 = 1024               // The bound divisor of the gas limit, used in update calculations.
@@ -38,6 +42,7 @@ const (
 
 	Keccak256Gas     uint64 = 30 // Once per KECCAK256 operation.
 	Keccak256WordGas uint64 = 6  // Once per word of the KECCAK256 operation's data.
+	InitCodeWordGas  uint64 = 2  // Once per word of the init code when creating a contract.
 
 	SstoreSetGas    uint64 = 20000 // Once per SSTORE operation.
 	SstoreResetGas  uint64 = 5000  // Once per SSTORE operation if the zeroness changes from zero.
@@ -119,12 +124,11 @@ const (
 	// Introduced in Tangerine Whistle (Eip 150)
 	CreateBySelfdestructGas uint64 = 25000
 
-	BaseFeeChangeDenominator = 8          // Bounds the amount the base fee can change between blocks.
-	ElasticityMultiplier     = 2          // Bounds the maximum gas limit an EIP-1559 block may have.
-	InitialBaseFee           = 1000000000 // Initial base fee for EIP-1559 blocks.
+	DefaultBaseFeeChangeDenominator = 8          // Bounds the amount the base fee can change between blocks.
+	DefaultElasticityMultiplier     = 2          // Bounds the maximum gas limit an EIP-1559 block may have.
+	InitialBaseFee                  = 1000000000 // Initial base fee for EIP-1559 blocks.
 
-	MaxCodeSize        = 253952 // Maximum bytecode to permit for a contract
-	MaxTransactionSize = 262144 // Maximum transaction size
+	MaxCodeSize = 253952 // Maximum bytecode to permit for a contract (Metadium: extended)
 
 	// Precompiled contract gas prices
 
@@ -156,14 +160,20 @@ const (
 
 	VrfVerifyGas uint64 = 50000 // @lukepark327: VRF Verify gas price
 
-	// Blob transaction constants (EIP-4844)
-	TxDataNonZeroBlobGas   uint64 = 1      // Per byte of data attached to a blob transaction that is not equal to zero
-	BlobTxPerBlobGas       uint64 = 131072 // Gas per blob for blob transaction (128 KB per blob)
-	MaxBlobsPerTransaction uint64 = 4      // Maximum blobs per transaction (reduced from mainnet 6 for 2s PoA)
-
 	// EIP-3860: Initcode size limit
-	MaxInitCodeSize uint64 = 49152 // Maximum size of initcode for CREATE/CREATE2 (2 * 24576)
-	InitCodeWordGas uint64 = 2     // Gas per word of initcode (EIP-3860)
+	MaxInitCodeSize = 2 * MaxCodeSize // Maximum initcode to permit in a creation transaction and create instructions
+
+	// The Refund Quotient is the cap on how much of the used gas can be refunded. Before EIP-3529,
+	// up to half the consumed gas could be refunded. Redefined as 1/5th in EIP-3529
+	RefundQuotient        uint64 = 2
+	RefundQuotientEIP3529 uint64 = 5
+
+	BlobTxBytesPerFieldElement         = 32      // Size in bytes of a field element
+	BlobTxFieldElementsPerBlob         = 4096    // Number of field elements stored in a single data blob
+	BlobTxBlobGasPerBlob               = 1 << 17 // Gas consumption of a single data blob (== blob byte size)
+	BlobTxMinBlobGasprice              = 1       // Minimum gas price for data blobs
+	BlobTxBlobGaspriceUpdateFraction   = 3338477 // Controls the maximum rate of change for blob gas price
+	BlobTxPointEvaluationPrecompileGas = 50000   // Gas price for the point evaluation precompile.
 
 	// EIP-4844: Blob gas market constants.
 	// Metadium PoA runs at 2s block time (6× faster than Ethereum mainnet 12s).
@@ -172,16 +182,10 @@ const (
 	//   - Max:    2 blobs/block (maintains 1:2 target:max ratio from mainnet)
 	// This prevents blob fee volatility and excessive block propagation overhead on
 	// a private network where validators communicate over a shared LAN/VPN.
-	BlobVerificationGas       uint64 = 50000   // Gas cost for KZG point evaluation precompile (EIP-4844)
-	TargetBlobGasPerBlock     uint64 = 131072  // Target blob gas per block (1 blob × 131072)
-	MaxBlobGasPerBlock        uint64 = 262144  // Maximum blob gas per block (2 blobs × 131072)
-	MinBlobBaseFee            uint64 = 1       // Minimum blob base fee (wei)
-	BlobBaseFeeUpdateFraction uint64 = 3338477 // Blob base fee update fraction (EIP-4844 standard)
+	BlobTxTargetBlobGasPerBlock = 1 * BlobTxBlobGasPerBlob // Target consumable blob gas per block (Metadium: 1 blob/block for 2s PoA)
+	MaxBlobGasPerBlock          = 2 * BlobTxBlobGasPerBlob // Maximum consumable blob gas per block (Metadium: 2 blobs/block)
 
-	// The Refund Quotient is the cap on how much of the used gas can be refunded. Before EIP-3529,
-	// up to half the consumed gas could be refunded. Redefined as 1/5th in EIP-3529
-	RefundQuotient        uint64 = 2
-	RefundQuotientEIP3529 uint64 = 5
+	MaxBlobsPerTransaction uint64 = 2 // Maximum blobs per transaction (Metadium: 2 blobs/block for 2s PoA)
 )
 
 // Gas discount table for BLS12-381 G1 and G2 multi exponentiation operations
@@ -192,6 +196,11 @@ var (
 	GenesisDifficulty      = big.NewInt(131072) // Difficulty of the Genesis block.
 	MinimumDifficulty      = big.NewInt(131072) // The minimum that the difficulty may ever be.
 	DurationLimit          = big.NewInt(13)     // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
+
+	// BeaconRootsStorageAddress is the address where historical beacon roots are stored as per EIP-4788
+	BeaconRootsStorageAddress = common.HexToAddress("0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02")
+	// SystemAddress is where the system-transaction is sent from as per EIP-4788
+	SystemAddress common.Address = common.HexToAddress("0xfffffffffffffffffffffffffffffffffffffffe")
 )
 
 const (

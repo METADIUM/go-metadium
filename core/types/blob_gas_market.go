@@ -35,7 +35,7 @@ func CalcExcessBlobGas(prevExcessBlobGas *big.Int, prevBlobGasUsed uint64) *big.
 	sum := new(big.Int).Add(prevExcessBlobGas, new(big.Int).SetUint64(prevBlobGasUsed))
 
 	// subtract TARGET_BLOB_GAS_PER_BLOCK
-	excess := new(big.Int).Sub(sum, new(big.Int).SetUint64(params.TargetBlobGasPerBlock))
+	excess := new(big.Int).Sub(sum, new(big.Int).SetUint64(params.BlobTxTargetBlobGasPerBlock))
 
 	// max(0, excess)
 	if excess.Sign() < 0 {
@@ -64,8 +64,8 @@ func CalcBlobBaseFee(excessBlobGas *big.Int) *big.Int {
 	}
 
 	// Convert constants to big.Int
-	minBlobBaseFee := big.NewInt(int64(params.MinBlobBaseFee))
-	denominator := big.NewInt(int64(params.BlobBaseFeeUpdateFraction))
+	minBlobBaseFee := big.NewInt(int64(params.BlobTxMinBlobGasprice))
+	denominator := big.NewInt(int64(params.BlobTxBlobGaspriceUpdateFraction))
 
 	// i = 1, output = 0, numerator_accum = MIN_BLOB_BASE_FEE * BLOB_BASE_FEE_UPDATE_FRACTION
 	i := big.NewInt(1)
@@ -99,5 +99,5 @@ func CalcBlobBaseFee(excessBlobGas *big.Int) *big.Int {
 // GetBlobGasUsed calculates the total blob gas used in a block based on the number of blobs.
 // Each blob costs BlobTxPerBlobGas gas.
 func GetBlobGasUsed(numBlobs uint64) uint64 {
-	return numBlobs * params.BlobTxPerBlobGas
+	return numBlobs * params.BlobTxBlobGasPerBlob
 }

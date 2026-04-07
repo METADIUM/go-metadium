@@ -33,17 +33,17 @@ import (
 )
 
 const (
-	lightTimeout  = time.Millisecond     // Time allowance before an announced header is explicitly requested
-	arriveTimeout = 0 * time.Millisecond // Time allowance before an announced block/transaction is explicitly requested
-	gatherSlack   = 0 * time.Millisecond // Interval used to collate almost-expired announces with fetches
-	fetchTimeout  = 120 * time.Second    // Maximum allotted time to return an explicitly requested block/transaction
+	lightTimeout  = time.Millisecond       // Time allowance before an announced header is explicitly requested
+	arriveTimeout = 500 * time.Millisecond // Time allowance before an announced block/transaction is explicitly requested
+	gatherSlack   = 100 * time.Millisecond // Interval used to collate almost-expired announces with fetches
+	fetchTimeout  = 5 * time.Second        // Maximum allotted time to return an explicitly requested block/transaction
 )
 
 const (
-	maxUncleDist = 700   // Maximum allowed backward distance from the chain head
-	maxQueueDist = 3200  // Maximum allowed distance from the chain head to queue
-	hashLimit    = 25600 // Maximum number of unique blocks or headers a peer may have announced
-	blockLimit   = 6400  // Maximum number of unique blocks a peer may have delivered
+	maxUncleDist = 7   // Maximum allowed backward distance from the chain head
+	maxQueueDist = 32  // Maximum allowed distance from the chain head to queue
+	hashLimit    = 256 // Maximum number of unique blocks or headers a peer may have announced
+	blockLimit   = 64  // Maximum number of unique blocks a peer may have delivered
 )
 
 var (
@@ -175,9 +175,9 @@ type BlockFetcher struct {
 	completing map[common.Hash]*blockAnnounce   // Blocks with headers, currently body-completing
 
 	// Block cache
-	queue  *prque.Prque                         // Queue containing the import operations (block number sorted)
-	queues map[string]int                       // Per peer block counts to prevent memory exhaustion
-	queued map[common.Hash]*blockOrHeaderInject // Set of already queued blocks (to dedup imports)
+	queue  *prque.Prque[int64, *blockOrHeaderInject] // Queue containing the import operations (block number sorted)
+	queues map[string]int                            // Per peer block counts to prevent memory exhaustion
+	queued map[common.Hash]*blockOrHeaderInject      // Set of already queued blocks (to dedup imports)
 
 	// Callbacks
 	getHeader      HeaderRetrievalFn  // Retrieves a header from the local chain
@@ -212,7 +212,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		fetching:       make(map[common.Hash]*blockAnnounce),
 		fetched:        make(map[common.Hash][]*blockAnnounce),
 		completing:     make(map[common.Hash]*blockAnnounce),
-		queue:          prque.New(nil),
+		queue:          prque.New[int64, *blockOrHeaderInject](nil),
 		queues:         make(map[string]int),
 		queued:         make(map[common.Hash]*blockOrHeaderInject),
 		getHeader:      getHeader,
@@ -351,7 +351,7 @@ func (f *BlockFetcher) loop() {
 		// Import any queued blocks that could potentially fit
 		height := f.chainHeight()
 		for !f.queue.Empty() {
-			op := f.queue.PopItem().(*blockOrHeaderInject)
+			op := f.queue.PopItem()
 			hash := op.hash()
 			if f.queueChangeHook != nil {
 				f.queueChangeHook(hash, false)
@@ -483,7 +483,7 @@ func (f *BlockFetcher) loop() {
 							select {
 							case res := <-resCh:
 								res.Done <- nil
-								f.FilterHeaders(peer, *res.Res.(*eth.BlockHeadersPacket), time.Now().Add(res.Time))
+								f.FilterHeaders(peer, *res.Res.(*eth.BlockHeadersRequest), time.Now())
 
 							case <-timeout.C:
 								// The peer didn't respond in time. The request
@@ -540,8 +540,8 @@ func (f *BlockFetcher) loop() {
 					select {
 					case res := <-resCh:
 						res.Done <- nil
-
-						txs, uncles := res.Res.(*eth.BlockBodiesPacket).Unpack()
+						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
+						txs, uncles, _ := res.Res.(*eth.BlockBodiesResponse).Unpack()
 						f.FilterBodies(peer, txs, uncles, time.Now())
 
 					case <-timeout.C:
@@ -599,7 +599,7 @@ func (f *BlockFetcher) loop() {
 						announce.time = task.time
 
 						// If the block is empty (header only), short circuit into the final import queue
-						if header.TxHash == types.EmptyRootHash && header.UncleHash == types.EmptyUncleHash {
+						if header.TxHash == types.EmptyTxsHash && header.UncleHash == types.EmptyUncleHash {
 							log.Trace("Block empty, skipping body retrieval", "peer", announce.origin, "number", header.Number, "hash", header.Hash())
 
 							block := types.NewBlockWithHeader(header)
@@ -692,7 +692,6 @@ func (f *BlockFetcher) loop() {
 						} else {
 							f.forgetHash(hash)
 						}
-
 					}
 					if matched {
 						task.transactions = append(task.transactions[:i], task.transactions[i+1:]...)

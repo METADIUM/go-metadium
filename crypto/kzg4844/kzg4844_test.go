@@ -1,113 +1,195 @@
-// Copyright 2024 The go-ethereum Authors
+// Copyright 2023 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
+//
+// The go-ethereum library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package kzg4844
 
 import (
+	"crypto/rand"
 	"testing"
 
+	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
 	gokzg4844 "github.com/crate-crypto/go-kzg-4844"
 )
 
-// makeTestBlob returns a test blob (all-zero with first byte set).
-func makeTestBlob(firstByte byte) gokzg4844.Blob {
-	var blob gokzg4844.Blob
-	blob[0] = firstByte
+func randFieldElement() [32]byte {
+	bytes := make([]byte, 32)
+	_, err := rand.Read(bytes)
+	if err != nil {
+		panic("failed to get random field element")
+	}
+	var r fr.Element
+	r.SetBytes(bytes)
+
+	return gokzg4844.SerializeScalar(r)
+}
+
+func randBlob() Blob {
+	var blob Blob
+	for i := 0; i < len(blob); i += gokzg4844.SerializedScalarSize {
+		fieldElementBytes := randFieldElement()
+		copy(blob[i:i+gokzg4844.SerializedScalarSize], fieldElementBytes[:])
+	}
 	return blob
 }
 
-// TestKZGToVersionedHash verifies the versioned hash computation.
-func TestKZGToVersionedHash(t *testing.T) {
-	commitment := make([]byte, 48)
-	commitment[0] = 0xcd
+func TestCKZGWithPoint(t *testing.T)  { testKZGWithPoint(t, true) }
+func TestGoKZGWithPoint(t *testing.T) { testKZGWithPoint(t, false) }
+func testKZGWithPoint(t *testing.T, ckzg bool) {
+	if ckzg && !ckzgAvailable {
+		t.Skip("CKZG unavailable in this test build")
+	}
+	defer func(old bool) { useCKZG.Store(old) }(useCKZG.Load())
+	useCKZG.Store(ckzg)
 
-	hash := KZGToVersionedHash(commitment)
-	if hash[0] != BlobCommitmentVersionKZG {
-		t.Errorf("versioned hash[0] = %x, want %x", hash[0], BlobCommitmentVersionKZG)
+	blob := randBlob()
+
+	commitment, err := BlobToCommitment(blob)
+	if err != nil {
+		t.Fatalf("failed to create KZG commitment from blob: %v", err)
+	}
+	point := randFieldElement()
+	proof, claim, err := ComputeProof(blob, point)
+	if err != nil {
+		t.Fatalf("failed to create KZG proof at point: %v", err)
+	}
+	if err := VerifyProof(commitment, point, claim, proof); err != nil {
+		t.Fatalf("failed to verify KZG proof at point: %v", err)
 	}
 }
 
-// TestValidateBlobSidecar_LengthMismatch tests that mismatched sidecar lengths are rejected.
-func TestValidateBlobSidecar_LengthMismatch(t *testing.T) {
-	hashes := make([][32]byte, 2)
-	blobs := [][]byte{make([]byte, gokzg4844.ScalarsPerBlob*gokzg4844.SerializedScalarSize)}
-	commitments := [][]byte{make([]byte, 48)}
-	proofs := [][]byte{make([]byte, 48)}
+func TestCKZGWithBlob(t *testing.T)  { testKZGWithBlob(t, true) }
+func TestGoKZGWithBlob(t *testing.T) { testKZGWithBlob(t, false) }
+func testKZGWithBlob(t *testing.T, ckzg bool) {
+	if ckzg && !ckzgAvailable {
+		t.Skip("CKZG unavailable in this test build")
+	}
+	defer func(old bool) { useCKZG.Store(old) }(useCKZG.Load())
+	useCKZG.Store(ckzg)
 
-	err := ValidateBlobSidecar(hashes, blobs, commitments, proofs)
-	if err == nil {
-		t.Error("expected error for length mismatch, got nil")
+	blob := randBlob()
+
+	commitment, err := BlobToCommitment(blob)
+	if err != nil {
+		t.Fatalf("failed to create KZG commitment from blob: %v", err)
+	}
+	proof, err := ComputeBlobProof(blob, commitment)
+	if err != nil {
+		t.Fatalf("failed to create KZG proof for blob: %v", err)
+	}
+	if err := VerifyBlobProof(blob, commitment, proof); err != nil {
+		t.Fatalf("failed to verify KZG proof for blob: %v", err)
 	}
 }
 
-// TestValidateBlobSidecar_InvalidBlobSize tests that wrong-size blobs are rejected.
-func TestValidateBlobSidecar_InvalidBlobSize(t *testing.T) {
-	hashes := make([][32]byte, 1)
-	blobs := [][]byte{make([]byte, 100)} // wrong size
-	commitments := [][]byte{make([]byte, 48)}
-	proofs := [][]byte{make([]byte, 48)}
+func BenchmarkCKZGBlobToCommitment(b *testing.B)  { benchmarkBlobToCommitment(b, true) }
+func BenchmarkGoKZGBlobToCommitment(b *testing.B) { benchmarkBlobToCommitment(b, false) }
+func benchmarkBlobToCommitment(b *testing.B, ckzg bool) {
+	if ckzg && !ckzgAvailable {
+		b.Skip("CKZG unavailable in this test build")
+	}
+	defer func(old bool) { useCKZG.Store(old) }(useCKZG.Load())
+	useCKZG.Store(ckzg)
 
-	err := ValidateBlobSidecar(hashes, blobs, commitments, proofs)
-	if err == nil {
-		t.Error("expected error for invalid blob size, got nil")
+	blob := randBlob()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		BlobToCommitment(blob)
 	}
 }
 
-// TestValidateBlobSidecar_HashMismatch tests that a wrong commitment is rejected.
-func TestValidateBlobSidecar_HashMismatch(t *testing.T) {
-	ctx, err := getContext()
-	if err != nil {
-		t.Skip("KZG context unavailable:", err)
+func BenchmarkCKZGComputeProof(b *testing.B)  { benchmarkComputeProof(b, true) }
+func BenchmarkGoKZGComputeProof(b *testing.B) { benchmarkComputeProof(b, false) }
+func benchmarkComputeProof(b *testing.B, ckzg bool) {
+	if ckzg && !ckzgAvailable {
+		b.Skip("CKZG unavailable in this test build")
 	}
+	defer func(old bool) { useCKZG.Store(old) }(useCKZG.Load())
+	useCKZG.Store(ckzg)
 
-	blob := makeTestBlob(0x01)
-	commitment, err := ctx.BlobToKZGCommitment(&blob, 0)
-	if err != nil {
-		t.Fatalf("BlobToKZGCommitment: %v", err)
-	}
+	var (
+		blob  = randBlob()
+		point = randFieldElement()
+	)
 
-	// Use a wrong hash (all zeros).
-	hashes := make([][32]byte, 1)
-
-	blobs := [][]byte{blob[:]}
-	commitments := [][]byte{commitment[:]}
-	proofs := [][]byte{make([]byte, 48)} // dummy proof
-
-	err = ValidateBlobSidecar(hashes, blobs, commitments, proofs)
-	if err == nil {
-		t.Error("expected error for hash mismatch, got nil")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ComputeProof(blob, point)
 	}
 }
 
-// TestValidateBlobSidecar_Valid tests that a correctly constructed sidecar passes validation.
-func TestValidateBlobSidecar_Valid(t *testing.T) {
-	ctx, err := getContext()
-	if err != nil {
-		t.Skip("KZG context unavailable:", err)
+func BenchmarkCKZGVerifyProof(b *testing.B)  { benchmarkVerifyProof(b, true) }
+func BenchmarkGoKZGVerifyProof(b *testing.B) { benchmarkVerifyProof(b, false) }
+func benchmarkVerifyProof(b *testing.B, ckzg bool) {
+	if ckzg && !ckzgAvailable {
+		b.Skip("CKZG unavailable in this test build")
 	}
+	defer func(old bool) { useCKZG.Store(old) }(useCKZG.Load())
+	useCKZG.Store(ckzg)
 
-	blob := makeTestBlob(0x00)
-	commitment, err := ctx.BlobToKZGCommitment(&blob, 0)
-	if err != nil {
-		t.Fatalf("BlobToKZGCommitment: %v", err)
+	var (
+		blob            = randBlob()
+		point           = randFieldElement()
+		commitment, _   = BlobToCommitment(blob)
+		proof, claim, _ = ComputeProof(blob, point)
+	)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		VerifyProof(commitment, point, claim, proof)
 	}
-	proof, err := ctx.ComputeBlobKZGProof(&blob, commitment, 0)
-	if err != nil {
-		t.Fatalf("ComputeBlobKZGProof: %v", err)
+}
+
+func BenchmarkCKZGComputeBlobProof(b *testing.B)  { benchmarkComputeBlobProof(b, true) }
+func BenchmarkGoKZGComputeBlobProof(b *testing.B) { benchmarkComputeBlobProof(b, false) }
+func benchmarkComputeBlobProof(b *testing.B, ckzg bool) {
+	if ckzg && !ckzgAvailable {
+		b.Skip("CKZG unavailable in this test build")
 	}
+	defer func(old bool) { useCKZG.Store(old) }(useCKZG.Load())
+	useCKZG.Store(ckzg)
 
-	versionedHash := KZGToVersionedHash(commitment[:])
-	hashes := [][32]byte{versionedHash}
-	blobs := [][]byte{blob[:]}
-	commitments := [][]byte{commitment[:]}
-	proofs := [][]byte{proof[:]}
+	var (
+		blob          = randBlob()
+		commitment, _ = BlobToCommitment(blob)
+	)
 
-	if err := ValidateBlobSidecar(hashes, blobs, commitments, proofs); err != nil {
-		t.Errorf("ValidateBlobSidecar failed for valid sidecar: %v", err)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ComputeBlobProof(blob, commitment)
+	}
+}
+
+func BenchmarkCKZGVerifyBlobProof(b *testing.B)  { benchmarkVerifyBlobProof(b, true) }
+func BenchmarkGoKZGVerifyBlobProof(b *testing.B) { benchmarkVerifyBlobProof(b, false) }
+func benchmarkVerifyBlobProof(b *testing.B, ckzg bool) {
+	if ckzg && !ckzgAvailable {
+		b.Skip("CKZG unavailable in this test build")
+	}
+	defer func(old bool) { useCKZG.Store(old) }(useCKZG.Load())
+	useCKZG.Store(ckzg)
+
+	var (
+		blob          = randBlob()
+		commitment, _ = BlobToCommitment(blob)
+		proof, _      = ComputeBlobProof(blob, commitment)
+	)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		VerifyBlobProof(blob, commitment, proof)
 	}
 }

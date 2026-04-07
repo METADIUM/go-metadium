@@ -30,6 +30,26 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
+// CheckJournalAccount verifies that the given account hash is present in the
+// snapshot journal. This is a diagnostic function for debugging.
+func CheckJournalAccount(db ethdb.KeyValueStore, hash common.Hash) error {
+	found := false
+	err := iterateJournal(db, func(parent common.Hash, root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, storage map[common.Hash]map[common.Hash][]byte) error {
+		if _, ok := accounts[hash]; ok {
+			found = true
+			log.Info("Found account in journal", "root", root, "hash", hash)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !found {
+		log.Info("Account not found in any journal layer", "hash", hash)
+	}
+	return nil
+}
+
 // CheckDanglingStorage iterates the snap storage data, and verifies that all
 // storage also has corresponding account data.
 func CheckDanglingStorage(chaindb ethdb.KeyValueStore) error {

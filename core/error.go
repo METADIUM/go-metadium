@@ -63,6 +63,10 @@ var (
 	// have enough funds for transfer(topmost call only).
 	ErrInsufficientFundsForTransfer = errors.New("insufficient funds for transfer")
 
+	// ErrMaxInitCodeSizeExceeded is returned if creation transaction provides the init code bigger
+	// than init code size limit.
+	ErrMaxInitCodeSizeExceeded = errors.New("max initcode size exceeded")
+
 	// ErrInsufficientFunds is returned if the total cost of executing a transaction
 	// is higher than the balance of the user's account.
 	ErrInsufficientFunds = errors.New("insufficient funds for gas * price + value")
@@ -91,35 +95,27 @@ var (
 	ErrFeeCapVeryHigh = errors.New("max fee per gas higher than 2^256-1")
 
 	// ErrFeeCapTooLow is returned if the transaction fee cap is less than the
-	// the base fee of the block.
+	// base fee of the block.
 	ErrFeeCapTooLow = errors.New("max fee per gas less than block base fee")
 
 	// ErrSenderNoEOA is returned if the sender of a transaction is a contract.
 	ErrSenderNoEOA = errors.New("sender not an eoa")
 
-	// fee delegation
-	// ErrInvalidFeePayer is returned if the transaction contains an invalid feePayer's signature.
-	ErrInvalidFeePayer = errors.New("fee delegation: invalid feePayer")
+	// ErrBlobFeeCapTooLow is returned if the transaction fee cap is less than the
+	// blob gas fee of the block.
+	ErrBlobFeeCapTooLow = errors.New("max fee per blob gas less than block blob gas fee")
 
-	// ErrFeePayerInsufficientFunds is returned if the fee cost of executing a transaction
-	// is higher than the balance of the feePayer's account.
-	ErrFeePayerInsufficientFunds = errors.New("fee delegation: insufficient feePayer's funds for gas * price")
+	// ErrMissingBlobHashes is returned if a blob transaction has no blob hashes.
+	ErrMissingBlobHashes = errors.New("blob transaction missing blob hashes")
 
-	// ErrSenderInsufficientFunds is returned if the value cost of executing a transaction
-	// is higher than the balance of the sender's account.
-	ErrSenderInsufficientFunds = errors.New("fee delegation: insufficient sender's funds for value")
+	// ErrBlobTxCreate is returned if a blob transaction has no explicit to field.
+	ErrBlobTxCreate = errors.New("blob transaction of type create")
 
-	// Add TRS
-	// ErrIncludedTRSList is returned if the address included in the TRSList.
-	ErrIncludedTRSList = errors.New("included in the TRSList")
+	// ErrFeePayerInsufficientFunds is returned if the fee payer of a Type 22
+	// (FeeDelegateDynamicFeeTx) transaction does not have enough funds to pay gas.
+	ErrFeePayerInsufficientFunds = errors.New("insufficient funds for fee payer")
 
-	// EIP-4844: Blob transaction errors
-	// ErrBlobFeeCapTooLow is returned if the blob fee cap is less than the current blob base fee
-	ErrBlobFeeCapTooLow = errors.New("max fee per blob gas less than blob base fee")
-
-	// ErrBlobCountExceeded is returned if a transaction has more blobs than allowed
-	ErrBlobCountExceeded = errors.New("blob count exceeds per-transaction limit")
-
-	// ErrBlobGasLimitExceeded is returned if the total blob gas in a block exceeds the per-block limit
-	ErrBlobGasLimitExceeded = errors.New("blob gas exceeds per-block limit")
+	// ErrInvalidFeePayer is returned if the fee payer of a Type 22 transaction
+	// is nil or the signature does not match the declared fee payer address.
+	ErrInvalidFeePayer = errors.New("invalid fee payer")
 )

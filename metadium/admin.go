@@ -1261,11 +1261,9 @@ func StartAdmin(stack *node.Node, datadir string) {
 		utils.Fatalf("Invalid Consensus Method: %d\n", params.ConsensusMethod)
 	}
 
-	rpcCli, err := stack.Attach()
-	if err != nil {
-		utils.Fatalf("Failed to attach to self: %v", err)
-	}
+	rpcCli := stack.Attach()
 
+	var err error
 	cli := ethclient.NewClient(rpcCli)
 	admin = &metaAdmin{
 		stack: stack,

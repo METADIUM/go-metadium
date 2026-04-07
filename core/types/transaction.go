@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -59,6 +60,11 @@ type Transaction struct {
 	size     atomic.Value
 	from     atomic.Value
 	feePayer atomic.Value // fee delegation
+}
+
+// Time returns when the transaction was first seen on the network (spam avoidance).
+func (tx *Transaction) Time() time.Time {
+	return tx.time
 }
 
 type TransactionEx struct {
@@ -324,6 +330,22 @@ func (tx *Transaction) BlobHashes() []common.Hash {
 	return tx.inner.blobHashes()
 }
 
+// BlobGas returns the data blob gas of a blob transaction, 0 otherwise.
+func (tx *Transaction) BlobGas() uint64 {
+	if blobtx, ok := tx.inner.(*BlobTx); ok {
+		return uint64(len(blobtx.BlobHashes)) * params.BlobTxBlobGasPerBlob
+	}
+	return 0
+}
+
+// BlobTxSidecar returns the sidecar of a blob transaction, nil otherwise.
+func (tx *Transaction) BlobTxSidecar() *BlobTxSidecar {
+	if blobtx, ok := tx.inner.(*BlobTx); ok {
+		return blobtx.Sidecar
+	}
+	return nil
+}
+
 // MaxFeePerBlobGas returns the maximum fee per blob gas for the transaction.
 // Returns nil for non-blob transactions.
 func (tx *Transaction) MaxFeePerBlobGas() *big.Int {
@@ -331,6 +353,11 @@ func (tx *Transaction) MaxFeePerBlobGas() *big.Int {
 		return b.MaxFeePerBlobGas.ToBig()
 	}
 	return nil
+}
+
+// BlobGasFeeCap is an alias for MaxFeePerBlobGas.
+func (tx *Transaction) BlobGasFeeCap() *big.Int {
+	return tx.MaxFeePerBlobGas()
 }
 
 // Cost returns gas * gasPrice + value + blob gas cost.
@@ -398,6 +425,31 @@ func (tx *Transaction) GasTipCapCmp(other *Transaction) int {
 // GasTipCapIntCmp compares the gasTipCap of the transaction against the given gasTipCap.
 func (tx *Transaction) GasTipCapIntCmp(other *big.Int) int {
 	return tx.inner.gasTipCap().Cmp(other)
+}
+
+// BlobGasFeeCapIntCmp compares the blob fee cap of the transaction against the given blob fee cap.
+func (tx *Transaction) BlobGasFeeCapIntCmp(other *big.Int) int {
+	return tx.BlobGasFeeCap().Cmp(other)
+}
+
+// WithoutBlobTxSidecar returns a copy of tx with the blob sidecar removed.
+func (tx *Transaction) WithoutBlobTxSidecar() *Transaction {
+	blobtx, ok := tx.inner.(*BlobTx)
+	if !ok {
+		return tx
+	}
+	cpy := &Transaction{
+		inner: blobtx.withoutSidecar(),
+		time:  tx.time,
+	}
+	// Note: tx.size cache not carried over because the sidecar is included in size!
+	if h := tx.hash.Load(); h != nil {
+		cpy.hash.Store(h)
+	}
+	if f := tx.from.Load(); f != nil {
+		cpy.from.Store(f)
+	}
+	return cpy
 }
 
 // EffectiveGasTip returns the effective miner gasTipCap for the given base fee.
@@ -815,4 +867,22 @@ func (*AccessListTx) blobGasCost() *big.Int {
 
 func (*DynamicFeeTx) blobGasCost() *big.Int {
 	return nil
+}
+
+// HashDifference returns a new set which is the difference between a and b.
+func HashDifference(a, b []common.Hash) []common.Hash {
+	keep := make([]common.Hash, 0, len(a))
+
+	remove := make(map[common.Hash]struct{})
+	for _, hash := range b {
+		remove[hash] = struct{}{}
+	}
+
+	for _, hash := range a {
+		if _, ok := remove[hash]; !ok {
+			keep = append(keep, hash)
+		}
+	}
+
+	return keep
 }

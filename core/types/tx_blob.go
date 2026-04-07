@@ -114,22 +114,32 @@ func (tx *BlobTx) DecodeRLP(s *rlp.Stream) error {
 
 // BlobTx represents an EIP-4844 blob transaction.
 type BlobTx struct {
-	ChainID    *uint256.Int   // Chain ID
-	Nonce      uint64         // Account nonce
-	GasTipCap  *uint256.Int   // Max priority fee per gas (EIP-1559)
-	GasFeeCap  *uint256.Int   // Max fee per gas (EIP-1559)
-	Gas        uint64         // Gas limit
+	ChainID    *uint256.Int    // Chain ID
+	Nonce      uint64          // Account nonce
+	GasTipCap  *uint256.Int    // Max priority fee per gas (EIP-1559)
+	GasFeeCap  *uint256.Int    // Max fee per gas (EIP-1559)
+	Gas        uint64          // Gas limit
 	To         *common.Address // Recipient
-	Value      *uint256.Int   // Amount of Ether to send
-	Data       []byte         // Transaction data
-	AccessList AccessList     // EIP-2930 access list
+	Value      *uint256.Int    // Amount of Ether to send
+	Data       []byte          // Transaction data
+	AccessList AccessList      // EIP-2930 access list
 
-	MaxFeePerBlobGas *uint256.Int // Max fee per blob gas (EIP-4844)
+	MaxFeePerBlobGas *uint256.Int  // Max fee per blob gas (EIP-4844)
 	BlobHashes       []common.Hash // Versioned hashes of blobs (EIP-4844)
+
+	// Sidecar is not included in transaction hash; excluded from RLP
+	Sidecar *BlobTxSidecar `rlp:"-"`
 
 	V *uint256.Int // Signature V
 	R *uint256.Int // Signature R
 	S *uint256.Int // Signature S
+}
+
+// withoutSidecar returns a shallow copy of tx with the sidecar removed.
+func (tx *BlobTx) withoutSidecar() *BlobTx {
+	cpy := *tx
+	cpy.Sidecar = nil
+	return &cpy
 }
 
 // copy creates a deep copy of the transaction data and initializes all fields.

@@ -36,11 +36,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/ethdb/rocksdb"
 	"github.com/ethereum/go-ethereum/log"
 	metaapi "github.com/ethereum/go-ethereum/metadium/api"
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/hashicorp/go-bexpr"
+	"golang.org/x/exp/slog"
 )
 
 // Handler is the global debugging handler.
@@ -60,19 +61,13 @@ type HandlerT struct {
 // Verbosity sets the log verbosity ceiling. The verbosity of individual packages
 // and source files can be raised using Vmodule.
 func (*HandlerT) Verbosity(level int) {
-	glogger.Verbosity(log.Lvl(level))
+	glogger.Verbosity(slog.Level(level))
 }
 
 // Vmodule sets the log verbosity pattern. See package log for details on the
 // pattern syntax.
 func (*HandlerT) Vmodule(pattern string) error {
 	return glogger.Vmodule(pattern)
-}
-
-// BacktraceAt sets the log backtrace location. See package log for details on
-// the pattern syntax.
-func (*HandlerT) BacktraceAt(location string) error {
-	return glogger.BacktraceAt(location)
 }
 
 // MemStats returns detailed runtime memory statistics.
@@ -278,10 +273,10 @@ func expandHome(p string) string {
 func (*HandlerT) DbStats(device string, b interface{}) []uint64 {
 	bb, ok := b.(bool)
 	if ok {
-		ethdb.EnableStats(bb)
+		rocksdb.EnableStats(bb)
 	}
 
-	disk_r_count, disk_r_bytes, disk_w_count, disk_w_bytes, r_count, r_bytees, w_count, w_bytes, l_count, d_count := ethdb.Stats(device)
+	disk_r_count, disk_r_bytes, disk_w_count, disk_w_bytes, r_count, r_bytees, w_count, w_bytes, l_count, d_count := rocksdb.Stats(device)
 	return []uint64{disk_r_count, disk_r_bytes, disk_w_count, disk_w_bytes, r_count, r_bytees, w_count, w_bytes, l_count, d_count}
 }
 

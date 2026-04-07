@@ -174,7 +174,7 @@ func ExecutableDataToBlock(params ExecutableDataV1, excessBlobGas ...*big.Int) (
 		// BlobGasUsed is computed from blob transactions (same as miner/worker.go)
 		var blobGasUsed uint64
 		for _, tx := range txs {
-			blobGasUsed += uint64(len(tx.BlobHashes())) * params2.BlobTxPerBlobGas
+			blobGasUsed += uint64(len(tx.BlobHashes())) * params2.BlobTxBlobGasPerBlob
 		}
 		header.BlobGasUsed = new(big.Int).SetUint64(blobGasUsed)
 	}
