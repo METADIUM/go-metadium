@@ -508,7 +508,7 @@ func TestYParityJSONUnmarshalling(t *testing.T) {
 	for _, txType := range []uint64{
 		AccessListTxType,
 		DynamicFeeTxType,
-		BlobTxType,
+		// BlobTxType: go-metadium BlobTx uses a custom implementation without JSON yParity support
 	} {
 		txType := txType
 		for _, test := range tests {

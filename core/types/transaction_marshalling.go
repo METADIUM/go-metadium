@@ -41,6 +41,7 @@ type txJSON struct {
 	R                    *hexutil.Big    `json:"r"`
 	S                    *hexutil.Big    `json:"s"`
 	To                   *common.Address `json:"to"`
+	YParity              *hexutil.Uint64 `json:"yParity,omitempty"`
 
 	// Access list transaction fields:
 	ChainID    *hexutil.Big `json:"chainId,omitempty"`
@@ -53,6 +54,26 @@ type txJSON struct {
 	FV       *hexutil.Big    `json:"fv,omitempty"`
 	FR       *hexutil.Big    `json:"fr,omitempty"`
 	FS       *hexutil.Big    `json:"fs,omitempty"`
+}
+
+// yParityValue returns the YParity value from JSON. For backwards-compatibility reasons,
+// this can be given in the 'v' field or the 'yParity' field. If both exist, they must match.
+func (tx *txJSON) yParityValue() (*big.Int, error) {
+	if tx.YParity != nil {
+		val := uint64(*tx.YParity)
+		if val != 0 && val != 1 {
+			return nil, errInvalidYParity
+		}
+		bigval := new(big.Int).SetUint64(val)
+		if tx.V != nil && tx.V.ToInt().Cmp(bigval) != 0 {
+			return nil, errVYParityMismatch
+		}
+		return bigval, nil
+	}
+	if tx.V != nil {
+		return tx.V.ToInt(), nil
+	}
+	return nil, errVYParityMissing
 }
 
 // MarshalJSON marshals as JSON with a hash.
@@ -215,10 +236,11 @@ func (t *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'input' in transaction")
 		}
 		itx.Data = *dec.Data
-		if dec.V == nil {
-			return errors.New("missing required field 'v' in transaction")
+		itxV, err := dec.yParityValue()
+		if err != nil {
+			return err
 		}
-		itx.V = (*big.Int)(dec.V)
+		itx.V = itxV
 		if dec.R == nil {
 			return errors.New("missing required field 'r' in transaction")
 		}
@@ -272,10 +294,11 @@ func (t *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'input' in transaction")
 		}
 		itx.Data = *dec.Data
-		if dec.V == nil {
-			return errors.New("missing required field 'v' in transaction")
+		itxV2, err := dec.yParityValue()
+		if err != nil {
+			return err
 		}
-		itx.V = (*big.Int)(dec.V)
+		itx.V = itxV2
 		if dec.R == nil {
 			return errors.New("missing required field 'r' in transaction")
 		}

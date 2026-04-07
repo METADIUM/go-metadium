@@ -122,14 +122,14 @@ var createGasTests = []struct {
 	{"0x61C00060006000f0" + "600052" + "60206000F3", true, 44309, 44309},
 	// create2(0, 0, 0xc001, 0) without 3860
 	{"0x600061C00160006000f5" + "600052" + "60206000F3", false, 50471, 50471},
-	// create2(0, 0, 0xc001, 0) (too large), with 3860
-	{"0x600061C00160006000f5" + "600052" + "60206000F3", true, 32012, 100_000},
+	// create2(0, 0, 0xc001, 0) with 3860 — valid under Metadium (MaxInitCodeSize=507904)
+	{"0x600061C00160006000f5" + "600052" + "60206000F3", true, 53545, 53545},
 	// create2(0, 0, 0xc000, 0)
 	// This case is trying to deploy code at (within) the limit
 	{"0x600061C00060006000f5" + "600052" + "60206000F3", true, 53528, 53528},
 	// create2(0, 0, 0xc001, 0)
-	// This case is trying to deploy code exceeding the limit
-	{"0x600061C00160006000f5" + "600052" + "60206000F3", true, 32024, 100000},
+	// Also valid under Metadium (MaxInitCodeSize=507904); standard limit is 0xc000
+	{"0x600061C00160006000f5" + "600052" + "60206000F3", true, 53545, 53545},
 }
 
 func TestCreateGas(t *testing.T) {
@@ -147,11 +147,29 @@ func TestCreateGas(t *testing.T) {
 				BlockNumber: big.NewInt(0),
 			}
 			config := Config{}
-			if tt.eip3860 {
+			// Use pre-Camellia config for tests without EIP-3860 so that Camellia
+			// (which enables EIP-3860 unconditionally) doesn't interfere.
+			chainCfg := params.AllEthashProtocolChanges
+			if !tt.eip3860 {
+				chainCfg = &params.ChainConfig{
+					ChainID:             big.NewInt(1337),
+					HomesteadBlock:      big.NewInt(0),
+					EIP150Block:         big.NewInt(0),
+					EIP155Block:         big.NewInt(0),
+					EIP158Block:         big.NewInt(0),
+					ByzantiumBlock:      big.NewInt(0),
+					ConstantinopleBlock: big.NewInt(0),
+					PetersburgBlock:     big.NewInt(0),
+					IstanbulBlock:       big.NewInt(0),
+					BerlinBlock:         big.NewInt(0),
+					LondonBlock:         big.NewInt(0),
+					Ethash:              new(params.EthashConfig),
+				}
+			} else {
 				config.ExtraEips = []int{3860}
 			}
 
-			vmenv := NewEVM(vmctx, TxContext{}, statedb, params.AllEthashProtocolChanges, config)
+			vmenv := NewEVM(vmctx, TxContext{}, statedb, chainCfg, config)
 			var startGas = uint64(testGas)
 			ret, gas, err := vmenv.Call(AccountRef(common.Address{}), address, nil, startGas, new(uint256.Int))
 			if err != nil {

@@ -270,6 +270,9 @@ func initExcessBlobGas(cfg *params.ChainConfig, header *types.Header, parent *ty
 		parentBlobGasUsed = parent.BlobGasUsed.Uint64()
 	}
 	header.ExcessBlobGas = types.CalcExcessBlobGas(parentExcessBlobGas, parentBlobGasUsed)
+	if header.BlobGasUsed == nil {
+		header.BlobGasUsed = new(big.Int)
+	}
 }
 
 // compare and swap lock for mining thread

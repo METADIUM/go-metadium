@@ -480,3 +480,34 @@ func (p *TxPool) Sync() error {
 		return errors.New("pool already terminated")
 	}
 }
+
+// GetSidecar returns the BlobTxSidecar for the given tx hash from the blob sub-pool.
+// Returns nil if the tx is not a blob tx or no sidecar was stored.
+func (p *TxPool) GetSidecar(hash common.Hash) *types.BlobTxSidecar {
+	type sidecarProvider interface {
+		GetSidecar(common.Hash) *types.BlobTxSidecar
+	}
+	for _, sp := range p.subpools {
+		if sp2, ok := sp.(sidecarProvider); ok {
+			if sc := sp2.GetSidecar(hash); sc != nil {
+				return sc
+			}
+		}
+	}
+	return nil
+}
+
+// AddBlobWithSidecar submits a blob transaction together with its sidecar to the blob sub-pool.
+// Returns an error if no blob sub-pool is registered or validation fails.
+func (p *TxPool) AddBlobWithSidecar(tx *types.Transaction, sidecar *types.BlobTxSidecar) error {
+	type sidecarAdder interface {
+		AddWithSidecar(*types.Transaction, *types.BlobTxSidecar) error
+	}
+	for _, sp := range p.subpools {
+		if sa, ok := sp.(sidecarAdder); ok && sp.Filter(tx) {
+			return sa.AddWithSidecar(tx, sidecar)
+		}
+	}
+	errs := p.Add([]*types.Transaction{tx}, true, true)
+	return errs[0]
+}

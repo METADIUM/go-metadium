@@ -133,8 +133,8 @@ func (i *bbInput) ToBlock() *types.Block {
 		MixDigest:        i.Header.MixDigest,
 		BaseFee:          i.Header.BaseFee,
 		WithdrawalsHash:  i.Header.WithdrawalsHash,
-		BlobGasUsed:      i.Header.BlobGasUsed,
-		ExcessBlobGas:    i.Header.ExcessBlobGas,
+		BlobGasUsed:      uint64PtrToBigInt(i.Header.BlobGasUsed),
+		ExcessBlobGas:    uint64PtrToBigInt(i.Header.ExcessBlobGas),
 		ParentBeaconRoot: i.Header.ParentBeaconBlockRoot,
 	}
 
@@ -337,4 +337,11 @@ func dispatchBlock(ctx *cli.Context, baseDir string, block *types.Block) error {
 		}
 	}
 	return nil
+}
+
+func uint64PtrToBigInt(v *uint64) *big.Int {
+	if v == nil {
+		return nil
+	}
+	return new(big.Int).SetUint64(*v)
 }

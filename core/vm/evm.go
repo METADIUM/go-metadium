@@ -433,6 +433,12 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 		return nil, common.Address{}, gas, ErrNonceUintOverflow
 	}
 	evm.StateDB.SetNonce(caller.Address(), nonce+1)
+	// EIP-3860: Reject oversized init code (after nonce increment, per EIP spec).
+	// Gas metering for init code word cost is handled in the opcode gas functions
+	// (gasCreateEip3860 / gasCreate2Eip3860) before create() is called.
+	if evm.chainRules.IsShanghai && len(codeAndHash.code) > int(params.MaxInitCodeSize) {
+		return nil, common.Address{}, gas, ErrMaxInitCodeSizeExceeded
+	}
 	// We add this to the access list _before_ taking a snapshot. Even if the creation fails,
 	// the access-list change should not be rolled back
 	if evm.chainRules.IsBerlin {

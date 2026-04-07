@@ -477,3 +477,9 @@ func gasSelfdestruct(evm *EVM, contract *Contract, stack *Stack, mem *Memory, me
 	}
 	return gas, nil
 }
+
+func debugGasCreate2Eip3860(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
+	size, _ := stack.Back(2).Uint64WithOverflow()
+	println("DEBUG gasCreate2Eip3860: size=", size, "MaxInitCodeSize=", params.MaxInitCodeSize)
+	return gasCreate2Eip3860(evm, contract, stack, mem, memorySize)
+}

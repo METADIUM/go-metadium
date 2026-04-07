@@ -66,10 +66,10 @@ func main() {
 	var blob gokzg4844.Blob
 	blob[0] = 0x01
 
-	commitment, err := kzgCtx.BlobToKZGCommitment(&blob, 0)
+	commitment, err := kzgCtx.BlobToKZGCommitment(blob, 0)
 	must(err, "BlobToKZGCommitment")
 
-	proof, err := kzgCtx.ComputeBlobKZGProof(&blob, commitment, 0)
+	proof, err := kzgCtx.ComputeBlobKZGProof(blob, commitment, 0)
 	must(err, "ComputeBlobKZGProof")
 
 	versionedHash := kzg4844pkg.KZGToVersionedHash(commitment[:])

@@ -432,7 +432,11 @@ func (cm *chainMaker) makeHeader(parent *types.Block, state *state.StateDB, engi
 			header.GasLimit = CalcGasLimit(parentGasLimit, parentGasLimit)
 		}
 	}
-	if cm.config.IsCancun(header.Number, header.Time) {
+	// Set blob gas fields for Cancun or Camellia (Metadium EIP-4844 fork).
+	// For Camellia, only set on post-merge (PoS) blocks — pre-merge PoW blocks
+	// use the ethash consensus which does not accept these fields.
+	isPoS := header.Difficulty != nil && header.Difficulty.BitLen() == 0
+	if cm.config.IsCancun(header.Number, header.Time) || (cm.config.IsCamellia(header.Number) && isPoS) {
 		var (
 			parentExcessBlobGas uint64
 			parentBlobGasUsed   uint64

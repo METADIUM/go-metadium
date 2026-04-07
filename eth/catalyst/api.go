@@ -20,6 +20,7 @@ package catalyst
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -499,10 +500,13 @@ func (api *ConsensusAPI) NewPayloadV2(params engine.ExecutableData) (engine.Payl
 			return engine.PayloadStatusV1{Status: engine.INVALID}, engine.InvalidParams.With(errors.New("non-nil withdrawals pre-shanghai"))
 		}
 	}
-	if params.ExcessBlobGas != nil {
+	// Camellia (Metadium EIP-4844 fork) activates blob gas fields via block number,
+	// so allow non-nil ExcessBlobGas/BlobGasUsed for Camellia blocks in NewPayloadV2.
+	isCamellia := api.eth.BlockChain().Config().IsCamellia(new(big.Int).SetUint64(params.Number))
+	if params.ExcessBlobGas != nil && !isCamellia {
 		return engine.PayloadStatusV1{Status: engine.INVALID}, engine.InvalidParams.With(errors.New("non-nil excessBlobGas pre-cancun"))
 	}
-	if params.BlobGasUsed != nil {
+	if params.BlobGasUsed != nil && !isCamellia {
 		return engine.PayloadStatusV1{Status: engine.INVALID}, engine.InvalidParams.With(errors.New("non-nil blobGasUsed pre-cancun"))
 	}
 	return api.newPayload(params, nil, nil)

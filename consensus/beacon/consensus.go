@@ -270,13 +270,15 @@ func (beacon *Beacon) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	if !shanghai && header.WithdrawalsHash != nil {
 		return fmt.Errorf("invalid withdrawalsHash: have %x, expected nil", header.WithdrawalsHash)
 	}
-	// Verify the existence / non-existence of cancun-specific header fields
+	// Verify the existence / non-existence of cancun-specific header fields.
+	// Camellia (Metadium EIP-4844 fork) also activates blob gas fields via block number.
 	cancun := chain.Config().IsCancun(header.Number, header.Time)
+	camellia := chain.Config().IsCamellia(header.Number)
 	if !cancun {
 		switch {
-		case header.ExcessBlobGas != nil:
+		case !camellia && header.ExcessBlobGas != nil:
 			return fmt.Errorf("invalid excessBlobGas: have %d, expected nil", header.ExcessBlobGas)
-		case header.BlobGasUsed != nil:
+		case !camellia && header.BlobGasUsed != nil:
 			return fmt.Errorf("invalid blobGasUsed: have %d, expected nil", header.BlobGasUsed)
 		case header.ParentBeaconRoot != nil:
 			return fmt.Errorf("invalid parentBeaconRoot, have %#x, expected nil", header.ParentBeaconRoot)
@@ -285,6 +287,9 @@ func (beacon *Beacon) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 		if header.ParentBeaconRoot == nil {
 			return errors.New("header is missing beaconRoot")
 		}
+	}
+	// Verify EIP-4844 blob gas fields for Cancun or Camellia (Metadium EIP-4844 fork).
+	if cancun || camellia {
 		if err := eip4844.VerifyEIP4844Header(parent, header); err != nil {
 			return err
 		}

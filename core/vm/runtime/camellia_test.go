@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/core/vm/runtime"
 	"github.com/ethereum/go-ethereum/params"
@@ -79,35 +80,37 @@ func TestEIP3860InitCodeLimit_Accept(t *testing.T) {
 // ============================================================
 
 func TestEIP3860InitCodeGas(t *testing.T) {
-	// 32-byte initcode = 1 word → expect exactly 2 extra gas
+	// 32-byte initcode = 1 word → expect exactly 2 extra gas (InitCodeWordGas = 2)
+	// In the merged v1.13.14 codebase, EIP-3860 init code word gas is charged via
+	// IntrinsicGas for top-level CREATE transactions (state_transition.go) and via
+	// gasCreateEip3860/gasCreate2Eip3860 for internal CREATE opcodes.
+	// runtime.Create is a low-level helper that bypasses intrinsic gas, so we verify
+	// the word-gas metering via IntrinsicGas directly.
 	initcode := make([]byte, 32)
-
-	cfg := &runtime.Config{
-		ChainConfig: camelliaChainConfig(),
-		BlockNumber: big.NewInt(1),
-		GasLimit:    10_000_000,
-	}
-	_, _, leftOverWith, _ := runtime.Create(initcode, cfg)
-
-	cfgPre := &runtime.Config{
-		ChainConfig: preCamelliaChainConfig(),
-		BlockNumber: big.NewInt(1),
-		GasLimit:    10_000_000,
-	}
-	_, _, leftOverPre, _ := runtime.Create(initcode, cfgPre)
-
-	// gasUsed = GasLimit - leftOver
-	gasWithCamellia := cfg.GasLimit - leftOverWith
-	gasPreCamellia := cfgPre.GasLimit - leftOverPre
 	words := uint64((len(initcode) + 31) / 32)
-	expectedExtra := words * params.InitCodeWordGas
+	expectedExtra := words * params.InitCodeWordGas // 1 word * 2 gas = 2
 
-	diff := gasWithCamellia - gasPreCamellia
+	// Camellia propagates IsCamellia → IsShanghai=true (see params/config.go Rules()).
+	camelliaRules := camelliaChainConfig().Rules(big.NewInt(1), false, 0)
+	if !camelliaRules.IsShanghai {
+		t.Fatal("T-03: Camellia chain must have IsShanghai=true via IsCamellia propagation")
+	}
+
+	// IntrinsicGas with isEIP3860=true (Camellia/Shanghai) should charge extra word gas.
+	gasWithEIP3860, err := core.IntrinsicGas(initcode, nil, true, true, true, true)
+	if err != nil {
+		t.Fatalf("T-03: IntrinsicGas (eip3860=true) error: %v", err)
+	}
+	gasWithoutEIP3860, err := core.IntrinsicGas(initcode, nil, true, true, true, false)
+	if err != nil {
+		t.Fatalf("T-03: IntrinsicGas (eip3860=false) error: %v", err)
+	}
+
+	diff := gasWithEIP3860 - gasWithoutEIP3860
 	if diff != expectedExtra {
-		t.Errorf("T-03: expected %d extra gas (InitCodeWordGas), got %d (pre=%d, post=%d)",
-			expectedExtra, diff, gasPreCamellia, gasWithCamellia)
+		t.Errorf("T-03: expected %d extra gas (InitCodeWordGas), got %d", expectedExtra, diff)
 	} else {
-		t.Logf("T-03 PASS: +%d gas charged for %d word(s) of initcode", diff, words)
+		t.Logf("T-03 PASS: IntrinsicGas charges +%d gas for %d word(s) of initcode under EIP-3860", diff, words)
 	}
 }
 

@@ -3,7 +3,7 @@
 > Camellia = Shanghai + Cancun (EIP-1153, 3651, 3855, 3860, 4844, 5656, 6780)
 > 기존 Metadium 기능 (Fee Delegation Type 22, SPoA, VRF, 거버넌스, TRS) 호환성 포함
 
-> Last updated: 2026-04-07. Layer 1 (T-01~T-16): ALL PASS. Layer 2: PASS=10, N/A=1. Layer 3: 배포 완료, CamelliaBlock 대기. Layer 4: PASS. Layer 5 SPoA: 22/22 PASS. Layer 6 (sync): 4개 노드 전체 PASS. Layer 7 (blob tx E2E): PASS. Layer 8 (mixed tx): PASS — normal+fee delegation+blob 혼합 블록 검증. make test / make test-short: 전체 PASS (TestEmptyBlocks Engine API PoS 테스트 제외, Metadium PoA 구조적 비해당).
+> Last updated: 2026-04-07. Layer 1 (T-01~T-16): ALL PASS. Layer 2: PASS=10, N/A=1. Layer 3: 배포 완료, CamelliaBlock 대기. Layer 4: PASS. Layer 5 SPoA: 22/22 PASS. Layer 6 (sync): 4개 노드 전체 PASS. Layer 7 (blob tx E2E): PASS. Layer 8 (mixed tx): PASS — normal+fee delegation+blob 혼합 블록 검증. Layer 9 (txpool Camellia blob tx): PASS — v1.13.14 merge txpool regression tests added. make test / make test-short: 전체 PASS (TestEmptyBlocks Engine API PoS 테스트 제외, Metadium PoA 구조적 비해당).
 
 ---
 
@@ -186,6 +186,21 @@ Camellia 바이너리로 실제 chaindata를 이어받아 최신 블록까지 �
 | Layer 6 (실서버 동기화) | 4개 노드 | ✅ 전체 PASS (testnet/mainnet × LevelDB/RocksDB) |
 | Layer 7 (blob tx E2E) | 4단계 | ✅ PASS (submit→pool sidecar→mined→sidecar pruned) |
 | Layer 8 (mixed tx) | 3 tx 타입 | ✅ PASS (Type 2 + Type 22 + Type 3 혼합 블록) |
+| Layer 9 (txpool Camellia blob tx) | 2개 regression test | ✅ PASS (v1.13.14 merge fixes) |
+
+### Layer 9: txpool Camellia blob tx 회귀 테스트 (v1.13.14 merge, 2026-04-07)
+
+go-ethereum v1.13.14 merge 과정에서 발견된 txpool mainnet blocker 2건에 대한 회귀 테스트.
+
+| ID | 테스트 함수 | 수정 위치 | 설명 | 상태 |
+|----|------------|----------|------|------|
+| T-17 | `TestValidateTransactionCamelliaOnly` | `core/txpool/validation.go:72` | CancunTime=nil 인 Camellia-only 체인에서 blob TX 수락 | [x] |
+| T-18 | `TestBlobPoolLimboFinalizeCamellia` | `core/txpool/blobpool/blobpool.go:820` | Camellia 체인에서 limbo.finalize() 호출 (메모리 누수 방지) | [x] |
+
+```bash
+go test ./core/txpool/ -run TestValidateTransactionCamelliaOnly -v
+go test ./core/txpool/blobpool/ -run TestBlobPoolLimboFinalizeCamellia -v
+```
 
 **남은 작업:** testnet `CamelliaBlock` 번호 결정 → 포크 전환 모니터링 → mainnet 설정
 

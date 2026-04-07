@@ -20,6 +20,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
+	rocksdbstats "github.com/ethereum/go-ethereum/ethdb/rocksdb"
 )
 
 func pack4(s []byte) []byte {
@@ -239,7 +240,7 @@ func write(db ethdb.Database, prefix string, start, end, numThreads, batchCount,
 }
 
 func stats(device string) []uint64 {
-	disk_r_count, disk_r_bytes, disk_w_couhnt, disk_w_bytes, r_count, r_bytes, w_count, w_bytes, l_count, d_count := ethdb.Stats(device)
+	disk_r_count, disk_r_bytes, disk_w_couhnt, disk_w_bytes, r_count, r_bytes, w_count, w_bytes, l_count, d_count := rocksdbstats.Stats(device)
 	return []uint64{disk_r_count, disk_r_bytes, disk_w_couhnt, disk_w_bytes, r_count, r_bytes, w_count, w_bytes, l_count, d_count}
 }
 
@@ -389,7 +390,7 @@ func main() {
 
 	dbPath = nargs[0]
 
-	ethdb.EnableStats(true)
+	rocksdbstats.EnableStats(true)
 	switch which {
 	case "leveldb":
 		db, err = rawdb.NewLevelDBDatabase(dbPath, 1024, 1024, "", false)
@@ -398,7 +399,7 @@ func main() {
 			return
 		}
 	case "rocksdb":
-		db, err = rawdb.NewRocksDBDatabase(dbPath, 1024, 1024, "", false)
+		err = fmt.Errorf("rocksdb not supported via rawdb in this build, use ethdb/rocksdb directly")
 		if err != nil {
 			fmt.Printf("Cannot open DB %s: %v\n", dbPath, err)
 			return

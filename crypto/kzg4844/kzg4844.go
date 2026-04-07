@@ -18,6 +18,7 @@
 package kzg4844
 
 import (
+	"crypto/sha256"
 	"embed"
 	"errors"
 	"hash"
@@ -165,4 +166,12 @@ func CalcBlobHashV1(hasher hash.Hash, commit *Commitment) (vh [32]byte) {
 // IsValidVersionedHash checks that h is a structurally-valid versioned blob hash.
 func IsValidVersionedHash(h []byte) bool {
 	return len(h) == 32 && h[0] == 0x01
+}
+
+// KZGToVersionedHash computes the versioned hash of a KZG commitment (48 bytes).
+// It is equivalent to CalcBlobHashV1 with a freshly-created sha256 hasher.
+func KZGToVersionedHash(commitment []byte) [32]byte {
+	var c Commitment
+	copy(c[:], commitment)
+	return CalcBlobHashV1(sha256.New(), &c)
 }
