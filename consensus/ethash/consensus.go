@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
@@ -517,6 +518,17 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 
 	// Assign the final state root to header.
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+
+	// Metadium PoA: sign header.Root with this node's private key.
+	if !metaminer.IsPoW() {
+		coinbase, nodeId, sig, err := metaminer.SignBlock(header.Number, header.Root, chain.Config().IsPangyo(header.Number))
+		if err != nil {
+			return nil, err
+		}
+		header.Coinbase = coinbase
+		header.MinerNodeId = nodeId
+		header.MinerNodeSig = sig
+	}
 
 	// Header seems complete, assemble into a block and return
 	return types.NewBlock(header, txs, uncles, receipts, trie.NewStackTrie(nil)), nil
