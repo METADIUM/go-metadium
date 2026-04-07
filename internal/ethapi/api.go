@@ -2001,10 +2001,6 @@ func (s *TransactionAPI) FillTransaction(ctx context.Context, args TransactionAr
 	return &SignTransactionResult{data, tx}, nil
 }
 
-// blobBackend is an optional interface for backends that support blob transactions with sidecars.
-type blobBackend interface {
-	SendBlobTx(ctx context.Context, signedTx *types.Transaction, sidecar *types.BlobTxSidecar) error
-}
 
 // SendRawTransaction will add the signed transaction to the transaction pool.
 // The sender is responsible for signing the transaction and using the correct nonce.

@@ -291,12 +291,6 @@ func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction)
 	return b.eth.txPool.Add([]*types.Transaction{signedTx}, true, false)[0]
 }
 
-// SendBlobTx submits a blob transaction with its sidecar to the transaction pool.
-// This implements the ethapi.blobBackend interface so that blob transactions
-// submitted via eth_sendRawTransaction go through the proper blob pool path.
-func (b *EthAPIBackend) SendBlobTx(ctx context.Context, tx *types.Transaction, sidecar *types.BlobTxSidecar) error {
-	return b.eth.txPool.AddBlobWithSidecar(tx, sidecar)
-}
 
 func (b *EthAPIBackend) GetPoolTransactions() (types.Transactions, error) {
 	pending := b.eth.txPool.Pending(txpool.PendingFilter{})
