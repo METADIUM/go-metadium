@@ -135,9 +135,10 @@ log ""
 DEPLOY_LOG="$SCRIPT_DIR/data/deploy.log"
 mkdir -p "$SCRIPT_DIR/data"
 
-"$GMET_BIN" attach "$NODE1_RPC" \
+"$GMET_BIN" attach \
   --preload "${GOVERNANCE_JS},${DEPLOY_JS}" \
   --exec "GovernanceDeployer.deploy(\"${KEYSTORE_FILE}\", \"${PASSWORD}\", \"${SCRIPT_DIR}/config.json\", true)" \
+  "$NODE1_RPC" \
   2>&1 | tee "$DEPLOY_LOG"
 
 DEPLOY_EXIT=${PIPESTATUS[0]}
