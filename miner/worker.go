@@ -116,6 +116,7 @@ func (env *environment) copy() *environment {
 		coinbase: env.coinbase,
 		header:   types.CopyHeader(env.header),
 		receipts: copyReceipts(env.receipts),
+		blobs:    env.blobs,
 	}
 	if env.gasPool != nil {
 		gasPool := *env.gasPool
@@ -888,7 +889,10 @@ func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction) 
 	if env.header.BlobGasUsed == nil {
 		env.header.BlobGasUsed = new(big.Int)
 	}
-	env.header.BlobGasUsed.Add(env.header.BlobGasUsed, new(big.Int).SetUint64(receipt.BlobGasUsed))
+	// receipt.BlobGasUsed is not populated in Metadium's applyTransaction,
+	// so compute blob gas directly from the sidecar blob count.
+	blobGas := uint64(len(sc.Blobs)) * params.BlobTxBlobGasPerBlob
+	env.header.BlobGasUsed.Add(env.header.BlobGasUsed, new(big.Int).SetUint64(blobGas))
 	return receipt.Logs, nil
 }
 
@@ -987,7 +991,15 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 		// Start executing the transaction
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
-		logs, err := w.commitTransaction(env, tx)
+		var (
+			logs []*types.Log
+			err  error
+		)
+		if tx.Type() == types.BlobTxType {
+			logs, err = w.commitBlobTransaction(env, tx)
+		} else {
+			logs, err = w.commitTransaction(env, tx)
+		}
 		switch {
 		case errors.Is(err, core.ErrNonceTooLow):
 			// New head notification data race between the transaction pool and miner, shift
@@ -1157,8 +1169,8 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *atomic.Int32,
 		}
 		// EIP-4844: commit blob transactions up to MaxBlobGasPerBlock.
 		if w.chainConfig.IsCamellia(env.header.Number) && len(blobPendingLazy) > 0 {
-			blobTxs := newTransactionsByPriceAndNonce(env.signer, nil, env.header.BaseFee)
-			plainTxs := newTransactionsByPriceAndNonce(env.signer, blobPendingLazy, env.header.BaseFee)
+			plainTxs := newTransactionsByPriceAndNonce(env.signer, nil, env.header.BaseFee)
+			blobTxs := newTransactionsByPriceAndNonce(env.signer, blobPendingLazy, env.header.BaseFee)
 			if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt); err != nil {
 				return true
 			}

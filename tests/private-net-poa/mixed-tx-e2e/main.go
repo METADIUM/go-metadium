@@ -82,7 +82,7 @@ func main() {
 	normalTx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
 		ChainID:   chainIDBig,
 		Nonce:     senderNonce,
-		GasTipCap: big.NewInt(1e9),
+		GasTipCap: gasPrice,
 		GasFeeCap: new(big.Int).Mul(gasPrice, big.NewInt(2)),
 		Gas:       21000,
 		To:        &toAddr,
@@ -102,7 +102,7 @@ func main() {
 	senderInner := &types.DynamicFeeTx{
 		ChainID:   chainIDBig,
 		Nonce:     senderNonce + 1,
-		GasTipCap: big.NewInt(1e9),
+		GasTipCap: gasPrice,
 		GasFeeCap: new(big.Int).Mul(gasPrice, big.NewInt(2)),
 		Gas:       30000,
 		To:        &toAddr,
@@ -117,7 +117,7 @@ func main() {
 		SenderTx: types.DynamicFeeTx{
 			ChainID:   chainIDBig,
 			Nonce:     senderNonce + 1,
-			GasTipCap: big.NewInt(1e9),
+			GasTipCap: gasPrice,
 			GasFeeCap: new(big.Int).Mul(gasPrice, big.NewInt(2)),
 			Gas:       30000,
 			To:        &toAddr,
@@ -144,8 +144,14 @@ func main() {
 	hash2 := submitRawTx(rpc, fdRaw)
 	fmt.Printf("Submitted fee delegation tx: %s\n\n", hash2)
 
+	// Wait for TX 1 and TX 2 to be mined before submitting blob tx
+	fmt.Println("Waiting for TX 1 and TX 2 to be mined...")
+	waitForReceipts(rpc, []string{hash1, hash2}, 30)
+
 	// === TX 3: Blob Tx (Type 3) ===
 	fmt.Println("--- TX 3: Blob Tx (EIP-4844, Type 3) ---")
+	// Re-query pending nonce (after tx1/tx2 mined)
+	blobNonce := hexToUint64(rpcCall(rpc, "eth_getTransactionCount", []any{sender.Hex(), "pending"}))
 	kzgCtx, err := gokzg4844.NewContext4096Secure()
 	must(err, "KZG context")
 
@@ -163,8 +169,8 @@ func main() {
 	toU256 := func(b *big.Int) *uint256.Int { v, _ := uint256.FromBig(b); return v }
 	blobInner := &types.BlobTx{
 		ChainID:          toU256(chainIDBig),
-		Nonce:            senderNonce + 2,
-		GasTipCap:        uint256.NewInt(1e9),
+		Nonce:            blobNonce,
+		GasTipCap:        toU256(gasPrice),
 		GasFeeCap:        toU256(new(big.Int).Mul(gasPrice, big.NewInt(2))),
 		Gas:              21000,
 		To:               &toAddr,

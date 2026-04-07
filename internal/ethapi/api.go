@@ -2001,10 +2001,6 @@ func (s *TransactionAPI) FillTransaction(ctx context.Context, args TransactionAr
 	return &SignTransactionResult{data, tx}, nil
 }
 
-// blobBackend is an optional interface for backends that support blob transactions with sidecars.
-type blobBackend interface {
-	SendBlobTx(ctx context.Context, signedTx *types.Transaction, sidecar *types.BlobTxSidecar) error
-}
 
 // SendRawTransaction will add the signed transaction to the transaction pool.
 // The sender is responsible for signing the transaction and using the correct nonce.
@@ -2014,16 +2010,10 @@ func (s *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil.B
 	// Try blob tx network encoding (with sidecar) first.
 	if len(input) > 0 && input[0] == types.BlobTxType {
 		if tx, sidecar, err := types.DecodeBlobTxNetworkEncoding(input); err == nil && len(sidecar.Blobs) > 0 {
-			if bb, ok := s.b.(blobBackend); ok {
-				if err := checkTxFee(tx.GasPrice(), tx.Gas(), s.b.RPCTxFeeCap()); err != nil {
-					return common.Hash{}, err
-				}
-				if err := bb.SendBlobTx(ctx, tx, sidecar); err != nil {
-					return common.Hash{}, err
-				}
-				log.Info("Submitted blob transaction", "hash", tx.Hash().Hex(), "blobs", len(sidecar.Blobs))
-				return tx.Hash(), nil
-			}
+			// Attach the sidecar to the transaction so the blobpool stores it
+			// alongside the tx fields (needed for mining).
+			txWithSidecar := tx.WithBlobTxSidecar(sidecar)
+			return SubmitTransaction(ctx, s.b, txWithSidecar)
 		}
 	}
 	tx := new(types.Transaction)

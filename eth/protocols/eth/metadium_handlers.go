@@ -92,7 +92,8 @@ func handleTransactionsEx(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&txexs); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
-	signer := types.MakeSigner(backend.Chain().Config(), backend.Chain().CurrentBlock().Number, backend.Chain().CurrentBlock().Time)
+	head := backend.Chain().CurrentBlock()
+	signer := types.MakeSigner(backend.Chain().Config(), head.Number, head.Time)
 	txs := types.TxExs2Txs(signer, txexs, metaminer.IsPartner(peer.ID()))
 	for i, tx := range txs {
 		if tx == nil {

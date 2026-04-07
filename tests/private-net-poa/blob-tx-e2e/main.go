@@ -49,6 +49,7 @@ func main() {
 
 	// 1. Get chain info
 	chainIDBig := hexToBigInt(rpcCall(rpc, "eth_chainId", nil))
+	gasPrice := hexToBigInt(rpcCall(rpc, "eth_gasPrice", nil))
 	blobBaseFee := hexToBigInt(rpcCall(rpc, "eth_blobBaseFee", nil))
 	blockNum := hexToBigInt(rpcCall(rpc, "eth_blockNumber", nil))
 	nonce := hexToUint64(rpcCall(rpc, "eth_getTransactionCount", []any{sender.Hex(), "pending"}))
@@ -83,8 +84,8 @@ func main() {
 	inner := &types.BlobTx{
 		ChainID:          toU256(chainIDBig),
 		Nonce:            nonce,
-		GasTipCap:        uint256.NewInt(1e9),
-		GasFeeCap:        uint256.NewInt(2e9),
+		GasTipCap:        toU256(gasPrice),
+		GasFeeCap:        toU256(new(big.Int).Mul(gasPrice, big.NewInt(2))),
 		Gas:              21000,
 		To:               &toAddr,
 		Value:            uint256.NewInt(0),
