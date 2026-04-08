@@ -231,7 +231,7 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 			return consensus.ErrFutureBlock
 		}
 	}
-	if header.Time <= parent.Time {
+	if metaminer.IsPoW() && header.Time <= parent.Time {
 		return errOlderBlockTime
 	}
 	// Verify the block's difficulty based on its timestamp and parent's difficulty.
@@ -299,6 +299,10 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	// If all checks passed, validate any special fields for hard forks
 	if err := misc.VerifyDAOHeaderExtraData(chain.Config(), header); err != nil {
 		return err
+	}
+	// Metadium: Check if it's generated and signed by a registered node
+	if !metaminer.IsPoW() && !metaminer.VerifyBlockSig(header.Number, header.Coinbase, header.MinerNodeId, header.Root, header.MinerNodeSig, chain.Config().IsPangyo(header.Number)) {
+		return consensus.ErrUnauthorized
 	}
 	return nil
 }
