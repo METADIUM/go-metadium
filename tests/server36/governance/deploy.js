@@ -40,22 +40,23 @@ const PRIVKEYS = [
 ];
 
 // Node info (from static-nodes.json / setup.sh)
+// Enode public keys derived from nodekeys via admin_nodeInfo
 const NODES = [
   {
     name: "node1",
-    enode: "0xbc87c4add6cbf964621dbc2d43ea18f879d4e406daab15b07c8bfef5cf992c7a08a1ca1df07c56f0e37333785e5439839bb634c8523f13e902b00d498954e3ba",
+    enode: "bc87c4add6cbf964621dbc2d43ea18f879d4e406daab15b07c8bfef5cf992c7a08a1ca1df07c56f0e37333785e5439839bb634c8523f13e902b00d498954e3ba",
     ip:   "172.32.0.11",
     port: 30303,
   },
   {
     name: "node2",
-    enode: "0x7bcf4a7e5d3ddb5d1e8e3a5ed40b44f3efd0049b1e4b40e7c0e5f8a2a5e4a7b8c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4",
+    enode: "7bcf4a76d77fe3935cb0ce272be886346d9b5ed7b0b728c2fc4ef1fb41d01cf412c93fbac8310f56d1d98ea6fec6aba311dcd6e53651ae3e5e117d5a711e709e",
     ip:   "172.32.0.12",
     port: 30303,
   },
   {
     name: "node3",
-    enode: "0x0d5512f3a2b1c4e5d6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9",
+    enode: "0d5512ff30a03d1db611624cb1058cc25f8374e4677a057c061a73c9c0998c125acd09f6a25e79a770c38880fae3aae52fab50d632e0b12d82e2e11254f14f0e",
     ip:   "172.32.0.13",
     port: 30303,
   },
@@ -286,25 +287,23 @@ async function main() {
     log(`  Staking.init() skipped (${e.message.slice(0, 60)})`);
   }
 
-  // ── 11. Deposit stake for deployer (first member) ─────────────────────────
-  log("Depositing stake for deployer (first member)...");
-  try {
-    const txDep = await stakingProxy.deposit({ value: LOCK_AMOUNT });
-    await txDep.wait();
-    log(`  deployer deposited ${ethers.formatEther(LOCK_AMOUNT)} META`);
-  } catch (e) {
-    log(`  Staking deposit failed: ${e.message.slice(0, 80)}`);
+  // ── 11. Deposit stake for all 3 miners ────────────────────────────────────
+  log("Depositing stake for all miners...");
+  for (let i = 0; i < signers.length; i++) {
+    const stakingAs = new ethers.Contract(stakingAddr, stakingImpArt.abi, signers[i]);
+    try {
+      const txDep = await stakingAs.deposit({ value: LOCK_AMOUNT });
+      await txDep.wait();
+      log(`  ${NODES[i].name} (${signers[i].address}) deposited ${ethers.formatEther(LOCK_AMOUNT)} META`);
+    } catch (e) {
+      log(`  ${NODES[i].name} stake failed: ${e.message.slice(0, 80)}`);
+    }
   }
 
-  // ── 12. Initialize Gov with first member via initOnce ────────────────────
-  log("Initializing Gov with node1 via initOnce...");
-  // Gov proxy with GovImp ABI
+  // ── 12. Initialize Gov with all 3 miners via initOnce ─────────────────────
+  log("Initializing Gov with 3 members via initOnce...");
   const govProxy = new ethers.Contract(govAddr, govImpArt.abi, deployer);
-  const node0 = NODES[0];
 
-  // Build the raw binary data for initOnce:
-  // Per member: staker(32) voter(32) reward(32) name[len(32)+data] enode[len(32)+data] ip[len(32)+data] port(32)
-  // No ABI padding — tightly packed after each length prefix
   function addr32(a) {
     return ethers.getBytes(ethers.zeroPadValue(a, 32));
   }
@@ -315,27 +314,42 @@ async function main() {
     return ethers.concat([uint32b(b.length), b]);
   }
 
-  const nameBytes  = ethers.toUtf8Bytes(node0.name);   // "node1"
-  // Use 64-byte zero enode (placeholder — not validated in initOnce)
-  const enodeBytes = new Uint8Array(64);
-  const ipBytes    = ethers.toUtf8Bytes(node0.ip);      // "172.32.0.11"
-
-  const memberData = ethers.concat([
-    addr32(deployer.address),   // staker
-    addr32(deployer.address),   // voter
-    addr32(deployer.address),   // reward
-    bytesField(nameBytes),
-    bytesField(enodeBytes),
-    bytesField(ipBytes),
-    uint32b(node0.port),
-  ]);
+  const memberChunks = [];
+  for (let i = 0; i < NODES.length && i < signers.length; i++) {
+    const node = NODES[i];
+    const signer = signers[i];
+    memberChunks.push(ethers.concat([
+      addr32(signer.address),
+      addr32(signer.address),
+      addr32(signer.address),
+      bytesField(ethers.toUtf8Bytes(node.name)),
+      bytesField(ethers.getBytes("0x" + node.enode)),
+      bytesField(ethers.toUtf8Bytes(node.ip)),
+      uint32b(node.port),
+    ]));
+    log(`  Member ${i+1}: ${node.name} staker=${signer.address}`);
+  }
 
   try {
-    const tx = await govProxy.initOnce(registryAddr, LOCK_AMOUNT, memberData);
+    const tx = await govProxy.initOnce(registryAddr, LOCK_AMOUNT, ethers.concat(memberChunks));
     await tx.wait();
-    log(`  Gov initialized (initOnce) with ${node0.name} (${deployer.address})`);
+    log(`  Gov initialized with ${memberChunks.length} members`);
   } catch (e) {
     log(`  Gov.initOnce failed: ${e.message.slice(0, 120)}`);
+  }
+
+  // ── 12b. Initialize etcd cluster ────────────────────────────────────────────
+  log("Initializing etcd cluster on node1...");
+  try {
+    const resp = await fetch(RPC_URL, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({jsonrpc:"2.0",method:"admin_etcdInit",params:[],id:1}),
+    });
+    const r = await resp.json();
+    log(`  admin_etcdInit: ${JSON.stringify(r.result || r.error)}`);
+  } catch(e) {
+    log(`  admin_etcdInit failed: ${e.message.slice(0,80)}`);
   }
 
   // ── 12. Verify ───────────────────────────────────────────────────────────
