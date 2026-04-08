@@ -1,77 +1,94 @@
 # go-metadium
 
-## 프로젝트
-Metadium 블록체인 노드 구현 (go-ethereum fork) — Camellia fork (Shanghai + Cancun EIPs) 통합 개발 중
+## Project
+Metadium blockchain node implementation (go-ethereum v1.13.14 fork). Camellia fork integrates Shanghai + Cancun EIPs on Metadium PoA.
 
-## 기술 스택
+## Tech Stack
 - Backend: Go 1.21+
-- DB: LevelDB (기본) / RocksDB (`-tags rocksdb`)
-- Consensus: Metadium PoA (Clique 기반)
+- DB: LevelDB (default) / RocksDB (`-tags rocksdb`)
+- Consensus: Metadium PoA (ethash placeholder, custom sealing)
+- Version: 1.0.0-stable
 
-## 디렉토리
-- `cmd/geth/` — 메인 바이너리 엔트리포인트
-- `core/` — 블록체인 핵심 로직 (state, tx, block)
-- `params/` — 체인 설정 (fork block, gas params)
-- `internal/ethapi/` — JSON-RPC API
-- `metadium/` — Metadium 전용 거버넌스 로직
-- `tests/private-net-poa/` — 로컬 3노드 PoA 테스트 환경
-- `scripts/` — 빌드/배포/RPC 테스트 스크립트
+## Directory Structure
+- `cmd/geth/` -- main binary entrypoint
+- `core/` -- blockchain core logic (state, tx, block)
+- `core/types/` -- block header, transaction types (BlobTx, FeeDelegateTx)
+- `params/` -- chain config (fork blocks, gas params)
+- `internal/ethapi/` -- JSON-RPC API
+- `eth/protocols/eth/` -- P2P protocol (meta/66, meta/68)
+- `metadium/` -- Metadium governance logic
+- `miner/` -- block production (commitTransactionsEx for PoA)
+- `consensus/ethash/` -- consensus engine (PoA sealing + reward distribution)
+- `tests/private-net-poa/` -- local 3-node PoA test environment
+- `scripts/` -- build/deploy/RPC test scripts
+- `docs/` -- Camellia fork documentation and test reports
 
-## 실행
-- 빌드 (LevelDB): `CGO_ENABLED=0 go build -o gmet ./cmd/geth`
-- 빌드 (RocksDB): `CGO_ENABLED=1 CGO_LDFLAGS="-lrocksdb -lstdc++ -lm -lz -lbz2 -lsnappy -llz4 -lzstd" go build -tags rocksdb -o gmet ./cmd/geth`
-- 테스트: `go test ./core/...`
-- RPC 테스트: `bash scripts/rpc-test-full.sh`
+## Build
+- LevelDB: `CGO_ENABLED=0 go build -o gmet ./cmd/geth`
+- RocksDB: `CGO_ENABLED=1 CGO_LDFLAGS="-lrocksdb -lstdc++ -lm -lz -lbz2 -lsnappy -llz4 -lzstd" go build -tags rocksdb -o gmet ./cmd/geth`
 
-## 브랜치 전략
-- `master` — upstream/master 동기화 (공식 릴리스)
-- `develop` — 개발 메인 브랜치 (origin push 기본)
-- `feature/camellia-evm` — Camellia 구현
+## Test
+- Unit tests: `make test` or `make test-short`
+- RPC API test: `bash scripts/rpc-test-full.sh http://localhost:8545`
+- Camellia EIP verification: `bash tests/private-net-poa/camellia-test.sh`
+- Blob tx e2e: `go run ./tests/private-net-poa/blob-tx-e2e/ http://localhost:8545`
+- Mixed tx e2e: `go run ./tests/private-net-poa/mixed-tx-e2e/ http://localhost:8545`
 
-## 프로젝트 관리
-- 방식: file
+## Branch Strategy
+- `master` -- upstream sync (official releases)
+- `develop` -- main development branch
+- `feature/geth-v1.13.14` -- Camellia fork implementation (current)
 
-## 서버 접속 방법
+## Project Management
+- Method: file
 
-### 접속 방식
-- 로컬에서 직접 접근 가능 (점프박스 불필요)
-- 키: `~/.ssh/aws-jsong-nopass.pem`
+## Server Access
 
-### 151 서버 (testnet RocksDB 노드)
-- 접속: `ssh -i ~/.ssh/aws-jsong-nopass.pem jsong@192.168.0.151`
-- 바이너리: `/data/jsong/gmet-rocksdb`
-- 소스: `/home/jsong/go-metadium` (git)
+### SSH Key
+- Key: `~/.ssh/aws-jsong-nopass.pem`
+- Direct access (no jump box required)
+
+### Server 151 (testnet, RocksDB)
+- SSH: `ssh -i ~/.ssh/aws-jsong-nopass.pem jsong@192.168.0.151`
+- Binary: `/data/jsong/gmet-rocksdb`
+- Source: `/data/jsong/go-metadium` (git)
 - RPC: `http://127.0.0.1:8588` (`--metadium-testnet`, RocksDB)
 - API: `eth,net,web3,admin,debug`
 
-### 빌드 (151 서버)
+### Build (Server 151)
 ```bash
 cd /data/jsong/go-metadium
 CGO_ENABLED=1 CGO_LDFLAGS="-lrocksdb -lstdc++ -lm -lz -lbz2 -lsnappy -llz4 -lzstd" \
   /usr/local/go/bin/go build -tags rocksdb -o /data/jsong/gmet-rocksdb ./cmd/geth
 ```
 
-### testnet 서버 (192.168.0.25)
-- 접속: `ssh -i ~/.ssh/aws-jsong-nopass.pem ubuntu@192.168.0.25`
-- 바이너리: `/usr/local/bin/gmet`
-- 소스: `/data/go-metadium` (git)
-- 서비스: `gmet-testnet.service` (systemd)
+### Server 25 (testnet, LevelDB)
+- SSH: `ssh -i ~/.ssh/aws-jsong-nopass.pem ubuntu@192.168.0.25`
+- Binary: `/usr/local/bin/gmet`
+- Source: `/data/go-metadium` (git)
+- Service: `gmet-testnet.service` (systemd)
 - RPC: `http://127.0.0.1:8588` (`--metadium-testnet`, LevelDB)
 - API: `eth,net,web3,admin,debug`
 
-### 150 서버 (mainnet 노드 2대)
-- 접속: `ssh -i ~/.ssh/aws-jsong-nopass.pem jsong@192.168.0.150`
-- 바이너리: `/home/jsong/gmet-rocksdb`
-- 소스: `/home/jsong/go-metadium` (git)
-- 노드1 (LevelDB): `http://127.0.0.1:8588` (`--mainnet --userocksdb 0`)
-- 노드2 (RocksDB): `http://127.0.0.1:8590` (`--mainnet --userocksdb 1`)
+### Server 150 (mainnet, 2 nodes)
+- SSH: `ssh -i ~/.ssh/aws-jsong-nopass.pem jsong@192.168.0.150`
+- Binary: `/home/jsong/gmet-rocksdb`
+- Source: `/home/jsong/go-metadium` (git)
+- Node 1 (LevelDB): `http://127.0.0.1:8588` (`--mainnet --userocksdb 0`)
+- Node 2 (RocksDB): `http://127.0.0.1:8590` (`--mainnet --userocksdb 1`)
 - API: `eth,net,web3,admin,debug`
 
-### 프라이빗 네트워크 (151 서버)
+### Server 36 (long-term private network testing)
+- SSH: `ssh -i ~/.ssh/aws-jsong-nopass.pem cplabs@10.150.255.36`
+- Docker-based 4-node private network (3 miners + 1 sync)
+- Mixed DB: LevelDB + RocksDB
+- Purpose: Camellia fork stability and governance reward verification
+
+### Private Network (local Docker)
 ```bash
-cd /data/jsong/go-metadium/tests/private-net-poa
-./setup.sh    # 초기화 (Docker 이미지 빌드)
-./start.sh    # 3노드 시작 (8545/8546/8547)
-./stop.sh     # 중지
-./stop.sh --clean && ./setup.sh  # 전체 초기화
+cd tests/private-net-poa
+./setup.sh              # Initialize (builds Docker image)
+./start.sh              # Start 3-node network (8545/8546/8547)
+./stop.sh               # Stop (data preserved)
+./stop.sh --clean       # Full reset
 ```
