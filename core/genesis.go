@@ -221,8 +221,9 @@ func (e *GenesisMismatchError) Error() string {
 
 // ChainOverrides contains the changes to chain config.
 type ChainOverrides struct {
-	OverrideCancun *uint64
-	OverrideVerkle *uint64
+	OverrideCancun   *uint64
+	OverrideVerkle   *uint64
+	OverrideCamellia *big.Int // Metadium: Camellia fork block override
 }
 
 // SetupGenesisBlock writes or updates the genesis block in db.
@@ -253,6 +254,22 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedbpkg.Database
 			}
 			if overrides != nil && overrides.OverrideVerkle != nil {
 				config.VerkleTime = overrides.OverrideVerkle
+			}
+			// Metadium: Camellia fork block override (cascades to earlier forks)
+			if overrides != nil && overrides.OverrideCamellia != nil {
+				if config.AvocadoBlock == nil {
+					config.AvocadoBlock = overrides.OverrideCamellia
+				}
+				if config.PangyoBlock == nil {
+					config.PangyoBlock = overrides.OverrideCamellia
+				}
+				if config.ApplepieBlock == nil {
+					config.ApplepieBlock = overrides.OverrideCamellia
+				}
+				if config.BokbunjaBlock == nil {
+					config.BokbunjaBlock = overrides.OverrideCamellia
+				}
+				config.CamelliaBlock = overrides.OverrideCamellia
 			}
 		}
 	}

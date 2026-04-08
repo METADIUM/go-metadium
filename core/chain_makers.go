@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/holiman/uint256"
@@ -232,8 +233,12 @@ func (b *BlockGen) AddUncle(h *types.Header) {
 	if b.cm.config.IsLondon(h.Number) {
 		h.BaseFee = eip1559.CalcBaseFee(b.cm.config, parent)
 		if !b.cm.config.IsLondon(parent.Number) {
-			parentGasLimit := parent.GasLimit * b.cm.config.ElasticityMultiplier()
-			h.GasLimit = CalcGasLimit(parentGasLimit, parentGasLimit)
+			if metaminer.IsPoW() {
+				parentGasLimit := parent.GasLimit * b.cm.config.ElasticityMultiplier()
+				h.GasLimit = CalcGasLimit(parentGasLimit, parentGasLimit)
+			} else {
+				h.GasLimit = parent.GasLimit
+			}
 		}
 	}
 	b.uncles = append(b.uncles, h)
@@ -428,8 +433,12 @@ func (cm *chainMaker) makeHeader(parent *types.Block, state *state.StateDB, engi
 	if cm.config.IsLondon(header.Number) {
 		header.BaseFee = eip1559.CalcBaseFee(cm.config, parent.Header())
 		if !cm.config.IsLondon(parent.Number()) {
-			parentGasLimit := parent.GasLimit() * cm.config.ElasticityMultiplier()
-			header.GasLimit = CalcGasLimit(parentGasLimit, parentGasLimit)
+			if metaminer.IsPoW() {
+				parentGasLimit := parent.GasLimit() * cm.config.ElasticityMultiplier()
+				header.GasLimit = CalcGasLimit(parentGasLimit, parentGasLimit)
+			} else {
+				header.GasLimit = parent.GasLimit()
+			}
 		}
 	}
 	// Set blob gas fields for Cancun or Camellia (Metadium EIP-4844 fork).
