@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317  # eth_call_result etc. are invoked indirectly via variable dispatch
 # camellia-test.sh - Camellia fork transition test
 # block 99 (before) vs block 100 (after) opcode behavior verification
 #
@@ -57,7 +58,7 @@ send_tx() {
 
 wait_receipt() {
   local txhash="$1"
-  for i in $(seq 1 30); do
+  for _i in $(seq 1 30); do
     local r
     r=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getTransactionReceipt\",\"params\":[\"$txhash\"],\"id\":1}" | \
       python3 -c "
@@ -332,6 +333,7 @@ log "--- Type 22 Fee Delegation (post-fork behavior check) ---"
 
 SENDER="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 FEE_PAYER="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+# shellcheck disable=SC2034  # TO_ADDR used in heredoc/python blocks below
 TO_ADDR="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
 
 # Record feePayer balance (before)
@@ -474,7 +476,7 @@ BLK_START=$(rpc '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}
 if [[ "$BLK_START" -eq 0 ]]; then
   skip "I-11: Block number query failed"
 else
-  MINER_START=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$(printf '0x%x' $BLK_START)\",false],\"id\":1}" | \
+  MINER_START=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$(printf '0x%x' "$BLK_START")\",false],\"id\":1}" | \
     python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['miner'])" 2>/dev/null || true)
 
   log "  Current block: $BLK_START / miner: $MINER_START"
@@ -485,7 +487,7 @@ else
     python3 -c "import sys,json; d=json.load(sys.stdin); print(int(d['result'],16))" 2>/dev/null || echo "0")
 
   if [[ "$BLK_END" -gt "$BLK_START" ]]; then
-    MINER_END=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$(printf '0x%x' $BLK_END)\",false],\"id\":1}" | \
+    MINER_END=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$(printf '0x%x' "$BLK_END")\",false],\"id\":1}" | \
       python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['miner'])" 2>/dev/null || true)
     pass "I-11: Block production normal after fork (${BLK_START}→${BLK_END}, miner=${MINER_END:0:10}...)"
   else

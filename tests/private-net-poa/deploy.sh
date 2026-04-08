@@ -17,6 +17,7 @@ GMET_BIN="${GMET_BIN:-$SCRIPT_DIR/../../geth}"
 GOVERNANCE_JS="${GOVERNANCE_JS:-$SCRIPT_DIR/../../metadium/contracts/MetadiumGovernance.js}"
 DEPLOY_JS="${DEPLOY_JS:-$SCRIPT_DIR/../../metadium/scripts/deploy-governance.js}"
 NODE1_RPC="http://localhost:8545"
+# shellcheck disable=SC2034  # CHAINID used in config generation context
 CHAINID=1337
 PASSWORD="privatenet123"
 
@@ -62,7 +63,7 @@ log "  node2: ${NODE2_ID:0:16}..."
 log "  node3: ${NODE3_ID:0:16}..."
 
 # Find keystore file
-KEYSTORE_FILE=$(ls data/node1/keystore/UTC--* 2>/dev/null | head -1)
+KEYSTORE_FILE=$(find data/node1/keystore/ -maxdepth 1 -name 'UTC--*' -print -quit 2>/dev/null)
 [[ -n "$KEYSTORE_FILE" ]] || err "keystore file not found"
 KEYSTORE_FILE="$SCRIPT_DIR/$KEYSTORE_FILE"
 log "keystore: $(basename "$KEYSTORE_FILE")"
@@ -142,9 +143,9 @@ mkdir -p "$SCRIPT_DIR/data"
   2>&1 | tee "$DEPLOY_LOG"
 
 DEPLOY_EXIT=${PIPESTATUS[0]}
-if [ $DEPLOY_EXIT -ne 0 ]; then
+if [ "$DEPLOY_EXIT" -ne 0 ]; then
   log "[WARN] Deployment failed (exit=$DEPLOY_EXIT). Please check the logs."
-  exit $DEPLOY_EXIT
+  exit "$DEPLOY_EXIT"
 fi
 
 # Extract and save deployed contract addresses from log output

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015  # A && B || C pattern is intentional — pass/fail/warn/skip always return 0
 # rpc-test-full.sh - go-metadium full Execution API + Fee Delegation + IPC/JS integration test
 #
 # Usage:
@@ -19,8 +20,10 @@ IPC_PATH="${2:-}"
 ACCT1="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 ACCT2="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 ACCT3="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
+# shellcheck disable=SC2034  # PRIVKEY1 used in heredoc/python blocks
 PRIVKEY1="ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 PRIVKEY2="59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+# shellcheck disable=SC2034  # PASSWORD used by test infrastructure
 PASSWORD="privatenet123"
 CHAINID=1337
 
@@ -77,6 +80,7 @@ r=d.get('result','0x'); print(int(r,16) if r and r!='0x' else 0)" 2>/dev/null ||
 }
 
 # ── Setup: Send TX and collect ────────────────────────────────────────────
+# shellcheck disable=SC2317  # setup_tx is invoked indirectly
 setup_tx() {
   # Send TX via eth_sendTransaction and collect
   local resp
@@ -90,7 +94,7 @@ setup_tx() {
 
   # Wait for TX confirmation (up to 15 seconds)
   if [[ -n "$TX_HASH" && "$TX_HASH" != "None" ]]; then
-    for i in $(seq 1 15); do
+    for _i in $(seq 1 15); do
       sleep 1
       local tx_resp
       tx_resp=$(rpc "eth_getTransactionReceipt" "[\"$TX_HASH\"]")
@@ -215,6 +219,7 @@ resp=$(rpc "eth_getBalance" "[\"$ACCT1\",\"latest\"]"); v=$(echo "$resp" | jq_in
 [[ "$v" -gt 0 ]] && pass "eth_getBalance($ACCT1) = $v wei" || warn "eth_getBalance" "0"
 
 resp=$(rpc "eth_getTransactionCount" "[\"$ACCT1\",\"latest\"]"); v=$(echo "$resp" | jq_int)
+# shellcheck disable=SC2034  # ACCT1_NONCE kept for diagnostic use
 ACCT1_NONCE=$v; pass "eth_getTransactionCount($ACCT1) nonce=$v"
 
 resp=$(rpc "eth_getCode" "[\"$ACCT1\",\"latest\"]"); v=$(echo "$resp" | jq_str)
@@ -289,7 +294,7 @@ else
   TX_HASH=$(echo "$resp" | jq_str)
   pass "eth_sendTransaction — txHash=${TX_HASH:0:20}..."
   # Wait for confirmation
-  for i in $(seq 1 15); do
+  for _i in $(seq 1 15); do
     sleep 1
     tx_resp=$(rpc "eth_getTransactionReceipt" "[\"$TX_HASH\"]")
     bh=$(echo "$tx_resp" | python3 -c "import json,sys; r=json.load(sys.stdin)['result']; print(r['blockHash'] if r else '')" 2>/dev/null || true)
