@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"strings"
 	"time"
 
@@ -278,6 +279,15 @@ func NewEthereumAccountAPI(am *accounts.Manager) *EthereumAccountAPI {
 // Accounts returns the collection of accounts this node manages.
 func (s *EthereumAccountAPI) Accounts() []common.Address {
 	return s.am.Accounts()
+}
+
+func (s *EthereumAccountAPI) Genesis() (string, error) {
+	genesis, err := os.ReadFile(params.MetadiumGenesisFile)
+	if err != nil {
+		return "", err
+	} else {
+		return string(genesis), nil
+	}
 }
 
 // PersonalAccountAPI provides an API to access accounts managed by this node.

@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 )
@@ -125,10 +126,13 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 
 // ValidateState validates the various changes that happen after a state transition,
 // such as amount of used gas, the receipt roots and the state root itself.
-func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateDB, receipts types.Receipts, usedGas uint64) error {
+func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateDB, receipts types.Receipts, usedGas uint64, fees *big.Int) error {
 	header := block.Header()
 	if block.GasUsed() != usedGas {
 		return fmt.Errorf("invalid gas used (remote: %d local: %d)", block.GasUsed(), usedGas)
+	}
+	if !metaminer.IsPoW() && block.Fees().Cmp(fees) != 0 {
+		return fmt.Errorf("invalid fees collected (remote: %v local: %v)", block.Fees(), fees)
 	}
 	// Validate the received block's bloom with the one derived from the generated receipts.
 	// For valid blocks this should always validate to true.
@@ -153,6 +157,15 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 // to keep the baseline gas close to the provided target, and increase it towards
 // the target if the baseline gas is lower.
 func CalcGasLimit(parentGasLimit, desiredLimit uint64) uint64 {
+	if params.FixedGasLimit != 0 {
+		return params.FixedGasLimit
+	} else if !metaminer.IsPoW() {
+		if desiredLimit == 0 {
+			return parentGasLimit
+		}
+		return desiredLimit
+	}
+
 	delta := parentGasLimit/params.GasLimitBoundDivisor - 1
 	limit := parentGasLimit
 	if desiredLimit < params.MinGasLimit {

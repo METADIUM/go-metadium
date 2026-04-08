@@ -50,7 +50,7 @@ import (
 const (
 	// txChanSize is the size of channel listening to NewTxsEvent.
 	// The number is referenced from the size of tx pool.
-	txChanSize = 4096
+	txChanSize = 102400
 
 	// txMaxBroadcastSize is the max size of a transaction that will be broadcasted.
 	// All transactions with a higher size will be announced and need to be fetched
@@ -164,10 +164,8 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		// In these cases however it's safe to reenable snap sync.
 		fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
 		if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
-			h.snapSync.Store(true)
 			log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
 		} else if !h.chain.HasState(fullBlock.Root) {
-			h.snapSync.Store(true)
 			log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
 		}
 	} else {
@@ -627,7 +625,8 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 		case tx.Size() > txMaxBroadcastSize:
 			largeTxs++
 		default:
-			numDirect = int(math.Sqrt(float64(len(peers))))
+			// Metadium: send txs to all peers for faster propagation in PoA
+			numDirect = len(peers)
 		}
 		// Send the tx unconditionally to a subset of our peers
 		for _, peer := range peers[:numDirect] {

@@ -277,6 +277,9 @@ var (
 		TerminalTotalDifficultyPassed: false,
 		Ethash:                        nil,
 		Clique:                        &CliqueConfig{Period: 0, Epoch: 30000},
+		AvocadoBlock:                  big.NewInt(0),
+		PangyoBlock:                   big.NewInt(0),
+		ApplepieBlock:                 big.NewInt(0),
 	}
 
 	// TestChainConfig contains every protocol change (EIPs) introduced
@@ -307,6 +310,9 @@ var (
 		TerminalTotalDifficultyPassed: false,
 		Ethash:                        new(EthashConfig),
 		Clique:                        nil,
+		AvocadoBlock:                  big.NewInt(0),
+		PangyoBlock:                   big.NewInt(0),
+		ApplepieBlock:                 big.NewInt(0),
 	}
 
 	// MergedTestChainConfig contains every protocol change (EIPs) introduced
@@ -337,6 +343,9 @@ var (
 		TerminalTotalDifficultyPassed: true,
 		Ethash:                        new(EthashConfig),
 		Clique:                        nil,
+		AvocadoBlock:                  big.NewInt(0),
+		PangyoBlock:                   big.NewInt(0),
+		ApplepieBlock:                 big.NewInt(0),
 	}
 
 	// NonActivatedConfig defines the chain configuration without activating
@@ -512,6 +521,21 @@ func (c *ChainConfig) Description() string {
 	}
 	if c.GrayGlacierBlock != nil {
 		banner += fmt.Sprintf(" - Gray Glacier:                #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/gray-glacier.md)\n", c.GrayGlacierBlock)
+	}
+	if c.AvocadoBlock != nil {
+		banner += fmt.Sprintf(" - Avocado Fork:                #%-8v\n", c.AvocadoBlock)
+	}
+	if c.PangyoBlock != nil {
+		banner += fmt.Sprintf(" - Pangyo Fork:                 #%-8v\n", c.PangyoBlock)
+	}
+	if c.ApplepieBlock != nil {
+		banner += fmt.Sprintf(" - Applepie Fork:               #%-8v\n", c.ApplepieBlock)
+	}
+	if c.BokbunjaBlock != nil {
+		banner += fmt.Sprintf(" - Bokbunja Fork:               #%-8v\n", c.BokbunjaBlock)
+	}
+	if c.CamelliaBlock != nil {
+		banner += fmt.Sprintf(" - Camellia Fork:               #%-8v\n", c.CamelliaBlock)
 	}
 	banner += "\n"
 

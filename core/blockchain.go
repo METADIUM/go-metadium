@@ -43,6 +43,7 @@ import (
 	"github.com/ethereum/go-ethereum/internal/syncx"
 	"github.com/ethereum/go-ethereum/internal/version"
 	"github.com/ethereum/go-ethereum/log"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -1735,6 +1736,9 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		if parent == nil {
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
+		// metadium: reward calculation uses governance contract
+		retryCount := 2
+	retry:
 		statedb, err := state.New(parent.Root, bc.stateCache, bc.snaps)
 		if err != nil {
 			return it.index, err
@@ -1764,7 +1768,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 
 		// Process block using the parent state as reference point
 		pstart := time.Now()
-		receipts, logs, usedGas, _, err := bc.processor.Process(block, statedb, bc.vmConfig)
+		receipts, logs, usedGas, fees, err := bc.processor.Process(block, statedb, bc.vmConfig)
 		if err != nil {
 			bc.reportBlock(block, receipts, err)
 			followupInterrupt.Store(true)
@@ -1773,7 +1777,17 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		ptime := time.Since(pstart)
 
 		vstart := time.Now()
-		if err := bc.validator.ValidateState(block, statedb, receipts, usedGas); err != nil {
+		if err := bc.validator.ValidateState(block, statedb, receipts, usedGas, fees); err != nil {
+			if retryCount--; !metaminer.IsPoW() && retryCount > 0 {
+				for try := 100; try > 0; try-- {
+					if _, _, err := metaminer.CalculateRewards(block.Number(), big.NewInt(0), big.NewInt(100000000), nil); err == nil {
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+				goto retry
+			}
+
 			bc.reportBlock(block, receipts, err)
 			followupInterrupt.Store(true)
 			return it.index, err

@@ -77,6 +77,10 @@ type TransactionArgs struct {
 
 	// For FeeDelegateDynamicFeeTxType (Metadium Type 22)
 	FeePayer *common.Address `json:"feePayer,omitempty"`
+
+	V        *hexutil.Big    `json:"v"`
+	R        *hexutil.Big    `json:"r"`
+	S        *hexutil.Big    `json:"s"`
 }
 
 // from retrieves the transaction sender address.
@@ -515,6 +519,29 @@ func (args *TransactionArgs) toTransaction() *types.Transaction {
 			Value:      (*big.Int)(args.Value),
 			Data:       args.data(),
 			AccessList: al,
+		}
+
+		// Metadium: fee delegation
+		if args.FeePayer != nil && args.V != nil && args.R != nil && args.S != nil {
+			senderTx := types.DynamicFeeTx{
+				To:         args.To,
+				ChainID:    (*big.Int)(args.ChainID),
+				Nonce:      uint64(*args.Nonce),
+				Gas:        uint64(*args.Gas),
+				GasFeeCap:  (*big.Int)(args.MaxFeePerGas),
+				GasTipCap:  (*big.Int)(args.MaxPriorityFeePerGas),
+				Value:      (*big.Int)(args.Value),
+				Data:       args.data(),
+				AccessList: al,
+				V:          (*big.Int)(args.V),
+				R:          (*big.Int)(args.R),
+				S:          (*big.Int)(args.S),
+			}
+			fdTx := &types.FeeDelegateDynamicFeeTx{
+				FeePayer: args.FeePayer,
+			}
+			fdTx.SetSenderTx(senderTx)
+			return types.NewTx(fdTx)
 		}
 
 	case args.AccessList != nil:
