@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/log"
+	metaapi "github.com/ethereum/go-ethereum/metadium/api"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -328,6 +329,22 @@ func (api *adminAPI) NodeInfo() (*p2p.NodeInfo, error) {
 // Datadir retrieves the current data directory the node is using.
 func (api *adminAPI) Datadir() string {
 	return api.node.DataDir()
+}
+
+// TrsInfo retrieves the information about Transaction Restriction Service(TRS)
+func (api *adminAPI) TrsInfo(height rpc.BlockNumber) interface{} {
+	return metaapi.TRSInfo(height)
+}
+
+// MetadiumInfo retrieves the information about Metadium
+func (api *adminAPI) MetadiumInfo() interface{} {
+	return metaapi.Info()
+}
+
+// MetadiumNodes returns the status of miners
+// 'node' can be a name, node id or ip address
+func (api *adminAPI) MetadiumNodes(node string, timeout int) interface{} {
+	return metaapi.GetMiners(node, timeout)
 }
 
 // web3API offers helper utils
