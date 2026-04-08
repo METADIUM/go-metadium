@@ -900,7 +900,7 @@ func (w *worker) applyTransaction(env *environment, tx *types.Transaction) (*typ
 		snap = env.state.Snapshot()
 		gp   = env.gasPool.Gas()
 	)
-	receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &env.coinbase, env.gasPool, env.state, env.header, tx, &env.header.GasUsed, nil, *w.chain.GetVMConfig())
+	receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &env.coinbase, env.gasPool, env.state, env.header, tx, &env.header.GasUsed, env.header.Fees, *w.chain.GetVMConfig())
 	if err != nil {
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.SetGas(gp)
@@ -925,6 +925,11 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 		// If we don't have enough gas for any further transactions then we're done.
 		if env.gasPool.Gas() < params.TxGas {
 			log.Trace("Not enough gas for further transactions", "have", env.gasPool, "want", params.TxGas)
+			break
+		}
+		// Metadium: per-block transaction count limit
+		if params.MaxTxsPerBlock > 0 && env.tcount >= params.MaxTxsPerBlock {
+			log.Trace("Transaction count limit reached", "have", env.tcount, "max", params.MaxTxsPerBlock)
 			break
 		}
 		// If we don't have enough blob space for any further blob transactions,
@@ -978,6 +983,15 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 		// Error may be ignored here. The error has already been checked
 		// during transaction acceptance is the transaction pool.
 		from, _ := types.Sender(env.signer, tx)
+
+		// Metadium: TRS (Transaction Restriction Service) filtering
+		if env.trsListMap != nil && len(env.trsListMap) > 0 && env.trsSubscribe {
+			if env.trsListMap[from] || (tx.To() != nil && env.trsListMap[*tx.To()]) {
+				log.Debug("included in trsList", "hash", tx.Hash(), "from", from)
+				txs.Pop()
+				continue
+			}
+		}
 
 		// Check whether the tx is replay protected. If we're not in the EIP155 hf
 		// phase, start ignoring the sender until we do.
@@ -1277,6 +1291,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		GasLimit:   core.CalcGasLimit(parent.GasLimit, w.config.GasCeil),
 		Time:       timestamp,
 		Coinbase:   genParams.coinbase,
+		Fees:       big.NewInt(0),
 	}
 	// Set the extra field.
 	if len(w.extra) != 0 {
