@@ -396,21 +396,21 @@ func (s *Suite) TestMaliciousHandshake(t *utesting.T) {
 		{
 			Version: 5,
 			Caps: []p2p.Cap{
-				{Name: "eth", Version: version},
+				{Name: "meta", Version: version},
 			},
 			ID: append(pub0, byte(0)),
 		},
 		{
 			Version: 5,
 			Caps: []p2p.Cap{
-				{Name: "eth", Version: version},
+				{Name: "meta", Version: version},
 			},
 			ID: append(pub0, pub0...),
 		},
 		{
 			Version: 5,
 			Caps: []p2p.Cap{
-				{Name: "eth", Version: version},
+				{Name: "meta", Version: version},
 			},
 			ID: randBuf(2),
 		},

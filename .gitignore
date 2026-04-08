@@ -50,3 +50,22 @@ profile.cov
 logs/
 
 tests/spec-tests/
+
+# Binaries
+/geth
+/gmet
+/dbbench
+/blob-tx-e2e
+/mixed-tx-e2e
+/tests/private-net-poa/geth
+
+# Claude / AI tools
+/.claude/
+/.gstack/
+/.mcp.json
+
+# Local config
+/genesis-test-local.json
+
+# Build artifacts
+/core/txpool/blobpool/blobpool/

@@ -230,9 +230,10 @@ type worker struct {
 	snapshotState    *state.StateDB
 
 	// atomic status counters
-	running atomic.Bool  // The indicator whether the consensus engine is running or not.
-	newTxs  atomic.Int32 // New arrival transaction count since last sealing work submitting.
-	syncing atomic.Bool  // The indicator whether the node is still syncing.
+	running    atomic.Bool  // The indicator whether the consensus engine is running or not.
+	newTxs     atomic.Int32 // New arrival transaction count since last sealing work submitting.
+	syncing    atomic.Bool  // The indicator whether the node is still syncing.
+	busyMining int32        // CAS lock for mining thread (per-worker instance).
 
 	// newpayloadTimeout is the maximum timeout allowance for creating payload.
 	// The default value is 2 seconds but node operator can set it to arbitrary
@@ -275,9 +276,6 @@ func initExcessBlobGas(cfg *params.ChainConfig, header *types.Header, parent *ty
 		header.BlobGasUsed = new(big.Int)
 	}
 }
-
-// compare and swap lock for mining thread
-var busyMining int32
 
 func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Engine, eth Backend, mux *event.TypeMux, isLocalBlock func(header *types.Header) bool, init bool) *worker {
 	// Use FullTxPool (blob-aware) if the backend supports it; fall back to legacy pool.
@@ -574,10 +572,10 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 
 	// commitSimple just starts a new commitNewWork
 	commitSimple := func() {
-		if atomic.CompareAndSwapInt32(&busyMining, 0, 1) {
+		if atomic.CompareAndSwapInt32(&w.busyMining, 0, 1) {
 			w.newWorkCh <- &newWorkReq{interrupt: nil, timestamp: time.Now().Unix()}
 			w.newTxs.Store(0)
-			atomic.StoreInt32(&busyMining, 0)
+			atomic.StoreInt32(&w.busyMining, 0)
 		}
 	}
 	// clearPending cleans the stale pending tasks.
@@ -1215,8 +1213,8 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *atomic.Int32,
 	return false
 }
 
-func isBusyMining() bool {
-	return atomic.LoadInt32(&busyMining) != 0
+func (w *worker) isBusyMining() bool {
+	return atomic.LoadInt32(&w.busyMining) != 0
 }
 
 // generateParams wraps various of settings for generating sealing task.
@@ -1414,8 +1412,8 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 // refreshPending reinitialize pending state
 func (w *worker) refreshPending(locked bool) {
 	if !locked {
-		if atomic.CompareAndSwapInt32(&busyMining, 0, 1) {
-			defer atomic.StoreInt32(&busyMining, 0)
+		if atomic.CompareAndSwapInt32(&w.busyMining, 0, 1) {
+			defer atomic.StoreInt32(&w.busyMining, 0)
 		} else {
 			return
 		}
@@ -1601,8 +1599,8 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 // commitWork generates several new sealing tasks based on the parent block
 // and submit them to the sealer.
 func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
-	if atomic.CompareAndSwapInt32(&busyMining, 0, 1) {
-		defer atomic.StoreInt32(&busyMining, 0)
+	if atomic.CompareAndSwapInt32(&w.busyMining, 0, 1) {
+		defer atomic.StoreInt32(&w.busyMining, 0)
 	} else {
 		return
 	}

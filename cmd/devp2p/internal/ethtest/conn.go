@@ -65,8 +65,8 @@ func (s *Suite) dialAs(key *ecdsa.PrivateKey) (*Conn, error) {
 		return nil, err
 	}
 	conn.caps = []p2p.Cap{
-		{Name: "eth", Version: 67},
-		{Name: "eth", Version: 68},
+		{Name: "meta", Version: 66},
+		{Name: "meta", Version: 68},
 	}
 	conn.ourHighestProtoVersion = 68
 	return &conn, nil
@@ -283,7 +283,7 @@ func (c *Conn) negotiateEthProtocol(caps []p2p.Cap) {
 	var highestSnapVersion uint
 	for _, capability := range caps {
 		switch capability.Name {
-		case "eth":
+		case "meta":
 			if capability.Version > highestEthVersion && capability.Version <= c.ourHighestProtoVersion {
 				highestEthVersion = capability.Version
 			}

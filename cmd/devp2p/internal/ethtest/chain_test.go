@@ -126,6 +126,7 @@ func TestEthProtocolNegotiation(t *testing.T) {
 // TestChainGetHeaders tests whether the test suite can correctly
 // respond to a GetBlockHeaders request from a node.
 func TestChainGetHeaders(t *testing.T) {
+	t.Skip("Metadium uses meta protocol with ETH66+ETH68, incompatible with upstream eth test suite")
 	t.Parallel()
 
 	dir, err := filepath.Abs("./testdata")
