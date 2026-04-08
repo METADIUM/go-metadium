@@ -445,12 +445,12 @@ else
   skip "debug_getRawTransaction" "no TX"
 fi
 
-# debug_getBlockRlp / debug_getHeaderRlp (legacy)
-resp=$(rpc "debug_getBlockRlp" '[1]')
+# debug_getRawBlock (renamed from debug_getBlockRlp in geth v1.13+)
+resp=$(rpc "debug_getRawBlock" '["0x1"]')
 err=$(echo "$resp" | jq_err 2>/dev/null || true)
-[[ -n "$err" ]] && warn "debug_getBlockRlp(legacy)" "$err" || {
+[[ -n "$err" ]] && warn "debug_getRawBlock" "$err" || {
   v=$(echo "$resp" | python3 -c "import json,sys; r=json.load(sys.stdin)['result']; print(len(r)//2,'bytes')" 2>/dev/null)
-  pass "debug_getBlockRlp(1) — $v (legacy)"; }
+  pass "debug_getRawBlock(0x1) — $v"; }
 
 # ════════════════════════════════════════════════════════════════════
 sec "11. admin_* / txpool_* / miner_*"
