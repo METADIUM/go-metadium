@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015  # A && B || C pattern is intentional — log/warn always return 0
 # start.sh - Start PoA private network
 set -euo pipefail
 
