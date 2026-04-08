@@ -68,6 +68,12 @@ func TestExecutionSpecBlocktests(t *testing.T) {
 	}
 	bt := new(testMatcher)
 
+	// Metadium header RLP has additional fields (Fees, Rewards, MinerNodeId, MinerNodeSig),
+	// causing genesis block hash mismatch with ALL upstream execution spec block test fixtures.
+	// These fixtures are externally generated and cannot be updated for Metadium's header format.
+	// EIP functionality is verified by private-net e2e tests (blob-tx-e2e, camellia-test.sh).
+	t.Skip("Metadium header RLP differs from upstream, all execution spec block tests have genesis hash mismatch")
+
 	bt.walk(t, executionSpecBlockchainTestDir, func(t *testing.T, name string, test *BlockTest) {
 		execBlockTest(t, bt, test)
 	})

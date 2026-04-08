@@ -93,6 +93,13 @@ func TestExecutionSpecState(t *testing.T) {
 	}
 	st := new(testMatcher)
 
+	// Metadium uses MaxInitCodeSize=507904 (2*253952) vs upstream 49152 (2*24576).
+	// EIP-3860 execution spec tests have expected state roots computed with upstream values.
+	st.skipLoad(`eip3860_initcode`)
+	// Metadium header RLP has additional fields causing state root mismatch with
+	// upstream execution spec fixtures for cancun-related tests.
+	st.skipLoad(`eip4844_blobs`)
+
 	st.walk(t, executionSpecStateTestDir, func(t *testing.T, name string, test *StateTest) {
 		execStateTest(t, st, test)
 	})

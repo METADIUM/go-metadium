@@ -892,6 +892,12 @@ func TestInvalidBloom(t *testing.T) {
 }
 
 func TestNewPayloadOnInvalidTerminalBlock(t *testing.T) {
+	// Metadium: AllEthashProtocolChanges enables CamelliaBlock=0, which sets blob gas
+	// fields (ExcessBlobGas/BlobGasUsed) on all blocks. This causes block hash mismatch
+	// when NewPayloadV1 re-creates the block from ExecutableData without these fields.
+	if params.AllEthashProtocolChanges.CamelliaBlock != nil {
+		t.Skip("Skipping: beacon NewPayloadV1 incompatible with Camellia fork blob gas fields")
+	}
 	genesis, preMergeBlocks := generateMergeChain(100, false)
 	n, ethservice := startEthService(t, genesis, preMergeBlocks)
 	defer n.Close()

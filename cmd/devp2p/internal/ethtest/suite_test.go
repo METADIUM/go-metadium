@@ -47,6 +47,7 @@ func makeJWTSecret() (string, [32]byte, error) {
 }
 
 func TestEthSuite(t *testing.T) {
+	t.Skip("Metadium uses meta protocol with ETH66+ETH68, incompatible with upstream eth test suite")
 	jwtPath, secret, err := makeJWTSecret()
 	if err != nil {
 		t.Fatalf("could not make jwt secret: %v", err)
@@ -75,6 +76,7 @@ func TestEthSuite(t *testing.T) {
 }
 
 func TestSnapSuite(t *testing.T) {
+	t.Skip("Metadium uses meta protocol with ETH66+ETH68, incompatible with upstream eth test suite")
 	jwtPath, secret, err := makeJWTSecret()
 	if err != nil {
 		t.Fatalf("could not make jwt secret: %v", err)

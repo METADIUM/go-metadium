@@ -303,8 +303,7 @@ func (b *backendMock) setFork(fork string) error {
 		b.current.Number = big.NewInt(1100)
 		b.current.Time = 700
 		// Blob base fee will be 2
-		excess := uint64(2314058)
-		b.current.ExcessBlobGas = &excess
+		b.current.ExcessBlobGas = big.NewInt(2314058)
 	} else {
 		return errors.New("invalid fork")
 	}

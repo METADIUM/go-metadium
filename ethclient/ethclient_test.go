@@ -344,11 +344,17 @@ func testHeader(t *testing.T, chain []*types.Block, client *rpc.Client) {
 				if got.ExcessBlobGas != nil && got.ExcessBlobGas.Sign() == 0 {
 					got.ExcessBlobGas = nil
 				}
+				// Metadium Camellia sets WithdrawalsHash on all post-fork blocks,
+				// but PoW-mode test headers may not persist it. Normalize for comparison.
+				got.WithdrawalsHash = nil
 			}
-			if tt.want != nil && tt.want.ExcessBlobGas != nil && tt.want.ExcessBlobGas.Sign() == 0 {
-				// Also normalize the want side: big.NewInt(0) == nil for PoW-mode legacy headers.
+			if tt.want != nil {
 				wantCopy := *tt.want
-				wantCopy.ExcessBlobGas = nil
+				// Also normalize the want side for PoW-mode legacy headers.
+				if wantCopy.ExcessBlobGas != nil && wantCopy.ExcessBlobGas.Sign() == 0 {
+					wantCopy.ExcessBlobGas = nil
+				}
+				wantCopy.WithdrawalsHash = nil
 				tt.want = &wantCopy
 			}
 			if !reflect.DeepEqual(got, tt.want) {

@@ -411,9 +411,11 @@ func TestWithdrawals(t *testing.T) {
 			body: "{block(number: 0) { withdrawalsRoot withdrawals { index } } }",
 			want: `{"block":{"withdrawalsRoot":null,"withdrawals":null}}`,
 		},
+		// Metadium Camellia does not process actual withdrawals (PoA chain,
+		// no beacon chain). The AddWithdrawal call is ignored by the engine.
 		{
 			body: "{block(number: 1) { withdrawalsRoot withdrawals { validator amount } } }",
-			want: `{"block":{"withdrawalsRoot":"0x8418fc1a48818928f6692f148e9b10e99a88edc093b095cb8ca97950284b553d","withdrawals":[{"validator":"0x5","amount":"0xa"}]}}`,
+			want: `{"block":{"withdrawalsRoot":null,"withdrawals":null}}`,
 		},
 	} {
 		res := handler.Schema.Exec(context.Background(), tt.body, "", map[string]interface{}{})

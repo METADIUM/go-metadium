@@ -31,7 +31,7 @@ const (
 // Unexported devp2p protocol lengths from p2p package.
 const (
 	baseProtoLen = 16
-	ethProtoLen  = 17
+	ethProtoLen  = 23
 	snapProtoLen = 8
 )
 
