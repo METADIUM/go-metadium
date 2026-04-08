@@ -118,15 +118,30 @@ run_rpc_test() {
   fi
 }
 
+# TX generation interval (default: 10 minutes)
+TX_INTERVAL="${TX_INTERVAL:-600}"
+TX_BATCH="${TX_BATCH:-5}"  # normal txs per batch (+ 1 fee delegation + 1 blob each round)
+TX_GENERATOR="$SCRIPT_DIR/tx-generator/tx-generator"
+
+generate_txs() {
+  local batch_size="$1"
+  log "Generating mixed txs (normal=$batch_size + 1 fee-delegation + 1 blob)..."
+  "$TX_GENERATOR" -batch "$batch_size" -json 2>/dev/null || echo '{"normal_sent":0,"normal_fail":0,"fd_sent":0,"fd_fail":0,"blob_sent":0,"blob_fail":0}'
+}
+
 # Initial RPC test
 run_rpc_test
 
 CHECK_NUM=0
+TX_TOTAL_NORMAL=0
+TX_TOTAL_FD=0
+TX_TOTAL_BLOB=0
+TX_TOTAL_FAIL=0
 NEXT_CHECK_TIME=$(date +%s)
 NEXT_RPC_TEST_TIME=$(( $(date +%s) + 6*3600 ))  # first RPC test after 6h
+NEXT_TX_TIME=$(( $(date +%s) + TX_INTERVAL ))    # first tx batch after TX_INTERVAL
 
 while [[ $(date +%s) -lt $END_TIME ]]; do
-  local NOW
   NOW=$(date +%s)
 
   if [[ $NOW -ge $NEXT_CHECK_TIME ]]; then
@@ -135,17 +150,35 @@ while [[ $(date +%s) -lt $END_TIME ]]; do
     NEXT_CHECK_TIME=$((NOW + CHECK_INTERVAL))
   fi
 
+  if [[ $NOW -ge $NEXT_TX_TIME ]]; then
+    TX_RESULT=$(generate_txs "$TX_BATCH")
+    TX_NS=$(echo "$TX_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('normal_sent',0))" 2>/dev/null || echo 0)
+    TX_FS=$(echo "$TX_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('fd_sent',0))" 2>/dev/null || echo 0)
+    TX_BS=$(echo "$TX_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('blob_sent',0))" 2>/dev/null || echo 0)
+    TX_NF=$(echo "$TX_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('normal_fail',0)+d.get('fd_fail',0)+d.get('blob_fail',0))" 2>/dev/null || echo 0)
+    TX_TOTAL_NORMAL=$((TX_TOTAL_NORMAL + TX_NS))
+    TX_TOTAL_FD=$((TX_TOTAL_FD + TX_FS))
+    TX_TOTAL_BLOB=$((TX_TOTAL_BLOB + TX_BS))
+    TX_TOTAL_FAIL=$((TX_TOTAL_FAIL + TX_NF))
+    log "TX batch: normal=$TX_NS fd=$TX_FS blob=$TX_BS fail=$TX_NF (total: normal=$TX_TOTAL_NORMAL fd=$TX_TOTAL_FD blob=$TX_TOTAL_BLOB fail=$TX_TOTAL_FAIL)"
+    NEXT_TX_TIME=$((NOW + TX_INTERVAL))
+  fi
+
   if [[ $NOW -ge $NEXT_RPC_TEST_TIME ]]; then
     run_rpc_test
     NEXT_RPC_TEST_TIME=$((NOW + 6*3600))
   fi
 
-  # Sleep until next check
-  local SLEEP_TIME=$((NEXT_CHECK_TIME - $(date +%s)))
+  # Sleep until next event
+  NEXT_EVENT=$NEXT_CHECK_TIME
+  [[ $NEXT_TX_TIME -lt $NEXT_EVENT ]] && NEXT_EVENT=$NEXT_TX_TIME
+  [[ $NEXT_RPC_TEST_TIME -lt $NEXT_EVENT ]] && NEXT_EVENT=$NEXT_RPC_TEST_TIME
+  SLEEP_TIME=$((NEXT_EVENT - $(date +%s)))
   [[ $SLEEP_TIME -gt 0 ]] && sleep "$SLEEP_TIME" || sleep 10
 done
 
 log "=== 72h monitoring complete ==="
+log "TX summary: normal=$TX_TOTAL_NORMAL fd=$TX_TOTAL_FD blob=$TX_TOTAL_BLOB fail=$TX_TOTAL_FAIL"
 
 # Final analysis
 python3 - "$STATS_FILE" <<'PYEOF' > "$RESULT_DIR/stability-analysis.md"
