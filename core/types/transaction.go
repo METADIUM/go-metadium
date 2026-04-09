@@ -374,12 +374,15 @@ func (tx *Transaction) BlobGasFeeCap() *big.Int {
 func (tx *Transaction) Cost() *big.Int {
 	// fee delegation
 	if tx.Type() == FeeDelegateDynamicFeeTxType {
-		signer := LatestSignerForChainID(tx.ChainId())
-		from, _ := Sender(signer, tx)
-		if *tx.FeePayer() != from {
-			total := tx.Value()
-			return total
+		fp := tx.FeePayer()
+		if fp == nil {
+			// Malformed fee-delegate tx without FeePayer: fall through to standard cost
 		} else {
+			signer := LatestSignerForChainID(tx.ChainId())
+			from, _ := Sender(signer, tx)
+			if *fp != from {
+				return tx.Value()
+			}
 			total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
 			total.Add(total, tx.Value())
 			if blobCost := tx.inner.blobGasCost(); blobCost != nil {
@@ -399,16 +402,21 @@ func (tx *Transaction) Cost() *big.Int {
 // fee delegation
 // FeePayerCost returns feePayer's gas * gasPrice + value.
 func (tx *Transaction) FeePayerCost() *big.Int {
-	signer := LatestSignerForChainID(tx.ChainId())
-	from, _ := Sender(signer, tx)
-	if *tx.FeePayer() != from {
-		total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
-		return total
-	} else {
+	fp := tx.FeePayer()
+	if fp == nil {
+		// Malformed: fall through to full cost
 		total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
 		total.Add(total, tx.Value())
 		return total
 	}
+	signer := LatestSignerForChainID(tx.ChainId())
+	from, _ := Sender(signer, tx)
+	if *fp != from {
+		return new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
+	}
+	total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
+	total.Add(total, tx.Value())
+	return total
 }
 
 // RawSignatureValues returns the V, R, S signature values of the transaction.

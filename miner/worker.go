@@ -1468,6 +1468,9 @@ func (w *worker) refreshPending(locked bool) {
 	// EIP-4844: Initialize ExcessBlobGas for Camellia fork blocks.
 	initExcessBlobGas(w.chainConfig, header, parent)
 	parentBlock := w.chain.GetBlockByHash(parent.Hash())
+	if parentBlock == nil {
+		return
+	}
 	if env, err := w.makeEnv(parentBlock.Header(), header, header.Coinbase); err == nil {
 		env.blockInterval = blockInterval
 		env.blockGasLimit = blockGasLimit
