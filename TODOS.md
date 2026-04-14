@@ -103,6 +103,18 @@ Deferred work tracked from /plan-ceo-review (2026-04-04), /plan-eng-review (2026
 
 ---
 
+### [ ] genesis.go IsCamellia check for WithdrawalsHash/blob gas fields
+
+**What:** Add IsCamellia() check to genesis.go ToBlock() so CamelliaBlock=0 + ShanghaiTime=nil configs correctly initialize WithdrawalsHash and blob gas fields in the genesis block.
+
+**Why:** genesis block state may be inconsistent with post-genesis blocks. Currently tests pass and runtime is unaffected, but correctness improvement for fork transition edge cases.
+
+**Effort:** S (human ~1h / CC+gstack ~10min)
+**Priority:** P2
+**Depends on:** None
+
+---
+
 ## Completed
 
 ### [x] Camellia fork implementation and testing (2026-04-08)
