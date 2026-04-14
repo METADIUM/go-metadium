@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/holiman/uint256"
 )
 
@@ -56,7 +57,11 @@ func NewEVMBlockContext(header *types.Header, chain ChainContext, author *common
 		baseFee = new(big.Int).Set(header.BaseFee)
 	}
 	if header.ExcessBlobGas != nil {
-		blobBaseFee = eip4844.CalcBlobFee(header.ExcessBlobGas.Uint64())
+		if header.ExcessBlobGas.BitLen() > 64 {
+			log.Error("ExcessBlobGas exceeds uint64", "value", header.ExcessBlobGas)
+		} else {
+			blobBaseFee = eip4844.CalcBlobFee(header.ExcessBlobGas.Uint64())
+		}
 	}
 	if header.Difficulty.Cmp(common.Big0) == 0 {
 		random = &header.MixDigest

@@ -156,6 +156,9 @@ func (api *adminAPI) PeerEvents(ctx context.Context) (*rpc.Subscription, error) 
 }
 
 // StartHTTP starts the HTTP RPC API server.
+// Security: the caller-supplied 'apis' parameter is restricted to the set of
+// modules originally configured at startup. This prevents a remote attacker
+// from expanding the exposed API surface at runtime.
 func (api *adminAPI) StartHTTP(host *string, port *int, cors *string, apis *string, vhosts *string) (bool, error) {
 	api.node.lock.Lock()
 	defer api.node.lock.Unlock()
@@ -195,9 +198,18 @@ func (api *adminAPI) StartHTTP(host *string, port *int, cors *string, apis *stri
 		}
 	}
 	if apis != nil {
+		// Only allow modules that were originally configured at startup.
+		allowed := make(map[string]bool)
+		for _, m := range api.node.config.HTTPModules {
+			allowed[m] = true
+		}
 		config.Modules = nil
 		for _, m := range strings.Split(*apis, ",") {
-			config.Modules = append(config.Modules, strings.TrimSpace(m))
+			m = strings.TrimSpace(m)
+			if !allowed[m] {
+				return false, fmt.Errorf("module %q not in originally configured HTTP modules", m)
+			}
+			config.Modules = append(config.Modules, m)
 		}
 	}
 
@@ -261,9 +273,18 @@ func (api *adminAPI) StartWS(host *string, port *int, allowedOrigins *string, ap
 		},
 	}
 	if apis != nil {
+		// Only allow modules that were originally configured at startup.
+		allowed := make(map[string]bool)
+		for _, m := range api.node.config.WSModules {
+			allowed[m] = true
+		}
 		config.Modules = nil
 		for _, m := range strings.Split(*apis, ",") {
-			config.Modules = append(config.Modules, strings.TrimSpace(m))
+			m = strings.TrimSpace(m)
+			if !allowed[m] {
+				return false, fmt.Errorf("module %q not in originally configured WS modules", m)
+			}
+			config.Modules = append(config.Modules, m)
 		}
 	}
 	if allowedOrigins != nil {

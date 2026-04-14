@@ -1666,9 +1666,11 @@ func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, has
 	num := new(big.Int).Sub(height, common.Big1)
 	_, gov, _, _, _, err := admin.getRegGovEnvContracts(ctx, num)
 	if err != nil {
-		return err == metaminer.ErrNotInitialized
+		// Reject blocks when governance is not initialized to prevent
+		// accepting arbitrary blocks during bootstrap/upgrade windows.
+		return false
 	} else if count, err := admin.getInt(ctx, gov, num, "getMemberLength"); err != nil || count == 0 {
-		return err == metaminer.ErrNotInitialized || count == 0
+		return false
 	}
 	// if minerNodeId is given, i.e. present in block header, use it,
 	// otherwise, derive it from the codebase
