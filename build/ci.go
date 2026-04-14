@@ -190,6 +190,7 @@ func doInstall(cmdline []string) {
 		arch       = flag.String("arch", "", "Architecture to cross build for")
 		cc         = flag.String("cc", "", "C compiler to cross build with")
 		staticlink = flag.Bool("static", false, "Create statically-linked executable")
+		tags       = flag.String("tags", "", "Additional build tags (comma-separated)")
 	)
 	flag.CommandLine.Parse(cmdline)
 	env := build.Env()
@@ -202,6 +203,15 @@ func doInstall(cmdline []string) {
 	}
 	// Disable CLI markdown doc generation in release builds.
 	buildTags := []string{"urfave_cli_no_docs"}
+
+	// Append extra build tags (e.g. "rocksdb") passed via -tags flag.
+	if *tags != "" {
+		for _, t := range strings.Split(*tags, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				buildTags = append(buildTags, t)
+			}
+		}
+	}
 
 	// Enable linking the CKZG library since we can make it work with additional flags.
 	if env.UbuntuVersion != "trusty" {

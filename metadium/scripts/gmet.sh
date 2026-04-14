@@ -100,7 +100,7 @@ function init_gov ()
     PORT=$(grep PORT ${d}/.rc | sed -e 's/PORT=//')
     [ "$PORT" = "" ] && PORT=8588
 
-    exec ${GMET} attach http://localhost:${PORT} --preload "$d/conf/MetadiumGovernance.js,$d/conf/deploy-governance.js" --exec 'GovernanceDeployer.deploy("'${ACCT}'", "", "'${CONFIG}'", '${INIT_ONCE}')'
+    exec ${GMET} attach --preload "$d/conf/MetadiumGovernance.js,$d/conf/deploy-governance.js" --exec 'GovernanceDeployer.deploy("'${ACCT}'", "", "'${CONFIG}'", '${INIT_ONCE}')' http://localhost:${PORT}
 }
 
 function wipe ()
@@ -166,7 +166,7 @@ function start ()
 	SYNC_MODE="--syncmode full --gcmode archive";;
     esac
 
-    OPTS="$COINBASE $DISCOVER $RPCOPT $BOOT_NODES $NONCE_LIMIT $TESTNET $SYNC_MODE ${GMET_OPTS}"
+    OPTS="$COINBASE $DISCOVER $RPCOPT $BOOT_NODES $NONCE_LIMIT $TESTNET $SYNC_MODE --rpc.txfeecap 0 ${GMET_OPTS}"
     [ "$PORT" = "" ] || OPTS="${OPTS} --port $(($PORT + 1))"
     [ "$HUB" = "" ] || OPTS="${OPTS} --hub ${HUB}"
     [ "$MAX_TXS_PER_BLOCK" = "" ] || OPTS="${OPTS} --maxtxsperblock ${MAX_TXS_PER_BLOCK}"
@@ -283,7 +283,7 @@ if (admin.metadiumInfo != null && admin.metadiumInfo.self != null) {
   }
   check_if_mining()
 }'
-	${dir}/bin/gmet attach ipc:${dir}/gmet.ipc --exec "$CMD" | grep -v "undefined"
+	${dir}/bin/gmet attach --exec "$CMD" ipc:${dir}/gmet.ipc | grep -v "undefined"
 	echo $PIDS | xargs -L1 kill
     fi
     for i in {1..200}; do
@@ -337,7 +337,7 @@ if (admin.metadiumInfo != null && admin.metadiumInfo.self != null) {
     if [ -f "$d/rc.js" ]; then
 	RCJS="--preload $d/rc.js"
     fi
-    exec ${d}/bin/gmet ${RCJS} attach ipc:${d}/gmet.ipc
+    exec ${d}/bin/gmet attach ${RCJS} ipc:${d}/gmet.ipc
     ;;
 
 *)

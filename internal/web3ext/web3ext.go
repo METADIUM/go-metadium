@@ -190,6 +190,58 @@ web3._extend({
 			name: 'stopWS',
 			call: 'admin_stopWS'
 		}),
+		new web3._extend.Method({
+			name: 'metadiumNodes',
+			call: 'admin_metadiumNodes',
+			params: 2
+		}),
+		new web3._extend.Method({
+			name: 'etcdInit',
+			call: 'admin_etcdInit',
+		}),
+		new web3._extend.Method({
+			name: 'etcdAddMember',
+			call: 'admin_etcdAddMember',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'etcdRemoveMember',
+			call: 'admin_etcdRemoveMember',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'etcdJoin',
+			call: 'admin_etcdJoin',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'etcdMoveLeader',
+			call: 'admin_etcdMoveLeader',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'etcdGetWork',
+			call: 'admin_etcdGetWork',
+		}),
+		new web3._extend.Method({
+			name: 'etcdDeleteWork',
+			call: 'admin_etcdDeleteWork',
+		}),
+		new web3._extend.Method({
+			name: 'requestMinerStatus',
+			call: 'admin_requestMinerStatus',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'requestEtcdAddMember',
+			call: 'admin_requestEtcdAddMember',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'trsInfo',
+			call: 'admin_trsInfo',
+			params: 1
+		}),
 	],
 	properties: [
 		new web3._extend.Property({
@@ -203,6 +255,10 @@ web3._extend({
 		new web3._extend.Property({
 			name: 'datadir',
 			getter: 'admin_datadir'
+		}),
+		new web3._extend.Property({
+			name: 'metadiumInfo',
+			getter: 'admin_metadiumInfo'
 		}),
 	]
 });
@@ -501,6 +557,21 @@ web3._extend({
 			call: 'debug_getTrieFlushInterval',
 			params: 0
 		}),
+		new web3._extend.Method({
+			name: 'etcdPut',
+			call: 'debug_etcdPut',
+			params: 2
+		}),
+		new web3._extend.Method({
+			name: 'etcdGet',
+			call: 'debug_etcdGet',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'etcdDelete',
+			call: 'debug_etcdDelete',
+			params: 1
+		}),
 	],
 	properties: []
 });
@@ -621,6 +692,12 @@ web3._extend({
 			name: 'getBlockReceipts',
 			call: 'eth_getBlockReceipts',
 			params: 1,
+		}),
+		new web3._extend.Method({
+			name: 'signRawFeeDelegateTransaction',
+			call: 'eth_signRawFeeDelegateTransaction',
+			params: 3,
+			inputFormatter: [web3._extend.formatters.inputTransactionFormatter, null, null]
 		}),
 	],
 	properties: [
@@ -752,7 +829,13 @@ web3._extend({
 			name: 'initializeWallet',
 			call: 'personal_initializeWallet',
 			params: 1
-		})
+		}),
+		new web3._extend.Method({
+			name: 'signRawFeeDelegateTransaction',
+			call: 'personal_signRawFeeDelegateTransaction',
+			params: 3,
+			inputFormatter: [web3._extend.formatters.inputTransactionFormatter, null, null]
+		}),
 	],
 	properties: [
 		new web3._extend.Property({

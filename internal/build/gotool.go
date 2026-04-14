@@ -55,7 +55,13 @@ func (g *GoToolchain) Go(command string, args ...string) *exec.Cmd {
 	}
 	// CKZG by default is not portable, append the necessary build flags to make
 	// it not rely on modern CPU instructions and enable linking against.
-	tool.Env = append(tool.Env, "CGO_CFLAGS=-O2 -g -D__BLST_PORTABLE__")
+	// Merge with existing CGO_CFLAGS (e.g. RocksDB -I flags from Makefile).
+	cgoCflags := os.Getenv("CGO_CFLAGS")
+	if cgoCflags != "" {
+		cgoCflags += " "
+	}
+	cgoCflags += "-O2 -g -D__BLST_PORTABLE__"
+	tool.Env = append(tool.Env, "CGO_CFLAGS="+cgoCflags)
 
 	return tool
 }
@@ -70,7 +76,7 @@ func (g *GoToolchain) goTool(command string, args ...string) *exec.Cmd {
 
 	// Forward environment variables to the tool, but skip compiler target settings.
 	// TODO: what about GOARM?
-	skip := map[string]struct{}{"GOROOT": {}, "GOARCH": {}, "GOOS": {}, "GOBIN": {}, "CC": {}}
+	skip := map[string]struct{}{"GOROOT": {}, "GOARCH": {}, "GOOS": {}, "GOBIN": {}, "CC": {}, "CGO_CFLAGS": {}}
 	for _, e := range os.Environ() {
 		if i := strings.IndexByte(e, '='); i >= 0 {
 			if _, ok := skip[e[:i]]; ok {

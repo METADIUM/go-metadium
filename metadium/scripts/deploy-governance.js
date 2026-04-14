@@ -150,11 +150,15 @@ var GovernanceDeployer = new function() {
     // Contract resolveContract(ABI abi, hash txh)
     this.resolveContract = function(abi, txh) {
         for (var i = 0; i < this.receiptCheckParams.count; i++ ) {
-            var r = eth.getTransactionReceipt(txh)
-            if (r != null && r.contractAddress != null) {
-                var ctr = web3.eth.contract(abi).at(r.contractAddress)
-                ctr.transactionHash = txh
-                return ctr
+            try {
+                var r = eth.getTransactionReceipt(txh)
+                if (r != null && r.contractAddress != null) {
+                    var ctr = web3.eth.contract(abi).at(r.contractAddress)
+                    ctr.transactionHash = txh
+                    return ctr
+                }
+            } catch(e) {
+                // retry on transient errors (e.g. "transaction indexing is in progress")
             }
             msleep(this.receiptCheckParams.interval)
         }
@@ -175,9 +179,13 @@ var GovernanceDeployer = new function() {
 
     this.checkReceipt = function(tx) {
         for (var i = 0; i < this.receiptCheckParams.count; i++ ) {
-            var r = eth.getTransactionReceipt(tx)
-            if (r != null)
-                return web3.toBigNumber(r.status) == 1
+            try {
+                var r = eth.getTransactionReceipt(tx)
+                if (r != null)
+                    return web3.toBigNumber(r.status) == 1
+            } catch(e) {
+                // retry on transient errors (e.g. "transaction indexing is in progress")
+            }
             msleep(this.receiptCheckParams.interval)
         }
         throw "Cannot get a transaction receipt for " + tx
