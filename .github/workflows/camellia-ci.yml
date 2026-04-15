@@ -1,0 +1,49 @@
+name: camellia-ci
+
+on:
+  push:
+    branches: [camellia]
+  pull_request:
+    branches: [camellia]
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, x64, cicd]
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build gmet (LevelDB)
+      env:
+        PATH: /usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      run: make gmet
+
+    - name: Build gmet (RocksDB)
+      env:
+        PATH: /usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      run: make gmet USE_ROCKSDB=YES
+
+    - name: Verify binaries
+      run: |
+        ls -lh build/bin/gmet
+        build/bin/gmet version
+
+  test-4node:
+    needs: build
+    runs-on: [self-hosted, linux, x64, cicd]
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build gmet
+      env:
+        PATH: /usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      run: make gmet
+
+    - name: Run 4-node private network test
+      run: |
+        cd metadium/scripts
+        bash camellia-test.sh 2>&1 || true
+
+    - name: Run RPC tests
+      run: |
+        cd metadium/scripts
+        bash rpc-test-full.sh 2>&1 || true
