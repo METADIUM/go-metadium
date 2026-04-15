@@ -3,8 +3,6 @@ name: camellia-ci
 on:
   push:
     branches: [camellia]
-  pull_request:
-    branches: [camellia]
 
 jobs:
   build:
