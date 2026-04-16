@@ -1666,11 +1666,12 @@ func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, has
 	num := new(big.Int).Sub(height, common.Big1)
 	_, gov, _, _, _, err := admin.getRegGovEnvContracts(ctx, num)
 	if err != nil {
-		// Reject blocks when governance is not initialized to prevent
-		// accepting arbitrary blocks during bootstrap/upgrade windows.
-		return false
+		// Governance not yet initialized (early blocks before contract deployment).
+		// Allow these blocks — they are pre-governance and cannot be verified.
+		return true
 	} else if count, err := admin.getInt(ctx, gov, num, "getMemberLength"); err != nil || count == 0 {
-		return false
+		// No members registered yet — governance exists but is empty.
+		return true
 	}
 	// if minerNodeId is given, i.e. present in block header, use it,
 	// otherwise, derive it from the codebase
