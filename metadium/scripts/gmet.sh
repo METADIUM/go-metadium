@@ -100,6 +100,12 @@ function init_gov ()
     PORT=$(grep PORT ${d}/.rc | sed -e 's/PORT=//')
     [ "$PORT" = "" ] && PORT=8588
 
+    # Validate ACCT to prevent JavaScript injection via --exec
+    if [[ ! "${ACCT}" =~ ^[a-zA-Z0-9/._-]+$ ]]; then
+        echo "Error: ACCT contains invalid characters: ${ACCT}"
+        return 1
+    fi
+
     exec ${GMET} attach --preload "$d/conf/MetadiumGovernance.js,$d/conf/deploy-governance.js" --exec 'GovernanceDeployer.deploy("'${ACCT}'", "", "'${CONFIG}'", '${INIT_ONCE}')' http://localhost:${PORT}
 }
 
@@ -143,9 +149,9 @@ function start ()
     [ -f "$d/.rc" ] && source "$d/.rc"
     [ "$COINBASE" = "" ] && COINBASE="" || COINBASE="--miner.etherbase $COINBASE"
 
-    RPCOPT="--http --http.addr 0.0.0.0"
+    RPCOPT="--http --http.addr ${HTTP_ADDR:-127.0.0.1}"
     [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --http.port ${PORT}"
-    RPCOPT="${RPCOPT} --ws --ws.addr 0.0.0.0"
+    RPCOPT="${RPCOPT} --ws --ws.addr ${WS_ADDR:-127.0.0.1}"
     [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --ws.port $((${PORT}+10))"
     [ "$NONCE_LIMIT" = "" ] || NONCE_LIMIT="--noncelimit $NONCE_LIMIT"
     [ "$BOOT_NODES" = "" ] || BOOT_NODES="--bootnodes $BOOT_NODES"
@@ -254,7 +260,7 @@ function check_if_mining() {
   for (var i = 0; i < 15; i++) {
     try {
       var token = debug.etcdGet("token")
-      eval("token = " + token)
+      token = JSON.parse(token)
       // console.log("miner -> " + token.miner)
       if (token.miner != admin.metadiumInfo.self.name) {
         break

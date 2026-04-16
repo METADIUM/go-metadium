@@ -1923,9 +1923,18 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 		// Ensure only eip155 signed transactions are submitted if EIP155Required is set.
 		return common.Hash{}, errors.New("only replay-protected (EIP-155) transactions allowed over RPC")
 	}
-	// fee delegation
-	if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() == nil {
-		return common.Hash{}, errors.New("FeePayer address is null")
+	// fee delegation: verify FeePayer signature BEFORE submitting to the pool
+	if tx.Type() == types.FeeDelegateDynamicFeeTxType {
+		if tx.FeePayer() == nil {
+			return common.Hash{}, errors.New("FeePayer address is null")
+		}
+		feePayer, err := types.FeePayer(types.NewFeeDelegateSigner(b.ChainConfig().ChainID), tx)
+		if err != nil {
+			return common.Hash{}, err
+		}
+		if feePayer != *tx.FeePayer() {
+			return common.Hash{}, errors.New("FeePayer Signature error")
+		}
 	}
 	if err := b.SendTx(ctx, tx); err != nil {
 		return common.Hash{}, err
@@ -1936,16 +1945,6 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 	from, err := types.Sender(signer, tx)
 	if err != nil {
 		return common.Hash{}, err
-	}
-	// fee delegation
-	if tx.Type() == types.FeeDelegateDynamicFeeTxType {
-		feePayer, err := types.FeePayer(types.NewFeeDelegateSigner(b.ChainConfig().ChainID), tx)
-		if err != nil {
-			return common.Hash{}, err
-		}
-		if feePayer != *tx.FeePayer() {
-			return common.Hash{}, errors.New("FeePayer Signature error")
-		}
 	}
 
 	if tx.To() == nil {
@@ -2078,6 +2077,10 @@ func (s *TransactionAPI) GetBlobSidecar(ctx context.Context, txHash common.Hash)
 // SendRawTransactions will add the signed transactions to the transaction pool.
 // The sender is responsible for signing the transactions and using the correct nonces.
 func (s *TransactionAPI) SendRawTransactions(ctx context.Context, encodedTxs []hexutil.Bytes) ([]common.Hash, error) {
+	const maxBatchSize = 512
+	if len(encodedTxs) > maxBatchSize {
+		return nil, fmt.Errorf("batch too large: %d transactions (max %d)", len(encodedTxs), maxBatchSize)
+	}
 	var hashes []common.Hash
 	for _, etx := range encodedTxs {
 		tx := new(types.Transaction)
@@ -2455,6 +2458,12 @@ func (s *PersonalAccountAPI) SignRawFeeDelegateTransaction(ctx context.Context, 
 		return nil, err
 	}
 
+	// Verify the sender's signature before the fee payer co-signs.
+	signer := types.MakeSigner(s.b.ChainConfig(), s.b.CurrentBlock().Number, s.b.CurrentBlock().Time)
+	if _, err := types.Sender(signer, rawTx); err != nil {
+		return nil, fmt.Errorf("sender signature verification failed: %w", err)
+	}
+
 	V, R, S := rawTx.RawSignatureValues()
 	if rawTx.Type() == types.DynamicFeeTxType {
 		SenderTx := types.DynamicFeeTx{
@@ -2507,6 +2516,13 @@ func (s *TransactionAPI) SignRawFeeDelegateTransaction(ctx context.Context, args
 	rawTx := new(types.Transaction)
 	if err := rawTx.UnmarshalBinary(input); err != nil {
 		return nil, err
+	}
+
+	// Verify the sender's signature before the fee payer co-signs.
+	// This prevents tricking a fee payer into signing a tx with a forged sender.
+	signer := types.MakeSigner(s.b.ChainConfig(), s.b.CurrentBlock().Number, s.b.CurrentBlock().Time)
+	if _, err := types.Sender(signer, rawTx); err != nil {
+		return nil, fmt.Errorf("sender signature verification failed: %w", err)
 	}
 
 	V, R, S := rawTx.RawSignatureValues()

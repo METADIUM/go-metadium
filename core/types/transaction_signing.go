@@ -173,7 +173,13 @@ func GetSender(signer Signer, tx *Transaction) *common.Address {
 }
 
 // fee delegation
+// FeePayer recovers the fee payer address from the transaction's fee payer signature.
+// The signer MUST be a feeDelegateSigner; using any other signer type would
+// incorrectly recover the sender address instead of the fee payer.
 func FeePayer(signer Signer, tx *Transaction) (common.Address, error) {
+	if _, ok := signer.(feeDelegateSigner); !ok {
+		return common.Address{}, fmt.Errorf("FeePayer requires feeDelegateSigner, got %T", signer)
+	}
 	if sc := tx.feePayer.Load(); sc != nil {
 		sigCache := sc.(sigCache)
 		// If the signer used to derive from in a previous

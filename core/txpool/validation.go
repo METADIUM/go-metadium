@@ -228,6 +228,14 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 	if balance.Cmp(cost) < 0 {
 		return fmt.Errorf("%w: balance %v, tx cost %v, overshot %v", core.ErrInsufficientFunds, balance, cost, new(big.Int).Sub(cost, balance))
 	}
+	// Fee delegation: verify the fee payer has sufficient balance for gas costs
+	if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil && *tx.FeePayer() != from {
+		feePayerBalance := opts.State.GetBalance(*tx.FeePayer()).ToBig()
+		gasCost := new(big.Int).Mul(new(big.Int).SetUint64(tx.Gas()), tx.GasFeeCap())
+		if feePayerBalance.Cmp(gasCost) < 0 {
+			return fmt.Errorf("%w: fee payer %v balance %v, gas cost %v", core.ErrInsufficientFunds, tx.FeePayer().Hex(), feePayerBalance, gasCost)
+		}
+	}
 	// Ensure the transactor has enough funds to cover for replacements or nonce
 	// expansions without overdrafts
 	spent := opts.ExistingExpenditure(from)

@@ -97,6 +97,9 @@ func (h *HandlerT) CpuProfile(file string, nsec uint) error {
 
 // StartCPUProfile turns on CPU profiling, writing to the given file.
 func (h *HandlerT) StartCPUProfile(file string) error {
+	if err := validateProfilePath(file); err != nil {
+		return err
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.cpuW != nil {
@@ -243,6 +246,9 @@ func (*HandlerT) SetGCPercent(v int) int {
 }
 
 func writeProfile(name, file string) error {
+	if err := validateProfilePath(file); err != nil {
+		return err
+	}
 	p := pprof.Lookup(name)
 	log.Info("Writing profile records", "count", p.Count(), "type", name, "dump", file)
 	f, err := os.Create(expandHome(file))
@@ -270,6 +276,20 @@ func expandHome(p string) string {
 	return filepath.Clean(p)
 }
 
+// validateProfilePath checks that a profiling output path is safe.
+// It rejects absolute paths and path traversal attempts, allowing only
+// relative paths within the current working directory.
+func validateProfilePath(file string) error {
+	cleaned := expandHome(file)
+	if filepath.IsAbs(cleaned) {
+		return fmt.Errorf("absolute paths not allowed for profiling output: %s", file)
+	}
+	if strings.Contains(cleaned, "..") {
+		return fmt.Errorf("path traversal not allowed: %s", file)
+	}
+	return nil
+}
+
 func (*HandlerT) DbStats(device string, b interface{}) []uint64 {
 	bb, ok := b.(bool)
 	if ok {
@@ -284,17 +304,18 @@ func (*HandlerT) VerifyBlockRewards(block *big.Int) interface{} {
 	return metaminer.VerifyBlockRewards(block)
 }
 
-// Remove an etcd key / value pair
+// EtcdPut is disabled over RPC to prevent unauthorized etcd state manipulation.
+// Use IPC or the etcd client directly for administrative operations.
 func (*HandlerT) EtcdPut(key, value string) error {
-	return metaapi.EtcdPut(key, value)
+	return errors.New("debug_etcdPut is disabled over RPC for security reasons")
 }
 
-// Get etcd key's value
+// Get etcd key's value (read-only, safe to expose)
 func (*HandlerT) EtcdGet(key string) (string, error) {
 	return metaapi.EtcdGet(key)
 }
 
-// Remove an etcd key / value pair
+// EtcdDelete is disabled over RPC to prevent unauthorized etcd state manipulation.
 func (*HandlerT) EtcdDelete(key string) error {
-	return metaapi.EtcdDelete(key)
+	return errors.New("debug_etcdDelete is disabled over RPC for security reasons")
 }

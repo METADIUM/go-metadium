@@ -29,6 +29,7 @@ rm -rf data/ passwords.txt static-nodes.json genesis.json
 mkdir -p data/node1/geth data/node2/geth data/node3/geth
 mkdir -p data/node1/gmet data/node2/gmet data/node3/gmet
 echo "$PASSWORD" > passwords.txt
+chmod 600 passwords.txt
 
 # Test account private keys (Hardhat defaults - for testing only)
 PRIVKEYS=(

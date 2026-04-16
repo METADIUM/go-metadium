@@ -176,7 +176,24 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 	}
 	var err error
 	msg.From, err = types.Sender(s, tx)
-	return msg, err
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify fee payer signature during block execution to prevent
+	// malicious miners from forging the FeePayer address.
+	if tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
+		fds := types.NewFeeDelegateSigner(s.ChainID())
+		recovered, err := types.FeePayer(fds, tx)
+		if err != nil {
+			return nil, fmt.Errorf("fee payer signature recovery failed: %w", err)
+		}
+		if recovered != *tx.FeePayer() {
+			return nil, fmt.Errorf("fee payer signature mismatch: declared %s, recovered %s", tx.FeePayer().Hex(), recovered.Hex())
+		}
+	}
+
+	return msg, nil
 }
 
 // ApplyMessage computes the new state by applying the given message
@@ -264,7 +281,10 @@ func (st *StateTransition) buyGas() error {
 	// Metadium fee delegation: FeePayer pays gas
 	if st.msg.FeePayer != nil {
 		feePayer := *st.msg.FeePayer
-		mgvalU256, _ := uint256.FromBig(mgval)
+		mgvalU256, overflow := uint256.FromBig(mgval)
+		if overflow {
+			return fmt.Errorf("%w: address %v gas cost exceeds 256 bits", ErrInsufficientFunds, feePayer.Hex())
+		}
 		if feePayer == st.msg.From {
 			balanceCheckU256, overflow := uint256.FromBig(balanceCheck)
 			if overflow {
@@ -281,7 +301,10 @@ func (st *StateTransition) buyGas() error {
 			if have, want := st.state.GetBalance(feePayer), mgvalCheckU256; have.Cmp(want) < 0 {
 				return ErrFeePayerInsufficientFunds
 			}
-			valueU256, _ := uint256.FromBig(st.msg.Value)
+			valueU256, overflow := uint256.FromBig(st.msg.Value)
+			if overflow {
+				return fmt.Errorf("%w: sender value exceeds 256 bits", ErrInsufficientFunds)
+			}
 			if have, want := st.state.GetBalance(st.msg.From), valueU256; have.Cmp(want) < 0 {
 				return fmt.Errorf("%w: sender address %v have %v want %v", ErrInsufficientFunds, st.msg.From.Hex(), have, want)
 			}

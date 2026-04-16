@@ -183,6 +183,7 @@ func EncryptDataV3(data, auth []byte, scryptN, scryptP int) (CryptoJSON, error) 
 // blob that can be decrypted later on.
 func EncryptKey(key *Key, auth string, scryptN, scryptP int) ([]byte, error) {
 	keyBytes := math.PaddedBigBytes(key.PrivateKey.D, 32)
+	defer func() { for i := range keyBytes { keyBytes[i] = 0 } }()
 	cryptoStruct, err := EncryptDataV3(keyBytes, []byte(auth), scryptN, scryptP)
 	if err != nil {
 		return nil, err
@@ -225,6 +226,7 @@ func DecryptKey(keyjson []byte, auth string) (*Key, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() { for i := range keyBytes { keyBytes[i] = 0 } }()
 	key, err := crypto.ToECDSA(keyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("invalid key: %w", err)
@@ -342,9 +344,16 @@ func getKDFKey(cryptoJSON CryptoJSON, auth string) ([]byte, error) {
 		n := ensureInt(cryptoJSON.KDFParams["n"])
 		r := ensureInt(cryptoJSON.KDFParams["r"])
 		p := ensureInt(cryptoJSON.KDFParams["p"])
+		// Reject weak scrypt parameters that could indicate a tampered keystore
+		if n < 2 || r < 1 || p < 1 {
+			return nil, fmt.Errorf("scrypt parameters too weak: n=%d r=%d p=%d", n, r, p)
+		}
 		return scrypt.Key(authArray, salt, n, r, p, dkLen)
 	} else if cryptoJSON.KDF == "pbkdf2" {
 		c := ensureInt(cryptoJSON.KDFParams["c"])
+		if c < 10000 {
+			return nil, fmt.Errorf("PBKDF2 iteration count too low: %d (minimum 10000)", c)
+		}
 		prf := cryptoJSON.KDFParams["prf"].(string)
 		if prf != "hmac-sha256" {
 			return nil, fmt.Errorf("unsupported PBKDF2 PRF: %s", prf)

@@ -225,7 +225,7 @@ var GovernanceDeployer = new function() {
         }
 
         // check config.js
-        eval("var data = " + data)
+        var data = JSON.parse(data)
         this.verifyCfg(data)
 
         // initial members and nodes data

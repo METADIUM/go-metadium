@@ -590,11 +590,18 @@ func Txs2TxExs(txs []*Transaction) []*TransactionEx {
 }
 
 // Convert []*TransactionEx to []*Transaction
+// Even for trusted partners, verify that the claimed From address matches
+// the cryptographic signature to prevent sender cache poisoning.
 func TxExs2Txs(signer Signer, txs []*TransactionEx, trustIt bool) []*Transaction {
 	var out []*Transaction
 	for _, i := range txs {
 		if trustIt {
-			i.Tx.from.Store(sigCache{signer: signer, from: i.From})
+			// Verify signature before caching the sender address.
+			recovered, err := signer.Sender(i.Tx)
+			if err == nil && recovered == i.From {
+				i.Tx.from.Store(sigCache{signer: signer, from: i.From})
+			}
+			// If verification fails, skip caching; Sender() will recover later.
 		}
 		out = append(out, i.Tx)
 	}
