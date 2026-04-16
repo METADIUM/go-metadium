@@ -23,6 +23,7 @@ package debug
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"os"
