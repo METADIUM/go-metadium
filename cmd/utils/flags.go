@@ -22,6 +22,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"errors"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -1940,6 +1941,22 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	default:
 		if cfg.NetworkId == 1 {
 			SetDNSDiscoveryDefaults(cfg, params.MainnetGenesisHash)
+		}
+		// Metadium private network: load genesis from the datadir genesis.json
+		// so that LoadChainConfig gets the correct ChainID on first boot
+		// (avoids falling back to Ethereum MainnetChainConfig with ChainID=1).
+		if cfg.Genesis == nil {
+			genesisPath := filepath.Join(ctx.String(DataDirFlag.Name), "genesis.json")
+			if file, err := os.Open(genesisPath); err == nil {
+				defer file.Close()
+				var genesis core.Genesis
+				if err := json.NewDecoder(file).Decode(&genesis); err == nil && genesis.Config != nil {
+					cfg.Genesis = &genesis
+					if !ctx.IsSet(NetworkIdFlag.Name) && cfg.NetworkId == 0 {
+						cfg.NetworkId = genesis.Config.ChainID.Uint64()
+					}
+				}
+			}
 		}
 	}
 	// Set any dangling config values
