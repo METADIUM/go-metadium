@@ -230,7 +230,8 @@ var (
 	BlockInterval        int64 = 1    // Block generation interval in seconds
 	BlockTimeAdjBlocks   int64 = 120  // Block interval to adjust timestamp
 	BlockTimeAdjMultiple int64 = 4    // How many of block intervals to consider
-	BlockMinBuildTime    int64 = 300  // Minimum block generation time in ms
-	BlockMinBuildTxs     int64 = 2500 // Minimum txs in a block with pending txs
-	BlockTrailTime       int64 = 300  // Time to leave for block data transfer transfer in ms
+	BlockMinBuildTime    int64  = 300  // Minimum block generation time in ms
+	BlockMinBuildTxs     int64  = 2500 // Minimum txs in a block with pending txs
+	BlockTrailTime       int64  = 300  // Time to leave for block data transfer transfer in ms
+	BlobRetentionBlocks  uint64 = 0    // Number of blocks to keep blob sidecars (0 = forever)
 )

@@ -395,6 +395,46 @@ func (b *EthAPIBackend) RPCGasCap() uint64 {
 	return b.eth.config.RPCGasCap
 }
 
+func (b *EthAPIBackend) GetBlobSidecar(txHash common.Hash) *types.BlobTxSidecar {
+	// Check pending pool first
+	if sc := b.eth.txPool.GetSidecar(txHash); sc != nil {
+		return sc
+	}
+	// Check chain DB: look up the tx to find its block, then read stored sidecars
+	blockNumberPtr := rawdb.ReadTxLookupEntry(b.eth.ChainDb(), txHash)
+	if blockNumberPtr == nil {
+		return nil
+	}
+	blockNumber := *blockNumberPtr
+	blockHash := rawdb.ReadCanonicalHash(b.eth.ChainDb(), blockNumber)
+	if blockHash == (common.Hash{}) {
+		return nil
+	}
+	sidecars := rawdb.ReadBlobSidecars(b.eth.ChainDb(), blockHash, blockNumber)
+	block := b.eth.blockchain.GetBlock(blockHash, blockNumber)
+	if block == nil || len(sidecars) == 0 {
+		return nil
+	}
+	// Match sidecar by counting blob txs up to this tx
+	scIdx := 0
+	for _, tx := range block.Transactions() {
+		if tx.Hash() == txHash {
+			if tx.Type() == types.BlobTxType && scIdx < len(sidecars) {
+				return sidecars[scIdx]
+			}
+			return nil
+		}
+		if tx.Type() == types.BlobTxType {
+			scIdx++
+		}
+	}
+	return nil
+}
+
+func (b *EthAPIBackend) GetBlobSidecars(blockHash common.Hash, blockNumber uint64) []*types.BlobTxSidecar {
+	return rawdb.ReadBlobSidecars(b.eth.ChainDb(), blockHash, blockNumber)
+}
+
 func (b *EthAPIBackend) RPCEVMTimeout() time.Duration {
 	return b.eth.config.RPCEVMTimeout
 }

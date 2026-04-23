@@ -232,6 +232,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Wire blob sidecar lookup so non-mining nodes can persist sidecars on block import.
+	eth.blockchain.BlobSidecarFn = eth.txPool.GetSidecar
+
 	// Permit the downloader to use the trie cache allowance during fast sync
 	cacheLimit := cacheConfig.TrieCleanLimit + cacheConfig.TrieDirtyLimit + cacheConfig.SnapshotLimit
 	if eth.handler, err = newHandler(&handlerConfig{

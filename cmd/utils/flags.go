@@ -1020,6 +1020,11 @@ var (
 		Usage: "Time to leave for block data transfer in ms",
 		Value: params.BlockTrailTime,
 	}
+	BlobRetentionBlocks = &cli.Uint64Flag{
+		Name:  "blob.retention",
+		Usage: "Number of blocks to retain blob sidecars (0 = keep forever)",
+		Value: params.BlobRetentionBlocks,
+	}
 )
 
 
@@ -2034,6 +2039,9 @@ func SetMetadiumConfig(ctx *cli.Context, stack *node.Node, cfg *eth.Config) {
 	}
 	if params.ConsensusMethod <= params.ConsensusInvalid || params.ConsensusMethod >= params.ConsensusETCD {
 		Fatalf("Invalid Consensus Method: %d", ctx.String(ConsensusMethodFlag.Name))
+	}
+	if ctx.IsSet(BlobRetentionBlocks.Name) {
+		params.BlobRetentionBlocks = ctx.Uint64(BlobRetentionBlocks.Name)
 	}
 	params.MetadiumGenesisFile = filepath.Join(ctx.String(DataDirFlag.Name), "genesis.json")
 }

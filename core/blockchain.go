@@ -220,6 +220,10 @@ type BlockChain struct {
 	stateCache    state.Database                   // State database to reuse between imports (contains state cache)
 	txIndexer     *txIndexer                       // Transaction indexer, might be nil if not enabled
 
+	// BlobSidecarFn retrieves blob sidecars for a tx hash (e.g. from the blob pool).
+	// Set externally after construction to enable sidecar storage on block import.
+	BlobSidecarFn func(txHash common.Hash) *types.BlobTxSidecar
+
 	hc            *HeaderChain
 	rmLogsFeed    event.Feed
 	chainFeed     event.Feed
@@ -1484,7 +1488,31 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 	} else {
 		bc.chainSideFeed.Send(ChainSideEvent{Block: block})
 	}
+	// Prune old blob sidecars if retention is configured.
+	if status == CanonStatTy && params.BlobRetentionBlocks > 0 {
+		head := block.NumberU64()
+		if head > params.BlobRetentionBlocks {
+			cutoff := head - params.BlobRetentionBlocks
+			bc.pruneBlobSidecars(cutoff)
+		}
+	}
 	return status, nil
+}
+
+// pruneBlobSidecars deletes blob sidecar data for blocks at or below the cutoff.
+func (bc *BlockChain) pruneBlobSidecars(cutoff uint64) {
+	// Prune up to 16 blocks per call to avoid blocking.
+	for i := 0; i < 16; i++ {
+		hash := rawdb.ReadCanonicalHash(bc.db, cutoff)
+		if hash == (common.Hash{}) {
+			return
+		}
+		rawdb.DeleteBlobSidecars(bc.db, hash, cutoff)
+		if cutoff == 0 {
+			return
+		}
+		cutoff--
+	}
 }
 
 // addFutureBlock checks if the block is within the max allowed window to get
@@ -1811,6 +1839,19 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		blockExecutionTimer.Update(ptime - trieRead)                    // The time spent on EVM processing
 		blockValidationTimer.Update(vtime - (triehash + trieUpdate))    // The time spent on block validation
 
+		// Collect blob sidecars from the pool BEFORE writing the block
+		// (the pool evicts included txs on chain head update).
+		var blobSidecars []*types.BlobTxSidecar
+		if bc.BlobSidecarFn != nil {
+			for _, tx := range block.Transactions() {
+				if tx.Type() == types.BlobTxType {
+					if sc := bc.BlobSidecarFn(tx.Hash()); sc != nil {
+						blobSidecars = append(blobSidecars, sc)
+					}
+				}
+			}
+		}
+
 		// Write the block to the chain and get the status.
 		var (
 			wstart = time.Now()
@@ -1825,6 +1866,10 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		followupInterrupt.Store(true)
 		if err != nil {
 			return it.index, err
+		}
+		// Persist collected blob sidecars.
+		if len(blobSidecars) > 0 {
+			rawdb.WriteBlobSidecars(bc.db, block.Hash(), block.NumberU64(), blobSidecars)
 		}
 		// Update the metrics touched during block commit
 		accountCommitTimer.Update(statedb.AccountCommits)   // Account commits are complete, we can mark them

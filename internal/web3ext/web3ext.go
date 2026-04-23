@@ -699,6 +699,17 @@ web3._extend({
 			params: 3,
 			inputFormatter: [web3._extend.formatters.inputTransactionFormatter, null, null]
 		}),
+		new web3._extend.Method({
+			name: 'getBlobSidecar',
+			call: 'eth_getBlobSidecar',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'getBlobSidecars',
+			call: 'eth_getBlobSidecars',
+			params: 1,
+			inputFormatter: [web3._extend.formatters.inputBlockNumberFormatter]
+		}),
 	],
 	properties: [
 		new web3._extend.Property({

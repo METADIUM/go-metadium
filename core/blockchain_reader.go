@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -408,6 +409,11 @@ func (bc *BlockChain) TxIndexProgress() (TxIndexProgress, error) {
 // TrieDB retrieves the low level trie database used for data storage.
 func (bc *BlockChain) TrieDB() *triedb.Database {
 	return bc.triedb
+}
+
+// ChainDb returns the underlying chain database.
+func (bc *BlockChain) ChainDb() ethdb.Database {
+	return bc.db
 }
 
 // HeaderChain returns the underlying header chain.

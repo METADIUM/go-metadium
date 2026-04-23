@@ -2035,29 +2035,19 @@ func (s *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil.B
 // sidecarBackend is an optional interface for backends that can retrieve stored blob sidecars.
 type sidecarBackend interface {
 	GetBlobSidecar(txHash common.Hash) *types.BlobTxSidecar
+	GetBlobSidecars(blockHash common.Hash, blockNumber uint64) []*types.BlobTxSidecar
 }
 
 // BlobSidecarResult is the JSON response for eth_getBlobSidecar.
 type BlobSidecarResult struct {
-	TxHash      common.Hash      `json:"txHash"`
-	Blobs       []hexutil.Bytes  `json:"blobs"`
-	Commitments []hexutil.Bytes  `json:"commitments"`
-	Proofs      []hexutil.Bytes  `json:"proofs"`
-	BlobHashes  []common.Hash    `json:"blobHashes"`
+	TxHash      common.Hash     `json:"txHash"`
+	Blobs       []hexutil.Bytes `json:"blobs"`
+	Commitments []hexutil.Bytes `json:"commitments"`
+	Proofs      []hexutil.Bytes `json:"proofs"`
+	BlobHashes  []common.Hash   `json:"blobHashes"`
 }
 
-// GetBlobSidecar returns the stored KZG sidecar (blobs, commitments, proofs) for a pending
-// blob transaction by its hash. Returns null if the transaction is not found or has no sidecar.
-// Note: sidecars are only stored for pending transactions; they are not persisted after mining.
-func (s *TransactionAPI) GetBlobSidecar(ctx context.Context, txHash common.Hash) (*BlobSidecarResult, error) {
-	sb, ok := s.b.(sidecarBackend)
-	if !ok {
-		return nil, nil
-	}
-	sidecar := sb.GetBlobSidecar(txHash)
-	if sidecar == nil {
-		return nil, nil
-	}
+func sidecarToResult(txHash common.Hash, sidecar *types.BlobTxSidecar) *BlobSidecarResult {
 	result := &BlobSidecarResult{
 		TxHash:     txHash,
 		BlobHashes: sidecar.BlobHashes,
@@ -2071,7 +2061,47 @@ func (s *TransactionAPI) GetBlobSidecar(ctx context.Context, txHash common.Hash)
 	for _, p := range sidecar.Proofs {
 		result.Proofs = append(result.Proofs, hexutil.Bytes(p))
 	}
-	return result, nil
+	return result
+}
+
+// GetBlobSidecar returns the stored KZG sidecar (blobs, commitments, proofs) for a
+// blob transaction by its hash. Checks pending pool first, then chain DB.
+func (s *TransactionAPI) GetBlobSidecar(ctx context.Context, txHash common.Hash) (*BlobSidecarResult, error) {
+	sb, ok := s.b.(sidecarBackend)
+	if !ok {
+		return nil, nil
+	}
+	sidecar := sb.GetBlobSidecar(txHash)
+	if sidecar == nil {
+		return nil, nil
+	}
+	return sidecarToResult(txHash, sidecar), nil
+}
+
+// GetBlobSidecars returns all blob sidecars for a given block.
+func (s *TransactionAPI) GetBlobSidecars(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) ([]*BlobSidecarResult, error) {
+	sb, ok := s.b.(sidecarBackend)
+	if !ok {
+		return nil, nil
+	}
+	block, err := s.b.BlockByNumberOrHash(ctx, blockNrOrHash)
+	if err != nil || block == nil {
+		return nil, err
+	}
+	sidecars := sb.GetBlobSidecars(block.Hash(), block.NumberU64())
+	if len(sidecars) == 0 {
+		return nil, nil
+	}
+	// Match sidecars to blob transactions in the block
+	var results []*BlobSidecarResult
+	scIdx := 0
+	for _, tx := range block.Transactions() {
+		if tx.Type() == types.BlobTxType && scIdx < len(sidecars) {
+			results = append(results, sidecarToResult(tx.Hash(), sidecars[scIdx]))
+			scIdx++
+		}
+	}
+	return results, nil
 }
 
 // SendRawTransactions will add the signed transactions to the transaction pool.

@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -144,6 +145,7 @@ func (env *environment) discard() {
 // task contains all information for consensus engine sealing and result submitting.
 type task struct {
 	receipts  []*types.Receipt
+	sidecars  []*types.BlobTxSidecar
 	state     *state.StateDB
 	block     *types.Block
 	createdAt time.Time
@@ -798,6 +800,10 @@ func (w *worker) resultLoop() {
 			if err != nil {
 				log.Error("Failed writing block to chain", "err", err)
 				continue
+			}
+			// Persist blob sidecars for this block (Metadium: no beacon chain).
+			if len(task.sidecars) > 0 {
+				rawdb.WriteBlobSidecars(w.chain.ChainDb(), hash, block.NumberU64(), task.sidecars)
 			}
 			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
@@ -1758,7 +1764,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		// If we're post merge, just ignore
 		if !w.isTTDReached(block.Header()) {
 			select {
-			case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now()}:
+			case w.taskCh <- &task{receipts: env.receipts, sidecars: env.sidecars, state: env.state, block: block, createdAt: time.Now()}:
 				fees := totalFees(block, env.receipts)
 				feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 				log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
@@ -1868,6 +1874,10 @@ func (w *worker) commitEx(env *environment, interval func(), update bool, start 
 				if err != nil {
 					log.Error("Failed writing block to chain", "err", err)
 					return err
+				}
+				// Persist blob sidecars for this block (Metadium: no beacon chain).
+				if len(env.sidecars) > 0 {
+					rawdb.WriteBlobSidecars(w.chain.ChainDb(), hash, sealedBlock.NumberU64(), env.sidecars)
 				}
 				log.Info("Successfully sealed new block", "number", sealedBlock.Number(), "sealhash", sealhash, "hash", hash,
 					"elapsed", common.PrettyDuration(time.Since(createdAt)))

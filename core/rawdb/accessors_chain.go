@@ -655,6 +655,41 @@ func DeleteReceipts(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
 	}
 }
 
+// ReadBlobSidecars retrieves all blob tx sidecars belonging to a block.
+func ReadBlobSidecars(db ethdb.KeyValueReader, hash common.Hash, number uint64) []*types.BlobTxSidecar {
+	data, err := db.Get(blockBlobSidecarsKey(number, hash))
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	var sidecars []*types.BlobTxSidecar
+	if err := rlp.DecodeBytes(data, &sidecars); err != nil {
+		log.Error("Invalid blob sidecars RLP", "hash", hash, "err", err)
+		return nil
+	}
+	return sidecars
+}
+
+// WriteBlobSidecars stores blob tx sidecars belonging to a block.
+func WriteBlobSidecars(db ethdb.KeyValueWriter, hash common.Hash, number uint64, sidecars []*types.BlobTxSidecar) {
+	if len(sidecars) == 0 {
+		return
+	}
+	bytes, err := rlp.EncodeToBytes(sidecars)
+	if err != nil {
+		log.Crit("Failed to encode blob sidecars", "err", err)
+	}
+	if err := db.Put(blockBlobSidecarsKey(number, hash), bytes); err != nil {
+		log.Crit("Failed to store blob sidecars", "err", err)
+	}
+}
+
+// DeleteBlobSidecars removes all blob sidecar data associated with a block hash.
+func DeleteBlobSidecars(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
+	if err := db.Delete(blockBlobSidecarsKey(number, hash)); err != nil {
+		log.Crit("Failed to delete blob sidecars", "err", err)
+	}
+}
+
 // storedReceiptRLP is the storage encoding of a receipt.
 // Re-definition in core/types/receipt.go.
 // TODO: Re-use the existing definition.

@@ -1172,6 +1172,15 @@ func (p *BlobPool) Has(hash common.Hash) bool {
 }
 
 // Get returns a transaction if it is contained in the pool, or nil otherwise.
+// GetSidecar returns the blob sidecar for a pending blob transaction.
+func (p *BlobPool) GetSidecar(hash common.Hash) *types.BlobTxSidecar {
+	tx := p.Get(hash)
+	if tx == nil {
+		return nil
+	}
+	return tx.BlobTxSidecar()
+}
+
 func (p *BlobPool) Get(hash common.Hash) *types.Transaction {
 	// Track the amount of time waiting to retrieve a fully resolved blob tx from
 	// the pool and the amount of time actually spent on pulling the data from disk.
