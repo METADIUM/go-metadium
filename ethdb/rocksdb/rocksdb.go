@@ -31,13 +31,13 @@ var (
 )
 
 type RDBDatabase struct {
-	fn      string
-	db      *C.rocksdb_t
-	opts    *C.rocksdb_options_t
-	wopts   *C.rocksdb_writeoptions_t
-	ropts   *C.rocksdb_readoptions_t
-	iterMu  sync.Mutex
-	iters   []*RDBIterator
+	fn     string
+	db     *C.rocksdb_t
+	opts   *C.rocksdb_options_t
+	wopts  *C.rocksdb_writeoptions_t
+	ropts  *C.rocksdb_readoptions_t
+	iterMu sync.Mutex
+	iters  []*RDBIterator
 }
 
 type RDBIterator struct {

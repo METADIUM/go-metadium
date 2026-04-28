@@ -41,16 +41,19 @@ func (m *mockBlobSubPool) Filter(tx *types.Transaction) bool {
 	return tx.Type() == types.BlobTxType
 }
 func (m *mockBlobSubPool) Init(_ uint64, _ *types.Header, _ AddressReserver) error { return nil }
-func (m *mockBlobSubPool) Close() error                        { return nil }
-func (m *mockBlobSubPool) Reset(_, _ *types.Header)            {}
-func (m *mockBlobSubPool) SetGasTip(*big.Int)                  {}
-func (m *mockBlobSubPool) Has(hash common.Hash) bool           { _, ok := m.txs[hash]; return ok }
+func (m *mockBlobSubPool) Close() error                                            { return nil }
+func (m *mockBlobSubPool) Reset(_, _ *types.Header)                                {}
+func (m *mockBlobSubPool) SetGasTip(*big.Int)                                      {}
+func (m *mockBlobSubPool) Has(hash common.Hash) bool                               { _, ok := m.txs[hash]; return ok }
 func (m *mockBlobSubPool) Get(hash common.Hash) *types.Transaction {
-	m.mu.RLock(); defer m.mu.RUnlock(); return m.txs[hash]
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.txs[hash]
 }
 func (m *mockBlobSubPool) Add(txs []*types.Transaction, _, _ bool) []error {
 	errs := make([]error, len(txs))
-	m.mu.Lock(); defer m.mu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for i, tx := range txs {
 		m.txs[tx.Hash()] = tx
 		errs[i] = nil
@@ -69,12 +72,13 @@ func (m *mockBlobSubPool) Content() (map[common.Address][]*types.Transaction, ma
 func (m *mockBlobSubPool) ContentFrom(common.Address) ([]*types.Transaction, []*types.Transaction) {
 	return nil, nil
 }
-func (m *mockBlobSubPool) Locals() []common.Address        { return nil }
+func (m *mockBlobSubPool) Locals() []common.Address      { return nil }
 func (m *mockBlobSubPool) Status(_ common.Hash) TxStatus { return TxStatusUnknown }
 
 // sidecarAdder duck-type — matches the interface checked in TxPool.AddBlobWithSidecar.
 func (m *mockBlobSubPool) AddWithSidecar(tx *types.Transaction, sidecar *types.BlobTxSidecar) error {
-	m.mu.Lock(); defer m.mu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.txs[tx.Hash()] = tx
 	if sidecar != nil {
 		m.sidecars[tx.Hash()] = sidecar
@@ -84,7 +88,8 @@ func (m *mockBlobSubPool) AddWithSidecar(tx *types.Transaction, sidecar *types.B
 
 // sidecarProvider duck-type — matches the interface checked in TxPool.GetSidecar.
 func (m *mockBlobSubPool) GetSidecar(hash common.Hash) *types.BlobTxSidecar {
-	m.mu.RLock(); defer m.mu.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.sidecars[hash]
 }
 

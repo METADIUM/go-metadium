@@ -334,16 +334,16 @@ func TestOpenDrops(t *testing.T) {
 	// Insert a transaction with a bad signature to verify that stale junk after
 	// potential hard-forks can get evicted (case 2)
 	tx := types.NewTx(&types.BlobTx{
-		ChainID:    uint256.MustFromBig(testChainConfig.ChainID),
-		GasTipCap:  new(uint256.Int),
-		GasFeeCap:  new(uint256.Int),
-		Gas:        0,
-		Value:      new(uint256.Int),
-		Data:       nil,
+		ChainID:          uint256.MustFromBig(testChainConfig.ChainID),
+		GasTipCap:        new(uint256.Int),
+		GasFeeCap:        new(uint256.Int),
+		Gas:              0,
+		Value:            new(uint256.Int),
+		Data:             nil,
 		MaxFeePerBlobGas: new(uint256.Int),
-		V:          new(uint256.Int),
-		R:          new(uint256.Int),
-		S:          new(uint256.Int),
+		V:                new(uint256.Int),
+		R:                new(uint256.Int),
+		S:                new(uint256.Int),
 	})
 	blob, _ := rlp.EncodeToBytes(tx)
 	badsig, _ := store.Put(blob)
@@ -656,8 +656,8 @@ func TestOpenIndex(t *testing.T) {
 		key, _ = crypto.GenerateKey()
 		addr   = crypto.PubkeyToAddress(key.PublicKey)
 
-		txExecTipCaps = []uint64{10, 25, 5, 7, 1, 100}
-		txExecFeeCaps = []uint64{100, 90, 200, 10, 80, 300}
+		txExecTipCaps      = []uint64{10, 25, 5, 7, 1, 100}
+		txExecFeeCaps      = []uint64{100, 90, 200, 10, 80, 300}
 		txMaxFeePerBlobGas = []uint64{55, 66, 77, 33, 22, 11}
 
 		//basefeeJumps = []float64{39.098, 38.204, 44.983, 19.549, 37.204, 48.426} // log 1.125 (exec fee cap)

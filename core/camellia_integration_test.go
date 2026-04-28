@@ -17,24 +17,24 @@ import (
 // TestBlobGasCalculation tests blob gas calculations from EIP-4844
 func TestBlobGasCalculation(t *testing.T) {
 	tests := []struct {
-		name              string
+		name                string
 		parentExcessBlobGas *big.Int
-		blobGasUsed       uint64
+		blobGasUsed         uint64
 	}{
 		{
-			name:              "zero excess, no blob gas used",
+			name:                "zero excess, no blob gas used",
 			parentExcessBlobGas: big.NewInt(0),
-			blobGasUsed:       0,
+			blobGasUsed:         0,
 		},
 		{
-			name:              "excess with blob gas used",
+			name:                "excess with blob gas used",
 			parentExcessBlobGas: big.NewInt(1000000),
-			blobGasUsed:       131072, // BlobTxPerBlobGas * 1
+			blobGasUsed:         131072, // BlobTxPerBlobGas * 1
 		},
 		{
-			name:              "high excess blob gas",
+			name:                "high excess blob gas",
 			parentExcessBlobGas: big.NewInt(10000000),
-			blobGasUsed:       0,
+			blobGasUsed:         0,
 		},
 	}
 
@@ -53,20 +53,20 @@ func TestBlobGasCalculation(t *testing.T) {
 // TestBlobBaseFeeCalculation tests blob base fee calculations from EIP-4844
 func TestBlobBaseFeeCalculation(t *testing.T) {
 	tests := []struct {
-		name              string
-		excessBlobGas     *big.Int
+		name          string
+		excessBlobGas *big.Int
 	}{
 		{
-			name:           "zero excess blob gas",
-			excessBlobGas:  big.NewInt(0),
+			name:          "zero excess blob gas",
+			excessBlobGas: big.NewInt(0),
 		},
 		{
-			name:           "one blob worth of excess (131072 gas)",
-			excessBlobGas:  big.NewInt(131072),
+			name:          "one blob worth of excess (131072 gas)",
+			excessBlobGas: big.NewInt(131072),
 		},
 		{
-			name:           "six blobs worth of excess",
-			excessBlobGas:  big.NewInt(786432), // 6 * 131072
+			name:          "six blobs worth of excess",
+			excessBlobGas: big.NewInt(786432), // 6 * 131072
 		},
 	}
 
@@ -143,7 +143,7 @@ func TestFeeDelegationAfterCamellia(t *testing.T) {
 	gspec := &Genesis{
 		Config: chainCfg,
 		Alloc: GenesisAlloc{
-			senderAddr:  {Balance: initialSenderBalance},
+			senderAddr:   {Balance: initialSenderBalance},
 			feePayerAddr: {Balance: initialFeePayerBalance},
 		},
 	}
@@ -244,7 +244,7 @@ func TestBlobGasConstants(t *testing.T) {
 		expected uint64
 	}{
 		{"BlobTxPerBlobGas", params.BlobTxBlobGasPerBlob, 131072},
-		{"MaxBlobGasPerBlock", params.MaxBlobGasPerBlock, 262144},  // 2 blobs × 131072
+		{"MaxBlobGasPerBlock", params.MaxBlobGasPerBlock, 262144},    // 2 blobs × 131072
 		{"MaxBlobsPerTransaction", params.MaxBlobsPerTransaction, 2}, // max 2 blobs/tx (Metadium: 2 blobs/block)
 	}
 

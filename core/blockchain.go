@@ -2055,7 +2055,7 @@ func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator) (i
 		block := bc.GetBlock(hashes[i], numbers[i])
 
 		blocks = append(blocks, block)
-		memory += uint64(block.Size())
+		memory += block.Size()
 
 		// If memory use grew too large, import and continue. Sadly we need to discard
 		// all raised events and logs from notifications since we're too heavy on the

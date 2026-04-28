@@ -370,17 +370,17 @@ func allBlobTxs(addr common.Address, config *params.ChainConfig) []txData {
 	return []txData{
 		{
 			Tx: &types.BlobTx{
-				Nonce:      6,
-				GasTipCap:  uint256.NewInt(1),
-				GasFeeCap:  uint256.NewInt(5),
-				Gas:        6,
-				To:         &addr,
+				Nonce:            6,
+				GasTipCap:        uint256.NewInt(1),
+				GasFeeCap:        uint256.NewInt(5),
+				Gas:              6,
+				To:               &addr,
 				MaxFeePerBlobGas: uint256.NewInt(1),
-				BlobHashes: []common.Hash{{1}},
-				Value:      new(uint256.Int),
-				V:          uint256.NewInt(32),
-				R:          uint256.NewInt(10),
-				S:          uint256.NewInt(11),
+				BlobHashes:       []common.Hash{{1}},
+				Value:            new(uint256.Int),
+				V:                uint256.NewInt(32),
+				R:                uint256.NewInt(10),
+				S:                uint256.NewInt(11),
 			},
 			Want: `{
                 "blockHash": null,

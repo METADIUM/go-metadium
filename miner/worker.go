@@ -839,8 +839,6 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 	return env, nil
 }
 
-
-
 // updateSnapshot updates pending snapshot block, receipts and state.
 func (w *worker) updateSnapshot(env *environment) {
 	w.snapshotMu.Lock()
@@ -1118,7 +1116,6 @@ func (w *worker) throttleMining(ts []int64) (int64, int64) {
 }
 
 func (w *worker) commitTransactionsEx(env *environment, interrupt *atomic.Int32, tstart time.Time) bool {
-
 	// committed transactions (tracked by hash to avoid reprocessing)
 	committedTxHashes := map[common.Hash]struct{}{}
 

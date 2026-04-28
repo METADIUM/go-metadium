@@ -27,10 +27,10 @@ const (
 
 // BlobTxSidecar contains the blobs and proofs for a blob transaction.
 type BlobTxSidecar struct {
-	Blobs       [][]byte       // Blob data (4096 * 31 bytes each)
-	Commitments [][]byte       // Blob commitments (KZG commitments)
-	Proofs      [][]byte       // Blob proofs
-	BlobHashes  []common.Hash  // Versioned hashes of blobs
+	Blobs       [][]byte      // Blob data (4096 * 31 bytes each)
+	Commitments [][]byte      // Blob commitments (KZG commitments)
+	Proofs      [][]byte      // Blob proofs
+	BlobHashes  []common.Hash // Versioned hashes of blobs
 }
 
 // blobTxNetworkWrapper is used to decode the EIP-4844 network encoding for blob transactions.

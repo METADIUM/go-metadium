@@ -183,7 +183,11 @@ func EncryptDataV3(data, auth []byte, scryptN, scryptP int) (CryptoJSON, error) 
 // blob that can be decrypted later on.
 func EncryptKey(key *Key, auth string, scryptN, scryptP int) ([]byte, error) {
 	keyBytes := math.PaddedBigBytes(key.PrivateKey.D, 32)
-	defer func() { for i := range keyBytes { keyBytes[i] = 0 } }()
+	defer func() {
+		for i := range keyBytes {
+			keyBytes[i] = 0
+		}
+	}()
 	cryptoStruct, err := EncryptDataV3(keyBytes, []byte(auth), scryptN, scryptP)
 	if err != nil {
 		return nil, err
@@ -226,7 +230,11 @@ func DecryptKey(keyjson []byte, auth string) (*Key, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { for i := range keyBytes { keyBytes[i] = 0 } }()
+	defer func() {
+		for i := range keyBytes {
+			keyBytes[i] = 0
+		}
+	}()
 	key, err := crypto.ToECDSA(keyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("invalid key: %w", err)

@@ -22,9 +22,9 @@ package pathdb
 // Config contains the configuration options for the path-based trie database.
 // go-metadium stub — path-scheme is not supported.
 type Config struct {
-	StateHistory  uint64 // Number of recent blocks to maintain state history for
-	CleanCacheSize int   // Maximum memory allowance (bytes) for caching clean nodes
-	DirtyCacheSize int   // Maximum memory allowance (bytes) for caching dirty nodes
+	StateHistory   uint64 // Number of recent blocks to maintain state history for
+	CleanCacheSize int    // Maximum memory allowance (bytes) for caching clean nodes
+	DirtyCacheSize int    // Maximum memory allowance (bytes) for caching dirty nodes
 }
 
 // Defaults holds the default settings for the path-based trie database.

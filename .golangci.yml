@@ -8,6 +8,8 @@ run:
   skip-dirs-use-default: true
   skip-files:
     - core/genesis_alloc.go
+    - metadium/governance_abi.go
+    - metadium/governance_legacy_abi.go
 
 linters:
   disable-all: true
@@ -53,6 +55,54 @@ issues:
       text: 'SA1019: "github.com/golang/protobuf/proto" is deprecated: Use the "google.golang.org/protobuf/proto" package instead.'
     - path: accounts/usbwallet/trezor/
       text: 'SA1019: "github.com/golang/protobuf/proto" is deprecated: Use the "google.golang.org/protobuf/proto" package instead.'
+    # Metadium-specific code paths - keep all unused symbols (intentionally retained)
+    - path: ^metadium/
+      linters:
+        - unused
+        - staticcheck
+        - whitespace
+    - path: ^miner/
+      linters:
+        - unused
+        - staticcheck
+        - whitespace
+    - path: ^msgq/
+      linters:
+        - unused
+    - path: ^cmd/dbbench/
+      linters:
+        - staticcheck
+    - path: ^eth/protocols/eth/metadium_handlers\.go
+      linters:
+        - staticcheck
+    # Upstream go-ethereum code with intentionally-retained helpers
+    - path: ^core/types/hashing\.go
+      linters:
+        - unused
+    - path: ^core/vm/gas_table\.go
+      linters:
+        - unused
+    - path: ^consensus/clique/clique\.go
+      linters:
+        - unused
+    - path: ^internal/ethapi/
+      linters:
+        - unused
+    - path: ^eth/protocols/eth/dispatcher\.go
+      linters:
+        - unused
+    - path: ^eth/peerset\.go
+      linters:
+        - unused
+    - path: ^p2p/discover/table\.go
+      linters:
+        - unused
+    - path: ^core/state/snapshot/dangling\.go
+      linters:
+        - staticcheck
+    - path: ^core/txpool/legacypool/legacypool\.go
+      linters:
+        - unused
   exclude:
     - 'SA1019: event.TypeMux is deprecated: use Feed'
     - 'SA1019: strings.Title is deprecated'

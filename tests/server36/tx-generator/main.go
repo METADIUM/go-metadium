@@ -310,8 +310,10 @@ func rpcCall(url, method string, params []any) string {
 	b, _ := io.ReadAll(resp.Body)
 
 	var r struct {
-		Result json.RawMessage                        `json:"result"`
-		Error  *struct{ Message string `json:"message"` } `json:"error"`
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 	if err := json.Unmarshal(b, &r); err != nil {
 		return string(b)

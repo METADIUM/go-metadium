@@ -291,7 +291,6 @@ func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction)
 	return b.eth.txPool.Add([]*types.Transaction{signedTx}, true, false)[0]
 }
 
-
 func (b *EthAPIBackend) GetPoolTransactions() (types.Transactions, error) {
 	pending := b.eth.txPool.Pending(txpool.PendingFilter{})
 	var txs types.Transactions

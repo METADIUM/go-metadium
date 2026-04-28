@@ -74,7 +74,7 @@ type Genesis struct {
 	BaseFee       *big.Int    `json:"baseFeePerGas"` // EIP-1559
 	ExcessBlobGas *uint64     `json:"excessBlobGas"` // EIP-4844
 	BlobGasUsed   *uint64     `json:"blobGasUsed"`   // EIP-4844
-	Fees          *big.Int    `json:"fees"`           // Metadium
+	Fees          *big.Int    `json:"fees"`          // Metadium
 }
 
 func ReadGenesis(db ethdb.Database) (*Genesis, error) {

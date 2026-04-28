@@ -78,9 +78,9 @@ type TransactionArgs struct {
 	// For FeeDelegateDynamicFeeTxType (Metadium Type 22)
 	FeePayer *common.Address `json:"feePayer,omitempty"`
 
-	V        *hexutil.Big    `json:"v"`
-	R        *hexutil.Big    `json:"r"`
-	S        *hexutil.Big    `json:"s"`
+	V *hexutil.Big `json:"v"`
+	R *hexutil.Big `json:"r"`
+	S *hexutil.Big `json:"s"`
 }
 
 // from retrieves the transaction sender address.

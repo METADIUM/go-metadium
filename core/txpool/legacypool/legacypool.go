@@ -233,10 +233,10 @@ type LegacyPool struct {
 	changesSinceReorg int // A counter for how many drops we've performed in-between reorg.
 
 	// Metadium extensions
-	feedelegation  bool                 // Whether fee delegation (Type 22) transactions are enabled
-	senderResolver *SenderResolver      // ecrecover helper for concurrent sender resolution
+	feedelegation  bool                    // Whether fee delegation (Type 22) transactions are enabled
+	senderResolver *SenderResolver         // ecrecover helper for concurrent sender resolution
 	trsListMap     map[common.Address]bool // TRS (Transaction Restriction Set): blocked senders/recipients
-	trsSubscribe   bool                 // Whether this node subscribes to TRS updates
+	trsSubscribe   bool                    // Whether this node subscribes to TRS updates
 }
 
 type txpoolResetRequest struct {

@@ -1244,7 +1244,6 @@ func (ma *metaAdmin) update() error {
 		if data.blockNum != 0 {
 			ma.lastBlock = data.blockNum
 		}
-
 	} else {
 		return err
 	}

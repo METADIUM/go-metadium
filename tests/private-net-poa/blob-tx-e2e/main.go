@@ -240,7 +240,9 @@ func rpcCall(url, method string, params []any) string {
 	raw := rpcCallRaw(url, method, params)
 	var r struct {
 		Result json.RawMessage `json:"result"`
-		Error  *struct{ Message string `json:"message"` } `json:"error"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(raw), &r); err != nil {
 		return raw

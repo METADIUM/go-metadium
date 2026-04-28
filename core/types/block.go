@@ -140,16 +140,16 @@ type headerRlp struct {
 
 // field type overrides for gencodec
 type headerMarshaling struct {
-	Difficulty   *hexutil.Big
-	Number       *hexutil.Big
-	GasLimit     hexutil.Uint64
-	GasUsed      hexutil.Uint64
-	Fees         *hexutil.Big
-	Time         hexutil.Uint64
-	Extra        hexutil.Bytes
-	Rewards      hexutil.Bytes
-	MinerNodeId  hexutil.Bytes
-	MinerNodeSig hexutil.Bytes
+	Difficulty    *hexutil.Big
+	Number        *hexutil.Big
+	GasLimit      hexutil.Uint64
+	GasUsed       hexutil.Uint64
+	Fees          *hexutil.Big
+	Time          hexutil.Uint64
+	Extra         hexutil.Bytes
+	Rewards       hexutil.Bytes
+	MinerNodeId   hexutil.Bytes
+	MinerNodeSig  hexutil.Bytes
 	BaseFee       *hexutil.Big
 	ExcessBlobGas *hexutil.Big
 	BlobGasUsed   *hexutil.Big
@@ -186,23 +186,23 @@ type HeaderLegacy struct {
 
 func headerToHeaderRlp(h *Header) *headerRlp {
 	hh := &headerRlp{
-		ParentHash:   h.ParentHash,
-		UncleHash:    h.UncleHash,
-		Coinbase:     h.Coinbase,
-		Root:         h.Root,
-		TxHash:       h.TxHash,
-		ReceiptHash:  h.ReceiptHash,
-		Bloom:        h.Bloom,
-		Difficulty:   h.Difficulty,
-		Number:       h.Number,
-		GasLimit:     h.GasLimit,
-		GasUsed:      h.GasUsed,
-		Fees:         h.Fees,
-		Time:         h.Time,
-		Extra:        h.Extra,
-		Rewards:      h.Rewards,
-		MixDigest:    h.MixDigest,
-		Nonce:        h.Nonce,
+		ParentHash:      h.ParentHash,
+		UncleHash:       h.UncleHash,
+		Coinbase:        h.Coinbase,
+		Root:            h.Root,
+		TxHash:          h.TxHash,
+		ReceiptHash:     h.ReceiptHash,
+		Bloom:           h.Bloom,
+		Difficulty:      h.Difficulty,
+		Number:          h.Number,
+		GasLimit:        h.GasLimit,
+		GasUsed:         h.GasUsed,
+		Fees:            h.Fees,
+		Time:            h.Time,
+		Extra:           h.Extra,
+		Rewards:         h.Rewards,
+		MixDigest:       h.MixDigest,
+		Nonce:           h.Nonce,
 		MinerNodeId:     h.MinerNodeId,
 		MinerNodeSig:    h.MinerNodeSig,
 		BaseFee:         h.BaseFee,
@@ -244,21 +244,21 @@ func headerRlpToHeader(h *headerRlp) *Header {
 
 func HeaderToHeaderLegacy(h *Header) *HeaderLegacy {
 	hh := &HeaderLegacy{
-		ParentHash:  h.ParentHash,
-		UncleHash:   h.UncleHash,
-		Coinbase:    h.Coinbase,
-		Root:        h.Root,
-		TxHash:      h.TxHash,
-		ReceiptHash: h.ReceiptHash,
-		Bloom:       h.Bloom,
-		Difficulty:  h.Difficulty,
-		Number:      h.Number,
-		GasLimit:    h.GasLimit,
-		GasUsed:     h.GasUsed,
-		Time:        h.Time,
-		Extra:       h.Extra,
-		MixDigest:   h.MixDigest,
-		Nonce:       h.Nonce,
+		ParentHash:    h.ParentHash,
+		UncleHash:     h.UncleHash,
+		Coinbase:      h.Coinbase,
+		Root:          h.Root,
+		TxHash:        h.TxHash,
+		ReceiptHash:   h.ReceiptHash,
+		Bloom:         h.Bloom,
+		Difficulty:    h.Difficulty,
+		Number:        h.Number,
+		GasLimit:      h.GasLimit,
+		GasUsed:       h.GasUsed,
+		Time:          h.Time,
+		Extra:         h.Extra,
+		MixDigest:     h.MixDigest,
+		Nonce:         h.Nonce,
 		BaseFee:       h.BaseFee,
 		ExcessBlobGas: h.ExcessBlobGas,
 		BlobGasUsed:   h.BlobGasUsed,
@@ -515,7 +515,7 @@ func (b *Block) DecodeRLP(s *rlp.Stream) error {
 		return err
 	}
 	b.header, b.uncles, b.transactions, b.withdrawals = eb.Header, eb.Uncles, eb.Txs, eb.Withdrawals
-	b.size.Store(uint64(rlp.ListSize(size)))
+	b.size.Store(rlp.ListSize(size))
 	return nil
 }
 
@@ -574,8 +574,8 @@ func (b *Block) UncleHash() common.Hash   { return b.header.UncleHash }
 func (b *Block) Extra() []byte            { return common.CopyBytes(b.header.Extra) }
 func (b *Block) Rewards() []byte          { return common.CopyBytes(b.header.Rewards) }
 
-func (b *Block) MinerNodeId() []byte  { return b.header.MinerNodeId }
-func (b *Block) MinerNodeSig() []byte { return b.header.MinerNodeSig }
+func (b *Block) MinerNodeId() []byte      { return b.header.MinerNodeId }
+func (b *Block) MinerNodeSig() []byte     { return b.header.MinerNodeSig }
 func (b *Block) BeaconRoot() *common.Hash { return b.header.ParentBeaconRoot }
 
 func (b *Block) BaseFee() *big.Int {

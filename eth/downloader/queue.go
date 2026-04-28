@@ -374,7 +374,7 @@ func (q *queue) Results(block bool) []*fetchResult {
 			size += receipt.Size()
 		}
 		for _, tx := range result.Transactions {
-			size += common.StorageSize(tx.Size())
+			size += tx.Size()
 		}
 		q.resultSize = common.StorageSize(blockCacheSizeWeight)*size +
 			(1-common.StorageSize(blockCacheSizeWeight))*q.resultSize

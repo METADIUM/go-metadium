@@ -21,8 +21,8 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -430,7 +430,6 @@ var (
 		Category: flags.PerfCategory,
 	}
 
-
 	// Miner settings
 	MiningEnabledFlag = &cli.BoolFlag{
 		Name:     "mine",
@@ -547,7 +546,6 @@ var (
 		Usage:    "Path to a JWT secret to use for authenticated RPC endpoints",
 		Category: flags.APICategory,
 	}
-
 
 	// Logging and debug settings
 	EthStatsURLFlag = &cli.StringFlag{
@@ -1026,7 +1024,6 @@ var (
 		Value: params.BlobRetentionBlocks,
 	}
 )
-
 
 // GroupFlags combines the given flag slices together and returns the merged one.
 func GroupFlags(groups ...[]cli.Flag) []cli.Flag {

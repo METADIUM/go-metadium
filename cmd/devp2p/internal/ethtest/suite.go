@@ -782,14 +782,14 @@ func (s *Suite) makeBlobTxs(count, blobs int, discriminator byte) (txs types.Tra
 			blobs -= 1
 		}
 		inner := &types.BlobTx{
-			ChainID:    uint256.MustFromBig(s.chain.config.ChainID),
-			Nonce:      nonce + uint64(i),
-			GasTipCap:  uint256.NewInt(1),
-			GasFeeCap:  uint256.MustFromBig(s.chain.Head().BaseFee()),
-			Gas:        100000,
+			ChainID:          uint256.MustFromBig(s.chain.config.ChainID),
+			Nonce:            nonce + uint64(i),
+			GasTipCap:        uint256.NewInt(1),
+			GasFeeCap:        uint256.MustFromBig(s.chain.Head().BaseFee()),
+			Gas:              100000,
 			MaxFeePerBlobGas: uint256.NewInt(1e6),
-			BlobHashes: makeSidecar(blobdata...).BlobHashes,
-			Sidecar:    makeSidecar(blobdata...),
+			BlobHashes:       makeSidecar(blobdata...).BlobHashes,
+			Sidecar:          makeSidecar(blobdata...),
 		}
 		tx, err := s.chain.SignTx(from, types.NewTx(inner))
 		if err != nil {

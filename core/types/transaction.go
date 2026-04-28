@@ -893,7 +893,7 @@ func (m Message) IsFake() bool           { return m.isFake }
 func (m Message) FeePayer() *common.Address { return m.feePayer }
 
 // EIP-4844: blob transaction accessors
-func (m Message) BlobHashes() []common.Hash { return m.blobHashes }
+func (m Message) BlobHashes() []common.Hash  { return m.blobHashes }
 func (m Message) MaxFeePerBlobGas() *big.Int { return m.maxFeePerBlobGas }
 
 // copyAddressPtr copies an address.

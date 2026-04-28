@@ -48,19 +48,19 @@ func TestBlobTxType(t *testing.T) {
 func TestBlobTxCopy(t *testing.T) {
 	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
 	tx := &BlobTx{
-		ChainID:           uint256.NewInt(1),
-		Nonce:             1,
-		GasTipCap:         uint256.NewInt(100),
-		GasFeeCap:         uint256.NewInt(200),
-		Gas:               21000,
-		To:                &addr,
-		Value:             uint256.NewInt(1000),
-		Data:              []byte("test data"),
-		MaxFeePerBlobGas:  uint256.NewInt(50),
-		BlobHashes:        []common.Hash{common.HexToHash("0xaaaa"), common.HexToHash("0xbbbb")},
-		V:                 uint256.NewInt(27),
-		R:                 uint256.NewInt(1),
-		S:                 uint256.NewInt(2),
+		ChainID:          uint256.NewInt(1),
+		Nonce:            1,
+		GasTipCap:        uint256.NewInt(100),
+		GasFeeCap:        uint256.NewInt(200),
+		Gas:              21000,
+		To:               &addr,
+		Value:            uint256.NewInt(1000),
+		Data:             []byte("test data"),
+		MaxFeePerBlobGas: uint256.NewInt(50),
+		BlobHashes:       []common.Hash{common.HexToHash("0xaaaa"), common.HexToHash("0xbbbb")},
+		V:                uint256.NewInt(27),
+		R:                uint256.NewInt(1),
+		S:                uint256.NewInt(2),
 	}
 
 	copied := tx.copy().(*BlobTx)
@@ -114,9 +114,9 @@ func TestBlobTxSignatureValues(t *testing.T) {
 // TestBlobTxBlobGasCost verifies blob gas cost calculation.
 func TestBlobTxBlobGasCost(t *testing.T) {
 	tests := []struct {
-		numBlobs       int
-		maxFeePerBlob  uint64
-		expectNonZero  bool
+		numBlobs      int
+		maxFeePerBlob uint64
+		expectNonZero bool
 	}{
 		{0, 100, false},
 		{1, 100, true},

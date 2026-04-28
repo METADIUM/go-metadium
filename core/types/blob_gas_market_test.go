@@ -26,10 +26,10 @@ import (
 // TestCalcExcessBlobGas tests the excess blob gas calculation (EIP-4844).
 func TestCalcExcessBlobGas(t *testing.T) {
 	tests := []struct {
-		name                string
-		prevExcessBlobGas   *big.Int
-		prevBlobGasUsed     uint64
-		expectedExcessGas   *big.Int
+		name              string
+		prevExcessBlobGas *big.Int
+		prevBlobGasUsed   uint64
+		expectedExcessGas *big.Int
 	}{
 		{
 			name:              "nil prevExcessBlobGas",
@@ -77,9 +77,9 @@ func TestCalcExcessBlobGas(t *testing.T) {
 // TestCalcBlobBaseFee tests the blob base fee calculation (EIP-4844).
 func TestCalcBlobBaseFee(t *testing.T) {
 	tests := []struct {
-		name              string
-		excessBlobGas     *big.Int
-		expectedMinimum   uint64 // minimum blob base fee should be at least this
+		name            string
+		excessBlobGas   *big.Int
+		expectedMinimum uint64 // minimum blob base fee should be at least this
 	}{
 		{
 			name:            "nil excess blob gas",

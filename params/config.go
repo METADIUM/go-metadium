@@ -1040,10 +1040,10 @@ type Rules struct {
 	IsMerge, IsShanghai, IsCancun, IsPrague                 bool
 	IsVerkle                                                bool
 	// Metadium-specific rules
-	IsAvocado           bool
+	IsAvocado            bool
 	IsPangyo, IsApplepie bool
-	IsBokbunja          bool
-	IsCamellia          bool // Shanghai + Cancun EIPs
+	IsBokbunja           bool
+	IsCamellia           bool // Shanghai + Cancun EIPs
 }
 
 // Rules ensures c's ChainID is not nil.

@@ -721,7 +721,6 @@ func (s *BlockChainAPI) BlobBaseFee(ctx context.Context) (*hexutil.Big, error) {
 
 // GetReceiptsByHash returns all the transaction receipts for the given block hash.
 func (s *BlockChainAPI) GetReceiptsByHash(ctx context.Context, blockHash common.Hash) ([]map[string]interface{}, error) {
-
 	block, err1 := s.b.BlockByHash(ctx, blockHash)
 	if block == nil && err1 == nil {
 		return nil, nil
@@ -743,7 +742,6 @@ func (s *BlockChainAPI) GetReceiptsByHash(ctx context.Context, blockHash common.
 	fieldsList := make([]map[string]interface{}, 0, len(receipts))
 
 	for index, receipt := range receipts {
-
 		bigblock := new(big.Int).SetUint64(block.NumberU64())
 		signer := types.MakeSigner(s.b.ChainConfig(), bigblock, block.Time())
 		from, _ := types.Sender(signer, txs[index])
@@ -2009,7 +2007,6 @@ func (s *TransactionAPI) FillTransaction(ctx context.Context, args TransactionAr
 	}
 	return &SignTransactionResult{data, tx}, nil
 }
-
 
 // SendRawTransaction will add the signed transaction to the transaction pool.
 // The sender is responsible for signing the transaction and using the correct nonce.

@@ -26,8 +26,8 @@ func tx_prefetch(w *worker, env *environment, to *TxOrderer, numWorkers int) {
 				gaspool      = new(core.GasPool).AddGas(header.GasLimit)
 				blockContext = core.NewEVMBlockContext(header, w.chain, nil)
 				statedb, _   = w.chain.StateAt(header.Root)
-				evm    = vm.NewEVM(blockContext, vm.TxContext{}, statedb, w.chainConfig, vm.Config{})
-				signer = types.MakeSigner(w.chainConfig, header.Number, header.Time)
+				evm          = vm.NewEVM(blockContext, vm.TxContext{}, statedb, w.chainConfig, vm.Config{})
+				signer       = types.MakeSigner(w.chainConfig, header.Number, header.Time)
 			)
 
 			for {
