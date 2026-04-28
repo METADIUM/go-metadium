@@ -75,10 +75,10 @@ type Header struct {
 	Number       *big.Int       `json:"number"           gencodec:"required"`
 	GasLimit     uint64         `json:"gasLimit"         gencodec:"required"`
 	GasUsed      uint64         `json:"gasUsed"          gencodec:"required"`
-	Fees         *big.Int       `json:"fees"             gencodec:"required"`
+	Fees         *big.Int       `json:"fees"`
 	Time         uint64         `json:"timestamp"        gencodec:"required"`
 	Extra        []byte         `json:"extraData"        gencodec:"required"`
-	Rewards      []byte         `json:"rewards"          gencodec:"required"`
+	Rewards      []byte         `json:"rewards"`
 	MixDigest    common.Hash    `json:"mixHash"`
 	Nonce        BlockNonce     `json:"nonce"`
 	MinerNodeId  []byte         `json:"minerNode"`
@@ -113,10 +113,10 @@ type headerRlp struct {
 	Number       *big.Int       `json:"number"           gencodec:"required"`
 	GasLimit     uint64         `json:"gasLimit"         gencodec:"required"`
 	GasUsed      uint64         `json:"gasUsed"          gencodec:"required"`
-	Fees         *big.Int       `json:"fees"             gencodec:"required"`
+	Fees         *big.Int       `json:"fees"`
 	Time         uint64         `json:"timestamp"        gencodec:"required"`
 	Extra        []byte         `json:"extraData"        gencodec:"required"`
-	Rewards      []byte         `json:"rewards"          gencodec:"required"`
+	Rewards      []byte         `json:"rewards"`
 	MixDigest    common.Hash    `json:"mixHash"`
 	Nonce        BlockNonce     `json:"nonce"`
 	MinerNodeId  []byte         `json:"minerNode"`
