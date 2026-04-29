@@ -39,8 +39,8 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
-
 var errInvalidMixDigest = errors.New("invalid mix digest")
+
 // Ethash proof-of-work protocol constants.
 var (
 	FrontierBlockReward           = uint256.NewInt(5e+18) // Block reward in wei for successfully mining a block
