@@ -18,14 +18,50 @@
 package ethash
 
 import (
+	crand "crypto/rand"
+	"encoding/binary"
+	"math"
+	"math/big"
+	mrand "math/rand"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/rpc"
 )
+
+// hashimeta computes a deterministic digest from sealHash + nonce using keccak256.
+// Replaces the heavy ethash dataset-based hashimoto for Metadium PoA (Avocado fork+).
+func hashimeta(hash []byte, nonce uint64) ([]byte, []byte) {
+	seed := make([]byte, 40)
+	copy(seed, hash)
+	binary.LittleEndian.PutUint64(seed[32:], nonce)
+	result := crypto.Keccak256(seed)
+	return result, result
+}
+
+// poaSealRand provides random nonces for Metadium PoA sealing.
+var (
+	poaSealRandMu sync.Mutex
+	poaSealRand   *mrand.Rand
+)
+
+func poaSealNonce() uint64 {
+	poaSealRandMu.Lock()
+	defer poaSealRandMu.Unlock()
+	if poaSealRand == nil {
+		seed, err := crand.Int(crand.Reader, big.NewInt(math.MaxInt64))
+		if err != nil {
+			return 0
+		}
+		poaSealRand = mrand.New(mrand.NewSource(seed.Int64()))
+	}
+	return uint64(poaSealRand.Int63())
+}
 
 // Ethash is a consensus engine based on proof-of-work implementing the ethash
 // algorithm.
@@ -87,10 +123,14 @@ func (ethash *Ethash) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
 	if !metaminer.IsPoW() {
 		// Metadium PoA: authentication is done via MinerNodeId/MinerNodeSig set in
-		// FinalizeAndAssemble. Just attach a zero nonce/mixdigest and return.
+		// FinalizeAndAssemble. Compute mixHash via hashimeta (sha3 of seal-hash+nonce)
+		// for wire compatibility with old Metadium binaries that verify mixHash.
 		header := types.CopyHeader(block.Header())
-		header.Nonce = types.BlockNonce{}
-		header.MixDigest = common.Hash{}
+		nonce := poaSealNonce()
+		sealHash := ethash.SealHash(header).Bytes()
+		digest, _ := hashimeta(sealHash, nonce)
+		header.Nonce = types.EncodeNonce(nonce)
+		header.MixDigest = common.BytesToHash(digest)
 		select {
 		case results <- block.WithSeal(header):
 		default:

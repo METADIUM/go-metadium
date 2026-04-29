@@ -17,6 +17,7 @@
 package ethash
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -38,6 +39,8 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
+
+var errInvalidMixDigest = errors.New("invalid mix digest")
 // Ethash proof-of-work protocol constants.
 var (
 	FrontierBlockReward           = uint256.NewInt(5e+18) // Block reward in wei for successfully mining a block
@@ -235,12 +238,10 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 		return errOlderBlockTime
 	}
 	// Verify the block's difficulty based on its timestamp and parent's difficulty.
-	// Metadium PoA uses fixed difficulty=1 so skip PoW difficulty calculation.
-	if metaminer.IsPoW() {
-		expected := ethash.CalcDifficulty(chain, header.Time, parent)
-		if expected.Cmp(header.Difficulty) != 0 {
-			return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expected)
-		}
+	// For Metadium PoA, CalcDifficulty returns 1; the check still validates header consistency.
+	expected := ethash.CalcDifficulty(chain, header.Time, parent)
+	if expected.Cmp(header.Difficulty) != 0 {
+		return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expected)
 	}
 	// Verify that the gas limit is <= 2^63-1
 	if header.GasLimit > params.MaxGasLimit {
@@ -304,6 +305,16 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	if !metaminer.IsPoW() && !metaminer.VerifyBlockSig(header.Number, header.Coinbase, header.MinerNodeId, header.Root, header.MinerNodeSig, chain.Config().IsPangyo(header.Number)) {
 		return consensus.ErrUnauthorized
 	}
+	// Metadium PoA (post-Avocado): verify mixHash via hashimeta(sealHash, nonce).
+	// Pre-Avocado used hashimotoLight which is no longer available; those blocks
+	// are accepted without mixHash verification (they were validated when first imported).
+	if !metaminer.IsPoW() && chain.Config().IsAvocado(header.Number) {
+		sealHash := ethash.SealHash(header).Bytes()
+		expected, _ := hashimeta(sealHash, header.Nonce.Uint64())
+		if !bytes.Equal(header.MixDigest[:], expected) {
+			return errInvalidMixDigest
+		}
+	}
 	return nil
 }
 
@@ -318,6 +329,9 @@ func (ethash *Ethash) CalcDifficulty(chain consensus.ChainHeaderReader, time uin
 // the difficulty that a new block should have when created at time
 // given the parent block's time and difficulty.
 func CalcDifficulty(config *params.ChainConfig, time uint64, parent *types.Header) *big.Int {
+	if !metaminer.IsPoW() {
+		return big1
+	}
 	next := new(big.Int).Add(parent.Number, big1)
 	switch {
 	case config.IsGrayGlacier(next):
