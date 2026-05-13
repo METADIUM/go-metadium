@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"runtime"
 	"strconv"
@@ -54,6 +55,7 @@ var (
 			utils.CachePreimagesFlag,
 			utils.OverrideCancun,
 			utils.OverrideVerkle,
+			utils.OverrideCamellia,
 		}, utils.DatabaseFlags),
 		Description: `
 The init command initializes a new genesis block and definition for the network.
@@ -219,6 +221,9 @@ func initGenesis(ctx *cli.Context) error {
 	if ctx.IsSet(utils.OverrideVerkle.Name) {
 		v := ctx.Uint64(utils.OverrideVerkle.Name)
 		overrides.OverrideVerkle = &v
+	}
+	if ctx.IsSet(utils.OverrideCamellia.Name) {
+		overrides.OverrideCamellia = new(big.Int).SetUint64(ctx.Uint64(utils.OverrideCamellia.Name))
 	}
 	for _, name := range []string{"chaindata", "lightchaindata"} {
 		chaindb, err := stack.OpenDatabaseWithFreezer(name, 0, 0, ctx.String(utils.AncientFlag.Name), "", false)

@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"reflect"
 	"runtime"
@@ -177,6 +178,9 @@ func makeFullNode(ctx *cli.Context) (*node.Node, ethapi.Backend) {
 	if ctx.IsSet(utils.OverrideVerkle.Name) {
 		v := ctx.Uint64(utils.OverrideVerkle.Name)
 		cfg.Eth.OverrideVerkle = &v
+	}
+	if ctx.IsSet(utils.OverrideCamellia.Name) {
+		cfg.Eth.OverrideCamellia = new(big.Int).SetUint64(ctx.Uint64(utils.OverrideCamellia.Name))
 	}
 	backend, eth := utils.RegisterEthService(stack, &cfg.Eth)
 

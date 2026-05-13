@@ -190,7 +190,7 @@ var (
 		PangyoBlock:         big.NewInt(44_671_396),
 		ApplepieBlock:       big.NewInt(44_671_396),
 		BokbunjaBlock:       big.NewInt(44_671_396),
-		CamelliaBlock:       nil, // Not yet activated on testnet
+		CamelliaBlock:       big.NewInt(86_449_000), // 2026-05-20 12:00 KST testnet activation
 		Ethash:              new(EthashConfig),
 	}
 

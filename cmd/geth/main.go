@@ -72,6 +72,7 @@ var (
 		utils.SmartCardDaemonPathFlag,
 		utils.OverrideCancun,
 		utils.OverrideVerkle,
+		utils.OverrideCamellia,
 		utils.EnablePersonal,
 		utils.TxPoolLocalsFlag,
 		utils.TxPoolNoLocalsFlag,

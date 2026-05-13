@@ -258,6 +258,11 @@ var (
 		Usage:    "Manually specify the Verkle fork timestamp, overriding the bundled setting",
 		Category: flags.EthCategory,
 	}
+	OverrideCamellia = &cli.Uint64Flag{
+		Name:     "override.camellia",
+		Usage:    "Manually specify the Camellia fork block number, overriding the bundled setting",
+		Category: flags.EthCategory,
+	}
 	SyncModeFlag = &flags.TextMarshalerFlag{
 		Name:     "syncmode",
 		Usage:    `Blockchain sync mode ("snap" or "full")`,
