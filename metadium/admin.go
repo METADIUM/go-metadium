@@ -634,6 +634,38 @@ func (ma *metaAdmin) getTRSListGovContracts(ctx context.Context, height *big.Int
 	return
 }
 
+// getFinalizedBlockNumber returns the finalized block number for the given
+// head, computed as headNum - (GovNodeCount/2 + 1) — the BFT majority lookback
+// on a PoA chain. Governance state is served from coinbaseEnodeCache (keyed by
+// gov.modifiedBlock), so repeated calls within the same governance epoch are
+// cheap. Returns nil if the admin is uninitialized, the contract read fails,
+// or head is shallower than the lookback.
+func getFinalizedBlockNumber(headNum *big.Int) *big.Int {
+	if admin == nil || headNum == nil {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, gov, err := admin.getTRSListGovContracts(ctx, headNum)
+	if err != nil {
+		return nil
+	}
+	entry, err := getCoinbaseEnodeCache(ctx, headNum, gov)
+	if err != nil {
+		return nil
+	}
+	nodeCount := len(entry.nodes)
+	if nodeCount == 0 {
+		return nil
+	}
+	lookback := uint64(nodeCount/2 + 1)
+	n := headNum.Uint64()
+	if n < lookback {
+		return nil
+	}
+	return new(big.Int).SetUint64(n - lookback)
+}
+
 func (ma *metaAdmin) getTrsParameters(height *big.Int) (*trsParameters, error) {
 	var (
 		nodes           []*metaNode
@@ -2317,6 +2349,7 @@ func init() {
 	metaminer.AcquireMiningTokenFunc = acquireMiningToken
 	metaminer.ReleaseMiningTokenFunc = releaseMiningToken
 	metaminer.HasMiningTokenFunc = hasMiningToken
+	metaminer.GetFinalizedBlockNumberFunc = getFinalizedBlockNumber
 	metaminer.GetTRSListMapFunc = getTRSListMap // Add TRS
 	metaapi.TRSInfo = TRSInfo                   // Add TRS
 	metaapi.Info = Info

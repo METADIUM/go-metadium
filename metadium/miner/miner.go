@@ -30,9 +30,24 @@ var (
 	AcquireMiningTokenFunc      func(height *big.Int, parentHash common.Hash) (bool, error)
 	ReleaseMiningTokenFunc      func(height *big.Int, hash, parentHash common.Hash) error
 	HasMiningTokenFunc          func() bool
+	// GetFinalizedBlockNumberFunc returns the finalized block number given the
+	// current head number. Metadium PoA finality is the BFT majority depth:
+	// headNum - (GovNodeCount/2 + 1). Returns nil when no block at or below
+	// head is final yet, or when governance state is not yet loaded.
+	GetFinalizedBlockNumberFunc func(headNum *big.Int) *big.Int
 	// Add TRS
 	GetTRSListMapFunc func(height *big.Int) (trsListMap map[common.Address]bool, trsSubscribe bool, err error)
 )
+
+// GetFinalizedBlockNumber returns the finalized block number for the given
+// head, or nil if finality cannot yet be computed (admin uninitialized, head
+// shallower than the BFT lookback, etc.).
+func GetFinalizedBlockNumber(headNum *big.Int) *big.Int {
+	if GetFinalizedBlockNumberFunc == nil {
+		return nil
+	}
+	return GetFinalizedBlockNumberFunc(headNum)
+}
 
 func IsMiner() bool {
 	if IsMinerFunc == nil {

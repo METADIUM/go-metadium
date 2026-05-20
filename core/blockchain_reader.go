@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -53,15 +54,41 @@ func (bc *BlockChain) CurrentSnapBlock() *types.Header {
 }
 
 // CurrentFinalBlock retrieves the current finalized block of the canonical
-// chain. The block is retrieved from the blockchain's internal cache.
+// chain. The block is retrieved from the blockchain's internal cache; on
+// Metadium PoA (which has no engine-API finality source), it falls back to
+// a synthesized header at head minus (governance node count + 1).
 func (bc *BlockChain) CurrentFinalBlock() *types.Header {
-	return bc.currentFinalBlock.Load()
+	if h := bc.currentFinalBlock.Load(); h != nil {
+		return h
+	}
+	return bc.metaFinalHeader()
 }
 
 // CurrentSafeBlock retrieves the current safe block of the canonical
-// chain. The block is retrieved from the blockchain's internal cache.
+// chain. The block is retrieved from the blockchain's internal cache; on
+// Metadium PoA it falls back to the same synthesized header as
+// CurrentFinalBlock.
 func (bc *BlockChain) CurrentSafeBlock() *types.Header {
-	return bc.currentSafeBlock.Load()
+	if h := bc.currentSafeBlock.Load(); h != nil {
+		return h
+	}
+	return bc.metaFinalHeader()
+}
+
+// metaFinalHeader synthesizes a finalized header for Metadium PoA by asking
+// the metadium admin for the finalized block number (BFT majority lookback)
+// and resolving it locally. Returns nil during early startup before the admin
+// has loaded governance state, or when head is shallower than the lookback.
+func (bc *BlockChain) metaFinalHeader() *types.Header {
+	head := bc.currentBlock.Load()
+	if head == nil {
+		return nil
+	}
+	num := metaminer.GetFinalizedBlockNumber(head.Number)
+	if num == nil {
+		return nil
+	}
+	return bc.GetHeaderByNumber(num.Uint64())
 }
 
 // HasHeader checks if a block header is present in the database or not, caching
