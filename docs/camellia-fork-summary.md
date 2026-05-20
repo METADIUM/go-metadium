@@ -1,6 +1,6 @@
 # Camellia Fork — Work Summary for sadoci
 
-This document summarizes the work done on the `feature/camellia` branch since forking from the upstream go-metadium repository. It is intended to give the original developers a clear picture of what was changed, why, and how it was verified.
+This document summarizes the Camellia hard fork work performed on the go-metadium repository since forking from upstream. It is intended to give the original developers a clear picture of what was changed, why, and how it was verified.
 
 ---
 
@@ -224,7 +224,7 @@ go test ./core/... ./core/vm/runtime/... -timeout 120s
 ### Layer 3: Testnet Deployment
 
 Deployed to testnet node (192.168.0.25, `gmet-testnet.service`):
-- Binary built from `feature/camellia` HEAD
+- Binary built from the Camellia HEAD at the time of verification
 - Node synced at block 84M+, 5 peers
 - `CamelliaBlock` not yet set — pending block number decision
 
@@ -266,7 +266,7 @@ All 11 EIP tests pass including `I-10` (governance contract live), which was N/A
 Verified that the Camellia binary correctly resumes syncing from existing chaindata — no reinitialization required — across all network/DB combinations.
 
 **Date:** 2026-04-05  
-**Binary:** `feature/camellia` HEAD, Go 1.21
+**Binary:** Camellia HEAD at verification time, Go 1.21
 
 | Server | Network | DB | Final block | Peers | Result |
 |--------|---------|-----|------------|-------|--------|
@@ -383,5 +383,5 @@ The following bugs were discovered during integration testing and corrected befo
 
 ---
 
-*Branch: `feature/camellia` — jsong1230/go-metadium*  
+*Repository: METADIUM/go-metadium*  
 *Last updated: 2026-04-07*
