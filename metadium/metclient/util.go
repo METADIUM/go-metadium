@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/console/prompt"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 )
 
 type ContractData struct {
@@ -329,7 +330,14 @@ func CallContract(ctx context.Context, contract *RemoteContract,
 		To:   contract.To,
 		Data: in,
 	}
+	// Serialize against archive-mode triedb commits (see metaminer.TrieAccessMu).
+	// CallContract dispatches an EVM read on a fresh statedb that shares the
+	// same triedb backend as the main block-import goroutine; without this
+	// lock, the read can race with a concurrent triedb.Commit in archive
+	// mode and observe a transient missing-state.
+	metaminer.TrieAccessMu.RLock()
 	out, err = contract.Cli.CallContract(ctx, msg, block)
+	metaminer.TrieAccessMu.RUnlock()
 	if err != nil {
 		return err
 	}

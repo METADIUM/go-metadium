@@ -1348,6 +1348,19 @@ func (bc *BlockChain) writeKnownBlock(block *types.Block) error {
 // writeBlockWithState writes block, metadata and corresponding state data to the
 // database.
 func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.Receipt, state *state.StateDB) error {
+	// Serialize the entire commit against concurrent in-process EVM reads
+	// dispatched from the metadium admin module
+	// (accumulateRewards -> admin.calculateRewards -> metclient.CallContract).
+	// The read creates a fresh statedb backed by the same triedb; without
+	// serialization it can observe a transient missing-state for
+	// just-committed accounts (notably the governance ENV contract at
+	// testnet block 18) and return ErrNotInitialized, yielding a divergent
+	// stateRoot. Covers archive (TrieDirtyDisabled=true) and full (default)
+	// paths uniformly, and works for both leveldb and rocksdb backends
+	// (rocksdb's async batch ordering exposes a wider race window than
+	// leveldb's synchronous writes).
+	metaminer.TrieAccessMu.Lock()
+	defer metaminer.TrieAccessMu.Unlock()
 	// Calculate the total difficulty of the block
 	ptd := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
 	if ptd == nil {

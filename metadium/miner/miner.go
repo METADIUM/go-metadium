@@ -5,10 +5,24 @@ package miner
 import (
 	"errors"
 	"math/big"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+// TrieAccessMu serializes archive-mode triedb commits against concurrent
+// in-process RPC EVM reads issued by the metadium admin module. Without
+// this mutex, a triedb.Commit(root, false) performed by writeBlockWithState
+// in archive mode can race with an EVM call dispatched from
+// accumulateRewards -> admin.calculateRewards -> metclient.CallContract,
+// causing a transient "registry not initialized" miss on early historical
+// blocks (e.g. testnet block 18) and a divergent stateRoot.
+//
+// Writers (archive triedb.Commit) take the write lock; readers
+// (metclient.CallContract) take the read lock so concurrent contract reads
+// remain parallel.
+var TrieAccessMu sync.RWMutex
 
 var (
 	ErrNotInitialized = errors.New("not initialized")
