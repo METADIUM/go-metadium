@@ -213,11 +213,17 @@ func TestForkResendTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not create transaction: %v", err)
 	}
-	client.SendTransaction(ctx, tx)
+	if err := client.SendTransaction(ctx, tx); err != nil {
+		t.Fatalf("sending transaction: %v", err)
+	}
+	waitForTxPending(t, client, tx.Hash())
 	sim.Commit()
 
 	// 3.
-	receipt, _ := client.TransactionReceipt(ctx, tx.Hash())
+	receipt, err := client.TransactionReceipt(ctx, tx.Hash())
+	if err != nil {
+		t.Fatalf("retrieving receipt: %v", err)
+	}
 	if h := receipt.BlockNumber.Uint64(); h != 1 {
 		t.Errorf("TX included in wrong block: %d", h)
 	}
@@ -232,11 +238,29 @@ func TestForkResendTx(t *testing.T) {
 	if err := client.SendTransaction(ctx, tx); err != nil {
 		t.Fatalf("sending transaction: %v", err)
 	}
+	waitForTxPending(t, client, tx.Hash())
 	sim.Commit()
-	receipt, _ = client.TransactionReceipt(ctx, tx.Hash())
+	receipt, err = client.TransactionReceipt(ctx, tx.Hash())
+	if err != nil {
+		t.Fatalf("retrieving receipt after fork: %v", err)
+	}
 	if h := receipt.BlockNumber.Uint64(); h != 2 {
 		t.Errorf("TX included in wrong block: %d", h)
 	}
+}
+
+// waitForTxPending blocks until the transaction shows up in the node's pending
+// pool. Transaction injection is asynchronous, so committing a block right
+// after SendTransaction may produce an empty block on slow machines.
+func waitForTxPending(t *testing.T, client Client, hash common.Hash) {
+	t.Helper()
+	for i := 0; i < 500; i++ {
+		if _, isPending, err := client.TransactionByHash(context.Background(), hash); err == nil && isPending {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for tx %s to reach the pending pool", hash)
 }
 
 func TestCommitReturnValue(t *testing.T) {

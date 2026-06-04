@@ -161,7 +161,10 @@ func (b *testWorkerBackend) newRandomTx(creation bool) *types.Transaction {
 
 func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database, blocks int) (*worker, *testWorkerBackend) {
 	backend := newTestWorkerBackend(t, chainConfig, engine, db, blocks)
-	backend.txPool.Add(pendingTxs, true, false)
+	// Add the pending transactions synchronously: tests (e.g. TestBuildPayload)
+	// build blocks right after this call, and an async add may not have
+	// promoted the transactions into the pending pool yet on slow machines.
+	backend.txPool.Add(pendingTxs, true, true)
 	w := newWorker(testConfig, chainConfig, engine, backend, new(event.TypeMux), nil, false)
 	w.setEtherbase(testBankAddress)
 	return w, backend
