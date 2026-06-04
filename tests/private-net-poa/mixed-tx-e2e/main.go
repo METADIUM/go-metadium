@@ -32,10 +32,18 @@ import (
 )
 
 // Hardhat accounts pre-funded in genesis.json with 1e24 wei.
+// Override with E2E_SENDER_KEY / E2E_FEEPAYER_KEY to run against a live network.
 const (
-	senderKey   = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-	feePayerKey = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+	defaultSenderKey   = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+	defaultFeePayerKey = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
 )
+
+func keyFromEnv(envName, fallback string) string {
+	if k := os.Getenv(envName); k != "" {
+		return strings.TrimPrefix(k, "0x")
+	}
+	return fallback
+}
 
 func main() {
 	rpc := "http://localhost:8545"
@@ -46,9 +54,9 @@ func main() {
 	fmt.Printf("=== Mixed Tx E2E Test (Normal + FeeDelegation + Blob) ===\n")
 	fmt.Printf("RPC: %s\n\n", rpc)
 
-	senderPriv, err := crypto.HexToECDSA(senderKey)
+	senderPriv, err := crypto.HexToECDSA(keyFromEnv("E2E_SENDER_KEY", defaultSenderKey))
 	must(err, "parse sender key")
-	feePayerPriv, err := crypto.HexToECDSA(feePayerKey)
+	feePayerPriv, err := crypto.HexToECDSA(keyFromEnv("E2E_FEEPAYER_KEY", defaultFeePayerKey))
 	must(err, "parse feePayer key")
 
 	sender := crypto.PubkeyToAddress(senderPriv.PublicKey)
@@ -66,6 +74,7 @@ func main() {
 	blobBaseFee := hexToBigInt(rpcCall(rpc, "eth_blobBaseFee", nil))
 	blockNum := hexToBigInt(rpcCall(rpc, "eth_blockNumber", nil))
 	senderNonce := hexToUint64(rpcCall(rpc, "eth_getTransactionCount", []any{sender.Hex(), "pending"}))
+	fpBalancePre := hexToBigInt(rpcCall(rpc, "eth_getBalance", []any{feePayer.Hex(), "latest"}))
 
 	fmt.Printf("\nChainID:     %s\n", chainIDBig)
 	fmt.Printf("BlockNumber: %s\n", blockNum)
@@ -243,12 +252,11 @@ func main() {
 	if receipts[1] != nil {
 		fpBalance := hexToBigInt(rpcCall(rpc, "eth_getBalance", []any{feePayer.Hex(), "latest"}))
 		senderBalance := hexToBigInt(rpcCall(rpc, "eth_getBalance", []any{sender.Hex(), "latest"}))
-		fmt.Printf("\nFeePayer balance post-tx: %s wei\n", fpBalance)
+		fmt.Printf("\nFeePayer balance pre-tx:  %s wei\n", fpBalancePre)
+		fmt.Printf("FeePayer balance post-tx: %s wei\n", fpBalance)
 		fmt.Printf("Sender balance post-tx:   %s wei\n", senderBalance)
-		// feePayer should have less than 1e24 (paid gas)
-		initial := new(big.Int)
-		initial.SetString("1000000000000000000000000", 10) // 1e24
-		if fpBalance.Cmp(initial) < 0 {
+		// feePayer should have paid gas for the fee delegation tx
+		if fpBalance.Cmp(fpBalancePre) < 0 {
 			fmt.Println("✅ FeePayer paid gas (balance decreased)")
 		} else {
 			fmt.Println("❌ FAIL: FeePayer balance did not decrease")
