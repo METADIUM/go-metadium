@@ -31,7 +31,15 @@ import (
 )
 
 // Hardhat account 0 — pre-funded in genesis.json with 1e24 wei.
-const senderKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+// Override with E2E_SENDER_KEY to run against a live network.
+const defaultSenderKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+
+func senderKeyHex() string {
+	if k := os.Getenv("E2E_SENDER_KEY"); k != "" {
+		return strings.TrimPrefix(k, "0x")
+	}
+	return defaultSenderKey
+}
 
 func main() {
 	rpc := "http://192.168.0.151:8545"
@@ -42,7 +50,7 @@ func main() {
 	fmt.Printf("=== EIP-4844 Blob Tx E2E Test ===\n")
 	fmt.Printf("RPC: %s\n\n", rpc)
 
-	key, err := crypto.HexToECDSA(senderKey)
+	key, err := crypto.HexToECDSA(senderKeyHex())
 	must(err, "parse key")
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	fmt.Printf("Sender: %s\n", sender.Hex())
@@ -175,13 +183,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 10. eth_getBlobSidecar after mining — sidecar is not persisted post-mine
+	// 10. eth_getBlobSidecar after mining — mined sidecars are persisted in the
+	// chain DB and kept for params.BlobRetentionBlocks (~18 days), so the
+	// sidecar must still be retrievable right after mining.
 	fmt.Println("\nChecking eth_getBlobSidecar post-mining...")
 	sidecarPost := rpcCallRaw(rpc, "eth_getBlobSidecar", []any{txHash})
-	if strings.Contains(sidecarPost, `"result":null`) {
-		fmt.Println("✅ PASS: sidecar correctly pruned after mining")
+	if strings.Contains(sidecarPost, `"blobs"`) {
+		fmt.Println("✅ PASS: sidecar retrievable post-mine (retained in chain DB)")
 	} else {
-		fmt.Printf("ℹ️  INFO: post-mine sidecar response: %s\n", sidecarPost)
+		fmt.Printf("❌ FAIL: post-mine sidecar response: %s\n", sidecarPost)
+		os.Exit(1)
 	}
 
 	fmt.Printf("\n=== ALL PASS ===\n")
