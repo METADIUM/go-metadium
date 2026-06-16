@@ -222,7 +222,11 @@ func (ma *metaAdmin) etcdAddMember(name string) (string, error) {
 	now := time.Now()
 	u, _ := url.Parse(fmt.Sprintf("https://%s:%d", node.Ip, node.Port+1))
 	m := membership.NewMember(node.Name, []url.URL{*u}, etcdClusterName, &now)
-	ms, err := ma.etcd.Server.AddMember(context.Background(), *m)
+	// Bound the call: AddMember blocks indefinitely if the raft quorum is lost,
+	// which would pin a handler goroutine (and its etcd concurrency slot) forever.
+	ctx, cancel := context.WithTimeout(context.Background(), ma.etcd.Server.Cfg.ReqTimeout())
+	defer cancel()
+	ms, err := ma.etcd.Server.AddMember(ctx, *m)
 	bb := &bytes.Buffer{}
 	for _, i := range ms {
 		if bb.Len() > 0 {
@@ -262,7 +266,9 @@ func (ma *metaAdmin) etcdRemoveMember(name string) (string, error) {
 		}
 	}
 
-	_, err := ma.etcdCli.MemberRemove(context.Background(), id)
+	ctx, cancel := context.WithTimeout(context.Background(), ma.etcdTimeout)
+	defer cancel()
+	_, err := ma.etcdCli.MemberRemove(ctx, id)
 	if err != nil {
 		return "", err
 	}

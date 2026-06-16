@@ -18,7 +18,11 @@ import (
 // governance member count so normal operation never drops.
 var (
 	statusExSem = make(chan struct{}, 128)
-	etcdSem     = make(chan struct{}, 16)
+	// etcd add-member (slow raft write) and cluster gossip (fast feed send) use
+	// separate caps so a slow/stuck AddMember cannot starve cluster-gossip
+	// handling and block etcd membership self-healing.
+	etcdAddSem     = make(chan struct{}, 16)
+	etcdClusterSem = make(chan struct{}, 64)
 )
 
 func handleGetPendingTxs(backend Backend, msg Decoder, peer *Peer) error {
@@ -84,12 +88,12 @@ func handleEtcdAddMember(backend Backend, msg Decoder, peer *Peer) error {
 	}
 
 	select {
-	case etcdSem <- struct{}{}:
+	case etcdAddSem <- struct{}{}:
 	default:
 		return nil // concurrency cap reached, drop under flood
 	}
 	go func() {
-		defer func() { <-etcdSem }()
+		defer func() { <-etcdAddSem }()
 		cluster, _ := metaapi.EtcdAddMember(peer.ID())
 		if err := peer.SendEtcdCluster(cluster); err != nil {
 			// ignore the error
@@ -109,12 +113,12 @@ func handleEtcdCluster(backend Backend, msg Decoder, peer *Peer) error {
 	}
 
 	select {
-	case etcdSem <- struct{}{}:
+	case etcdClusterSem <- struct{}{}:
 	default:
 		return nil // concurrency cap reached, drop under flood
 	}
 	go func() {
-		defer func() { <-etcdSem }()
+		defer func() { <-etcdClusterSem }()
 		metaapi.GotEtcdCluster(cluster)
 	}()
 
