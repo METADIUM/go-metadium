@@ -62,6 +62,7 @@ type metaAdmin struct {
 
 	bootNodeId  string // allowed to generate block without admin contract
 	bootAccount common.Address
+	genesisHash common.Hash // identifies the network (set in getGenesisInfo)
 	nodeInfo    *p2p.NodeInfo
 	registry    *metclient.RemoteContract
 	gov         *metclient.RemoteContract
@@ -223,6 +224,7 @@ func (ma *metaAdmin) getGenesisInfo() (string, common.Address, error) {
 	if err != nil {
 		return "", common.Address{}, err
 	}
+	ma.genesisHash = block.Hash()
 
 	var nodeId string
 	if len(block.Extra) < 64 {

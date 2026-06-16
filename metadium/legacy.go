@@ -279,6 +279,19 @@ func (ma *metaAdmin) calculateRewardsLegacy(num, blockReward, fees *big.Int, add
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Testnet block 18 pin. The maintenance governance account is registered by a
+	// transaction in block 17, but the canonical testnet chain computed block 18's
+	// reward before that registration became visible, so the fees went to the
+	// coinbase. Reading the parent governance state for block 18 races with block
+	// 17's trie commit, so a clean sync intermittently observes the maintenance
+	// account and distributes the fees instead, diverging from canonical (invalid
+	// merkle root). Pin block 18 to the canonical coinbase outcome. Gated on the
+	// genesis hash so it can never affect mainnet, where block 18 distribution is
+	// canonical.
+	if num.Int64() == 18 && ma.genesisHash == params.MetadiumTestnetGenesisHash {
+		return nil, nil, metaminer.ErrNotInitialized
+	}
+
 	rewardPoolAccount, maintenanceAccount, members, err := ma.getRewardAccountsLegacy(ctx, big.NewInt(num.Int64()-1))
 	if err != nil {
 		// all goes to the coinbase
