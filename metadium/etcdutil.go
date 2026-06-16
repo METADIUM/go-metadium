@@ -78,6 +78,18 @@ func (ma *metaAdmin) etcdFixCluster(cluster string) (string, error) {
 
 	host := fmt.Sprintf("%s:%d", ma.self.Ip, ma.self.Port+1)
 
+	// Build the set of trusted etcd peer endpoints from governance-registered
+	// nodes (etcd peer port = p2p port + 1). The cluster string arrives from a
+	// peer over the wire; without this check a compromised partner could inject
+	// an arbitrary endpoint into InitialCluster and hijack the etcd membership.
+	// Every member must resolve to a known governance node (or self).
+	allowed := map[string]bool{host: true}
+	ma.lock.Lock()
+	for _, n := range ma.nodes {
+		allowed[fmt.Sprintf("%s:%d", n.Ip, n.Port+1)] = true
+	}
+	ma.lock.Unlock()
+
 	var ss []string
 	if ss = strings.Split(cluster, ","); len(ss) <= 0 {
 		return "", ethereum.NotFound
@@ -87,6 +99,17 @@ func (ma *metaAdmin) etcdFixCluster(cluster string) (string, error) {
 	var bb bytes.Buffer
 	for _, i := range ss {
 		if j := strings.Split(i, "="); len(j) == 2 {
+			// Validate the advertised endpoint against the known node set
+			// regardless of the supplied name, so a forged name cannot smuggle
+			// in an untrusted endpoint.
+			u, err := url.Parse(j[1])
+			if err != nil {
+				return "", err
+			}
+			if !allowed[u.Host] {
+				return "", fmt.Errorf("etcd cluster member %q is not a known governance node", i)
+			}
+
 			if bb.Len() > 0 {
 				bb.WriteString(",")
 			}
@@ -96,16 +119,11 @@ func (ma *metaAdmin) etcdFixCluster(cluster string) (string, error) {
 					found = true
 				}
 				bb.WriteString(i)
+			} else if u.Host != host {
+				bb.WriteString(i)
 			} else {
-				u, err := url.Parse(j[1])
-				if err != nil {
-					return "", err
-				} else if u.Host != host {
-					bb.WriteString(i)
-				} else {
-					found = true
-					bb.WriteString(fmt.Sprintf("%s=%s", ma.self.Name, j[1]))
-				}
+				found = true
+				bb.WriteString(fmt.Sprintf("%s=%s", ma.self.Name, j[1]))
 			}
 		}
 	}
