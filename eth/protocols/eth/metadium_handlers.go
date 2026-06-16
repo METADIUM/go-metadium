@@ -8,6 +8,19 @@ import (
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 )
 
+// Concurrency caps for the asynchronous Metadium message handlers below. Each
+// handler spawns a goroutine per inbound message; without a bound, a compromised
+// partner (these messages are IsPartner-gated) could flood StatusEx/EtcdCluster
+// and exhaust memory through unbounded goroutine creation (audit finding M11).
+// When the cap is reached the message is dropped instead of queued: status
+// gossip is periodic and etcd-cluster/join messages are retried, so dropping
+// under flood is safe and self-healing. Caps are sized well above the expected
+// governance member count so normal operation never drops.
+var (
+	statusExSem = make(chan struct{}, 128)
+	etcdSem     = make(chan struct{}, 16)
+)
+
 func handleGetPendingTxs(backend Backend, msg Decoder, peer *Peer) error {
 	// not supported, just ignore it.
 	return nil
@@ -18,7 +31,13 @@ func handleGetStatusEx(backend Backend, msg Decoder, peer *Peer) error {
 		return nil
 	}
 
+	select {
+	case statusExSem <- struct{}{}:
+	default:
+		return nil // concurrency cap reached, drop under flood
+	}
 	go func() {
+		defer func() { <-statusExSem }()
 		statusEx := metaapi.GetMinerStatus()
 		if statusEx == nil {
 			// ignore the error, most likely server is shutting down
@@ -43,7 +62,13 @@ func handleStatusEx(backend Backend, msg Decoder, peer *Peer) error {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
 
+	select {
+	case statusExSem <- struct{}{}:
+	default:
+		return nil // concurrency cap reached, drop under flood
+	}
 	go func() {
+		defer func() { <-statusExSem }()
 		if _, td := peer.Head(); status.LatestBlockTd.Cmp(td) > 0 {
 			peer.SetHead(status.LatestBlockHash, status.LatestBlockTd)
 		}
@@ -58,7 +83,13 @@ func handleEtcdAddMember(backend Backend, msg Decoder, peer *Peer) error {
 		return nil
 	}
 
+	select {
+	case etcdSem <- struct{}{}:
+	default:
+		return nil // concurrency cap reached, drop under flood
+	}
 	go func() {
+		defer func() { <-etcdSem }()
 		cluster, _ := metaapi.EtcdAddMember(peer.ID())
 		if err := peer.SendEtcdCluster(cluster); err != nil {
 			// ignore the error
@@ -77,7 +108,15 @@ func handleEtcdCluster(backend Backend, msg Decoder, peer *Peer) error {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
 
-	go metaapi.GotEtcdCluster(cluster)
+	select {
+	case etcdSem <- struct{}{}:
+	default:
+		return nil // concurrency cap reached, drop under flood
+	}
+	go func() {
+		defer func() { <-etcdSem }()
+		metaapi.GotEtcdCluster(cluster)
+	}()
 
 	return nil
 }
