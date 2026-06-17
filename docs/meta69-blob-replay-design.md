@@ -163,9 +163,11 @@ trigger + serial fetch loop in `eth/metadium_blobsync.go`, `txpool.ValidateBlobS
 + versioned-hash/KZG check with peer-drop (#31219), per-block cap inherent (#32246).
 Verified: CGO=0/CGO=1 build, unit tests, SPoA meta/69 PASS=19/0/2, blob-tx-e2e ALL
 PASS, and a cross-node M5 e2e (node2/3 — which never pooled the blob tx — obtain and
-persist the sidecar after importing node1's block). **Remaining:** the #30125 fetcher
-ordering backport is primary-path hardening (the M5 message is the fallback when blob
-txs don't pre-land in the pool), tracked as a separate lower-priority follow-up.
+persist the sidecar after importing node1's block). The #30125 fetcher-ordering
+backport (commit c152a6e4a) is also landed: arrival-order tx scheduling + blob
+skip-waitlist harden the primary path so blob txs land in the pool before the block
+arrives (the M5 message remains the fallback); the full eth/fetcher suite passes and
+SPoA + blob-tx-e2e + cross-node M5 re-verified with no regression.
 
 ## 8. Risks
 
