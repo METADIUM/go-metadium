@@ -202,12 +202,12 @@ var eth69 = map[uint64]msgHandler{
 	ReceiptsMsg:                   handleReceipts,
 	GetPooledTransactionsMsg:      handleGetPooledTransactions,
 	PooledTransactionsMsg:         handlePooledTransactions,
-	// Metadium extensions
+	// Metadium extensions (meta/69: replay-protected meta handlers, M12)
 	GetPendingTxsMsg:  handleGetPendingTxs,
-	GetStatusExMsg:    handleGetStatusEx,
-	StatusExMsg:       handleStatusEx,
-	EtcdAddMemberMsg:  handleEtcdAddMember,
-	EtcdClusterMsg:    handleEtcdCluster,
+	GetStatusExMsg:    handleGetStatusEx69,
+	StatusExMsg:       handleStatusEx69,
+	EtcdAddMemberMsg:  handleEtcdAddMember69,
+	EtcdClusterMsg:    handleEtcdCluster69,
 	TransactionsExMsg: handleTransactionsEx,
 }
 

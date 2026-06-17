@@ -30,11 +30,11 @@ func handleGetPendingTxs(backend Backend, msg Decoder, peer *Peer) error {
 	return nil
 }
 
-func handleGetStatusEx(backend Backend, msg Decoder, peer *Peer) error {
-	if !metaminer.AmPartner() || !metaminer.IsPartner(peer.ID()) {
-		return nil
-	}
+// --- shared processing cores (used by both legacy and meta/69 handlers) ---
 
+// serveStatusEx sends this node's miner status back to the peer (response to a
+// GetStatusEx request), bounded by the status concurrency cap.
+func serveStatusEx(backend Backend, peer *Peer) error {
 	select {
 	case statusExSem <- struct{}{}:
 	default:
@@ -53,19 +53,11 @@ func handleGetStatusEx(backend Backend, msg Decoder, peer *Peer) error {
 			// ignore the error
 		}
 	}()
-
 	return nil
 }
 
-func handleStatusEx(backend Backend, msg Decoder, peer *Peer) error {
-	if !metaminer.AmPartner() || !metaminer.IsPartner(peer.ID()) {
-		return nil
-	}
-	var status metaapi.MetadiumMinerStatus
-	if err := msg.Decode(&status); err != nil {
-		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
-	}
-
+// applyStatusEx applies a received miner status (head update + delivery).
+func applyStatusEx(backend Backend, peer *Peer, status *metaapi.MetadiumMinerStatus) error {
 	select {
 	case statusExSem <- struct{}{}:
 	default:
@@ -76,17 +68,14 @@ func handleStatusEx(backend Backend, msg Decoder, peer *Peer) error {
 		if _, td := peer.Head(); status.LatestBlockTd.Cmp(td) > 0 {
 			peer.SetHead(status.LatestBlockHash, status.LatestBlockTd)
 		}
-		metaapi.GotStatusEx(&status)
+		metaapi.GotStatusEx(status)
 	}()
-
 	return nil
 }
 
-func handleEtcdAddMember(backend Backend, msg Decoder, peer *Peer) error {
-	if !metaminer.AmPartner() || !metaminer.IsPartner(peer.ID()) {
-		return nil
-	}
-
+// serveEtcdAddMember adds the peer to the etcd cluster and replies with the
+// resulting cluster, bounded by the add-member concurrency cap.
+func serveEtcdAddMember(peer *Peer) error {
 	select {
 	case etcdAddSem <- struct{}{}:
 	default:
@@ -99,8 +88,48 @@ func handleEtcdAddMember(backend Backend, msg Decoder, peer *Peer) error {
 			// ignore the error
 		}
 	}()
-
 	return nil
+}
+
+// applyEtcdCluster feeds a received etcd cluster string into self-healing.
+func applyEtcdCluster(cluster string) error {
+	select {
+	case etcdClusterSem <- struct{}{}:
+	default:
+		return nil // concurrency cap reached, drop under flood
+	}
+	go func() {
+		defer func() { <-etcdClusterSem }()
+		metaapi.GotEtcdCluster(cluster)
+	}()
+	return nil
+}
+
+// --- legacy (meta/66, meta/68) handlers ---
+
+func handleGetStatusEx(backend Backend, msg Decoder, peer *Peer) error {
+	if !metaminer.AmPartner() || !metaminer.IsPartner(peer.ID()) {
+		return nil
+	}
+	return serveStatusEx(backend, peer)
+}
+
+func handleStatusEx(backend Backend, msg Decoder, peer *Peer) error {
+	if !metaminer.AmPartner() || !metaminer.IsPartner(peer.ID()) {
+		return nil
+	}
+	var status metaapi.MetadiumMinerStatus
+	if err := msg.Decode(&status); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	return applyStatusEx(backend, peer, &status)
+}
+
+func handleEtcdAddMember(backend Backend, msg Decoder, peer *Peer) error {
+	if !metaminer.AmPartner() || !metaminer.IsPartner(peer.ID()) {
+		return nil
+	}
+	return serveEtcdAddMember(peer)
 }
 
 func handleEtcdCluster(backend Backend, msg Decoder, peer *Peer) error {
@@ -111,18 +140,73 @@ func handleEtcdCluster(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&cluster); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
+	return applyEtcdCluster(cluster)
+}
 
-	select {
-	case etcdClusterSem <- struct{}{}:
-	default:
-		return nil // concurrency cap reached, drop under flood
+// --- meta/69 handlers (M12 replay protection) ---
+//
+// Each decodes the replay-protected packet, rejects stale/replayed frames
+// (silently dropping rather than disconnecting, to avoid false positives from
+// clock skew or reordering), then runs the shared processing core.
+
+func handleGetStatusEx69(backend Backend, msg Decoder, peer *Peer) error {
+	if !metaminer.AmPartner() || !metaminer.IsPartner(peer.ID()) {
+		return nil
 	}
-	go func() {
-		defer func() { <-etcdClusterSem }()
-		metaapi.GotEtcdCluster(cluster)
-	}()
+	var pkt GetStatusEx69Packet
+	if err := msg.Decode(&pkt); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	if !peer.acceptMetaReplay(pkt.Nonce, pkt.Timestamp) {
+		peer.Log().Debug("Dropping replayed meta GetStatusEx", "nonce", pkt.Nonce)
+		return nil
+	}
+	return serveStatusEx(backend, peer)
+}
 
-	return nil
+func handleStatusEx69(backend Backend, msg Decoder, peer *Peer) error {
+	if !metaminer.AmPartner() || !metaminer.IsPartner(peer.ID()) {
+		return nil
+	}
+	var pkt StatusEx69Packet
+	if err := msg.Decode(&pkt); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	if !peer.acceptMetaReplay(pkt.Nonce, pkt.Timestamp) {
+		peer.Log().Debug("Dropping replayed meta StatusEx", "nonce", pkt.Nonce)
+		return nil
+	}
+	return applyStatusEx(backend, peer, &pkt.Status)
+}
+
+func handleEtcdAddMember69(backend Backend, msg Decoder, peer *Peer) error {
+	if !metaminer.AmPartner() || !metaminer.IsPartner(peer.ID()) {
+		return nil
+	}
+	var pkt EtcdAddMember69Packet
+	if err := msg.Decode(&pkt); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	if !peer.acceptMetaReplay(pkt.Nonce, pkt.Timestamp) {
+		peer.Log().Debug("Dropping replayed meta EtcdAddMember", "nonce", pkt.Nonce)
+		return nil
+	}
+	return serveEtcdAddMember(peer)
+}
+
+func handleEtcdCluster69(backend Backend, msg Decoder, peer *Peer) error {
+	if !metaminer.AmPartner() || !metaminer.IsPartner(peer.ID()) {
+		return nil
+	}
+	var pkt EtcdCluster69Packet
+	if err := msg.Decode(&pkt); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	if !peer.acceptMetaReplay(pkt.Nonce, pkt.Timestamp) {
+		peer.Log().Debug("Dropping replayed meta EtcdCluster", "nonce", pkt.Nonce)
+		return nil
+	}
+	return applyEtcdCluster(pkt.Cluster)
 }
 
 // handleTransactionsEx handles the Metadium extended transactions message.
