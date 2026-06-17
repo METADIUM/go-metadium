@@ -217,6 +217,13 @@ func symDecrypt(params *ECIESParams, key, ct []byte) (m []byte, err error) {
 		return
 	}
 
+	// Reject a ciphertext shorter than the IV/block size; otherwise the slices
+	// below go out of bounds and panic, which a remote peer can trigger during
+	// the RLPx handshake. (CVE-2026-22862/22868)
+	if len(ct) < params.BlockSize {
+		return nil, ErrInvalidMessage
+	}
+
 	ctr := cipher.NewCTR(c, ct[:params.BlockSize])
 
 	m = make([]byte, len(ct)-params.BlockSize)
