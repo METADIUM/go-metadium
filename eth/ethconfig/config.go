@@ -49,7 +49,11 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
-	SyncMode:           downloader.SnapSync,
+	// go-metadium runs full sync only. The snap-sync state-healing path carries
+	// known upstream integrity bugs (gentrie redesign, PRs #29313/#30258/#33428)
+	// that are not backported to this v1.13.14 base, so default new nodes to
+	// full sync rather than leaving them on the vulnerable snap path.
+	SyncMode:           downloader.FullSync,
 	NetworkId:          0, // enable auto configuration of networkID == chainID
 	TxLookupLimit:      2350000,
 	TransactionHistory: 2350000,
