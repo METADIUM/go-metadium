@@ -27,10 +27,10 @@ risk.
    `metadium/scripts/gmet.sh` (default branch), all `tests/**/docker-compose.yml`,
    and the production systemd units. Keep this explicit so the policy survives a
    default change. *(already true)*
-3. **Startup guard (recommended, optional)** — reject or loudly warn when an
-   operator passes `--syncmode snap|fast` on the Metadium mainnet/testnet, in
-   `cmd/utils/flags.go` near `SetEthConfig`. Hard-reject is strongest; a WARN that
-   coerces to full is the minimum. *(not yet implemented — see open item)*
+3. **Startup guard (hard-reject)** — a node started with `--syncmode snap|fast`
+   on the Metadium mainnet/testnet exits immediately with a fatal error pointing
+   to this document (`cmd/utils/flags.go`, in `SetEthConfig`). Upstream test
+   networks and `--dev` are exempt. *(implemented)*
 4. **Documentation / release notes** — state the policy in the node-operator
    README and CHANGELOG: "go-metadium supports full sync only; `--syncmode full`
    is the default; for fast bring-up use snapshot bootstrap (this document)."
@@ -140,10 +140,3 @@ node additionally needs:
 
 So: bootstrap chain data with §3, then complete governance membership + etcd join
 separately. For pure follower/RPC nodes, §3 alone is sufficient.
-
----
-
-## Open item
-
-- Startup guard (§1.1.3): add the `--syncmode snap|fast` warn/reject for
-  Metadium networks in `cmd/utils/flags.go`. Tracked as an optional phase-2 task.
