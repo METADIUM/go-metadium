@@ -51,6 +51,12 @@ var (
 	// making the transaction invalid, rather a DOS protection.
 	ErrOversizedData = errors.New("oversized data")
 
+	// ErrInvalidBlob is returned when a blob transaction's sidecar fails
+	// validation (blob/commitment/proof counts or KZG proof verification). It
+	// marks a cryptographic protocol violation by the sending peer, which should
+	// be dropped rather than merely rejected. (CVE-2026-22862/22868 hardening)
+	ErrInvalidBlob = errors.New("invalid blob sidecar")
+
 	// ErrFutureReplacePending is returned if a future transaction replaces a pending
 	// one. Future transactions should only be able to replace other future transactions.
 	ErrFutureReplacePending = errors.New("future transaction tries to replace pending")

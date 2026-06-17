@@ -314,8 +314,9 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 	// Push all the transactions into the pool, tracking underpriced ones to avoid
 	// re-requesting them and dropping the peer in case of malicious transfers.
 	var (
-		added = make([]common.Hash, 0, len(txs))
-		metas = make([]txMetadata, 0, len(txs))
+		added         = make([]common.Hash, 0, len(txs))
+		metas         = make([]txMetadata, 0, len(txs))
+		maliciousBlob bool
 	)
 	// proceed in batches
 	for i := 0; i < len(txs); i += 128 {
@@ -347,6 +348,13 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 			case errors.Is(err, txpool.ErrUnderpriced) || errors.Is(err, txpool.ErrReplaceUnderpriced):
 				underpriced++
 
+			case errors.Is(err, txpool.ErrInvalidBlob):
+				// Cryptographically invalid blob sidecar (KZG proof / commitment /
+				// count). An honest peer never sends this, so flag the peer to be
+				// dropped after the batch. (CVE-2026-22862/22868 hardening)
+				otherreject++
+				maliciousBlob = true
+
 			default:
 				otherreject++
 			}
@@ -365,6 +373,10 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 			time.Sleep(200 * time.Millisecond)
 			log.Debug("Peer delivering stale transactions", "peer", peer, "rejected", otherreject)
 		}
+	}
+	if maliciousBlob {
+		log.Debug("Dropping peer for invalid blob sidecar", "peer", peer)
+		f.dropPeer(peer)
 	}
 	select {
 	case f.cleanup <- &txDelivery{origin: peer, hashes: added, metas: metas, direct: direct}:
