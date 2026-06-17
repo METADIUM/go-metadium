@@ -25,9 +25,45 @@ var (
 	etcdClusterSem = make(chan struct{}, 64)
 )
 
+// maxBlobSidecarBlocksServe bounds how many blocks a single GetBlobSidecars
+// request may ask for (M5). Each Metadium block carries at most
+// MaxBlobGasPerBlock/BlobTxBlobGasPerBlob blobs (~128KB each), so this keeps the
+// reply well under maxMessageSize while limiting disk lookups.
+const maxBlobSidecarBlocksServe = 16
+
 func handleGetPendingTxs(backend Backend, msg Decoder, peer *Peer) error {
 	// not supported, just ignore it.
 	return nil
+}
+
+// --- meta/69 blob-sidecar serving (M5) ---
+
+// handleGetBlobSidecars69 serves blob sidecars for the requested block hashes
+// from local storage (rawdb), bounding the number of blocks per request.
+func handleGetBlobSidecars69(backend Backend, msg Decoder, peer *Peer) error {
+	var req GetBlobSidecarsPacket
+	if err := msg.Decode(&req); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	hashes := req.Hashes
+	if len(hashes) > maxBlobSidecarBlocksServe {
+		hashes = hashes[:maxBlobSidecarBlocksServe]
+	}
+	response := make([][]*types.BlobTxSidecar, len(hashes))
+	for i, hash := range hashes {
+		response[i] = backend.Chain().GetBlobSidecars(hash)
+	}
+	return peer.ReplyBlobSidecars(req.RequestId, response)
+}
+
+// handleBlobSidecars69 forwards a received blob-sidecar reply to the backend,
+// which correlates it with the in-flight request and validates/persists it.
+func handleBlobSidecars69(backend Backend, msg Decoder, peer *Peer) error {
+	var res BlobSidecarsPacket
+	if err := msg.Decode(&res); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	return backend.Handle(peer, &res)
 }
 
 // --- shared processing cores (used by both legacy and meta/69 handlers) ---

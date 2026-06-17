@@ -139,6 +139,15 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	return nil
 }
 
+// ValidateBlobSidecar verifies a blob sidecar received over the wire against the
+// expected versioned hashes: blob/commitment/proof counts, commitment-to-hash
+// derivation, and the KZG proofs. It wraps ErrInvalidBlob on any failure so
+// callers (e.g. the meta/69 blob-sidecar fetcher, M5/#31219) can drop the
+// offending peer. It is the exported entry point for validateBlobSidecar.
+func ValidateBlobSidecar(hashes []common.Hash, sidecar *types.BlobTxSidecar) error {
+	return validateBlobSidecar(hashes, sidecar)
+}
+
 func validateBlobSidecar(hashes []common.Hash, sidecar *types.BlobTxSidecar) error {
 	if len(sidecar.Blobs) != len(hashes) {
 		return fmt.Errorf("%w: invalid number of %d blobs compared to %d blob hashes", ErrInvalidBlob, len(sidecar.Blobs), len(hashes))

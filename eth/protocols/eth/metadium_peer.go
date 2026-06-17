@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	metaapi "github.com/ethereum/go-ethereum/metadium/api"
 	"github.com/ethereum/go-ethereum/p2p"
 )
@@ -63,6 +64,26 @@ func (p *Peer) RequestEtcdAddMember() error {
 // SendNodeData sends a batch of state trie node data (response to GetNodeData, eth/66).
 func (p *Peer) SendNodeData(data [][]byte) error {
 	return p2p.Send(p.rw, NodeDataMsg, NodeDataPacket(data))
+}
+
+// RequestBlobSidecars fetches the blob sidecars for the given block hashes from
+// a meta/69 peer (M5). The id correlates the BlobSidecars reply.
+func (p *Peer) RequestBlobSidecars(id uint64, hashes []common.Hash) error {
+	p.Log().Debug("Fetching blob sidecars", "count", len(hashes))
+	requestTracker.Track(p.id, p.version, GetBlobSidecarsMsg, BlobSidecarsMsg, id)
+	return p2p.Send(p.rw, GetBlobSidecarsMsg, &GetBlobSidecarsPacket{
+		RequestId: id,
+		Hashes:    hashes,
+	})
+}
+
+// ReplyBlobSidecars sends blob sidecars in response to a GetBlobSidecars request
+// (M5). sidecars is positional with the request's hashes.
+func (p *Peer) ReplyBlobSidecars(id uint64, sidecars [][]*types.BlobTxSidecar) error {
+	return p2p.Send(p.rw, BlobSidecarsMsg, &BlobSidecarsPacket{
+		RequestId: id,
+		Sidecars:  sidecars,
+	})
 }
 
 // sendPooledTransactionHashesVersioned sends transaction hashes using the appropriate

@@ -123,6 +123,14 @@ type handler struct {
 
 	requiredBlocks map[uint64]common.Hash
 
+	// meta/69 blob-sidecar fetching (M5). blobFetchCh queues blocks whose blob
+	// sidecars were missing locally on import; blobPending correlates in-flight
+	// GetBlobSidecars requests with their replies by request id.
+	blobFetchCh  chan *types.Block
+	blobReqLock  sync.Mutex
+	blobPending  map[uint64]*blobSidecarRequest
+	blobReqIDGen atomic.Uint64
+
 	// channels for fetcher, syncer, txsyncLoop
 	quitSync chan struct{}
 
@@ -277,6 +285,15 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		return h.txpool.Add(txs, false, false)
 	}
 	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer)
+
+	// meta/69 blob-sidecar fetching (M5): wire the import-time miss callback and
+	// the request-correlation map. Blob txs only appear once Camellia is active,
+	// and the fetch loop no-ops without meta/69 peers, so this is inert on
+	// pre-Camellia / legacy-only networks.
+	h.blobFetchCh = make(chan *types.Block, blobSidecarMaxQueue)
+	h.blobPending = make(map[uint64]*blobSidecarRequest)
+	h.chain.MissingBlobSidecarFn = h.enqueueBlobSidecarFetch
+
 	h.chainSync = newChainSyncer(h)
 	return h, nil
 }
@@ -527,6 +544,10 @@ func (h *handler) Start(maxPeers int) {
 	// start peer handler tracker
 	h.wg.Add(1)
 	go h.protoTracker()
+
+	// fetch blob sidecars missing after block import (meta/69 M5)
+	h.wg.Add(1)
+	go h.blobSidecarLoop()
 }
 
 func (h *handler) Stop() {

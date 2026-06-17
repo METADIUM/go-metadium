@@ -209,6 +209,9 @@ var eth69 = map[uint64]msgHandler{
 	EtcdAddMemberMsg:  handleEtcdAddMember69,
 	EtcdClusterMsg:    handleEtcdCluster69,
 	TransactionsExMsg: handleTransactionsEx,
+	// Blob-sidecar serving (M5, meta/69 only)
+	GetBlobSidecarsMsg: handleGetBlobSidecars69,
+	BlobSidecarsMsg:    handleBlobSidecars69,
 }
 
 // eth66 is like eth68 but uses the old NewPooledTransactionHashes format (hashes only,
