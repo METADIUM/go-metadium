@@ -713,7 +713,9 @@ func TestTransactionFetcherMissingRescheduling(t *testing.T) {
 			},
 			// Deliver the middle transaction requested, the one before which
 			// should be dropped and the one after re-requested.
-			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[0]}, direct: true}, // This depends on the deterministic random
+			// #30125: with arrival-order fetching the request is [0,1,2]; deliver
+			// the middle one so the prior is dropped and the next re-requested.
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[1]}, direct: true},
 			isScheduled{
 				tracking: map[string][]common.Hash{
 					"A": {testTxsHashes[2]},
@@ -1022,7 +1024,9 @@ func TestTransactionFetcherRateLimiting(t *testing.T) {
 					"A": hashes,
 				},
 				fetching: map[string][]common.Hash{
-					"A": hashes[30315 : 30315+maxTxRetrievals],
+					// #30125: fetches now follow announcement arrival order, so the
+					// first maxTxRetrievals announced hashes are requested.
+					"A": hashes[:maxTxRetrievals],
 				},
 			},
 		},
@@ -1082,9 +1086,11 @@ func TestTransactionFetcherBandwidthLimiting(t *testing.T) {
 					},
 				},
 				fetching: map[string][]common.Hash{
-					"A": {{0x02}, {0x03}, {0x04}},
-					"B": {{0x06}},
-					"C": {{0x08}},
+					// #30125: fetches follow announcement arrival order, so the
+					// lowest-seq hashes within each peer's size budget are taken.
+					"A": {{0x01}, {0x02}, {0x03}},
+					"B": {{0x05}},
+					"C": {{0x07}},
 				},
 			},
 		},
@@ -1139,8 +1145,9 @@ func TestTransactionFetcherDoSProtection(t *testing.T) {
 					"B": hashesB[:maxTxAnnounces/2-1],
 				},
 				fetching: map[string][]common.Hash{
-					"A": hashesA[30315 : 30315+maxTxRetrievals],
-					"B": hashesB[14969 : 14969+maxTxRetrievals],
+					// #30125: fetches now follow announcement arrival order.
+					"A": hashesA[:maxTxRetrievals],
+					"B": hashesB[:maxTxRetrievals],
 				},
 			},
 			// Ensure that adding even one more hash results in dropping the hash
@@ -1157,8 +1164,9 @@ func TestTransactionFetcherDoSProtection(t *testing.T) {
 					"B": hashesB[:maxTxAnnounces/2-1],
 				},
 				fetching: map[string][]common.Hash{
-					"A": hashesA[30315 : 30315+maxTxRetrievals],
-					"B": hashesB[14969 : 14969+maxTxRetrievals],
+					// #30125: fetches now follow announcement arrival order.
+					"A": hashesA[:maxTxRetrievals],
+					"B": hashesB[:maxTxRetrievals],
 				},
 			},
 		},
@@ -1726,9 +1734,10 @@ func testTransactionFetcher(t *testing.T, tt txFetcherTest) {
 					continue
 				}
 				for _, ann := range announces {
-					if meta, ok := waiting[ann.hash]; !ok {
+					if entry, ok := waiting[ann.hash]; !ok {
 						t.Errorf("step %d, peer %s: hash %x missing from waitslots", i, peer, ann.hash)
 					} else {
+						meta := entry.meta
 						if (meta == nil && (ann.kind != nil || ann.size != nil)) ||
 							(meta != nil && (ann.kind == nil || ann.size == nil)) ||
 							(meta != nil && (meta.kind != *ann.kind || meta.size != *ann.size)) {
@@ -1736,10 +1745,10 @@ func testTransactionFetcher(t *testing.T, tt txFetcherTest) {
 						}
 					}
 				}
-				for hash, meta := range waiting {
+				for hash, entry := range waiting {
 					ann := announce{hash: hash}
-					if meta != nil {
-						ann.kind, ann.size = &meta.kind, &meta.size
+					if entry.meta != nil {
+						ann.kind, ann.size = &entry.meta.kind, &entry.meta.size
 					}
 					if !containsAnnounce(announces, ann) {
 						t.Errorf("step %d, peer %s: announce %v extra in waitslots", i, peer, ann)
@@ -1795,9 +1804,10 @@ func testTransactionFetcher(t *testing.T, tt txFetcherTest) {
 					continue
 				}
 				for _, ann := range announces {
-					if meta, ok := scheduled[ann.hash]; !ok {
+					if entry, ok := scheduled[ann.hash]; !ok {
 						t.Errorf("step %d, peer %s: hash %x missing from announces", i, peer, ann.hash)
 					} else {
+						meta := entry.meta
 						if (meta == nil && (ann.kind != nil || ann.size != nil)) ||
 							(meta != nil && (ann.kind == nil || ann.size == nil)) ||
 							(meta != nil && (meta.kind != *ann.kind || meta.size != *ann.size)) {
@@ -1805,10 +1815,10 @@ func testTransactionFetcher(t *testing.T, tt txFetcherTest) {
 						}
 					}
 				}
-				for hash, meta := range scheduled {
+				for hash, entry := range scheduled {
 					ann := announce{hash: hash}
-					if meta != nil {
-						ann.kind, ann.size = &meta.kind, &meta.size
+					if entry.meta != nil {
+						ann.kind, ann.size = &entry.meta.kind, &entry.meta.size
 					}
 					if !containsAnnounce(announces, ann) {
 						t.Errorf("step %d, peer %s: announce %x extra in announces", i, peer, hash)
