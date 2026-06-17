@@ -184,6 +184,33 @@ var eth68 = map[uint64]msgHandler{
 	TransactionsExMsg: handleTransactionsEx,
 }
 
+// eth69 ("meta/69") bundles blob-sidecar serving (M5) and meta-message replay
+// protection (M12). For P1 (scaffolding) it mirrors eth68; P2 replaces the meta
+// handlers with replay-aware variants and P3 adds the blob-sidecar handlers
+// (GetBlobSidecarsMsg / BlobSidecarsMsg). Kept as a distinct map so those phases
+// can diverge from eth68 without affecting meta/68 peers.
+var eth69 = map[uint64]msgHandler{
+	NewBlockHashesMsg:             handleNewBlockhashes,
+	NewBlockMsg:                   handleNewBlock,
+	TransactionsMsg:               handleTransactions,
+	NewPooledTransactionHashesMsg: handleNewPooledTransactionHashes,
+	GetBlockHeadersMsg:            handleGetBlockHeaders,
+	BlockHeadersMsg:               handleBlockHeaders,
+	GetBlockBodiesMsg:             handleGetBlockBodies,
+	BlockBodiesMsg:                handleBlockBodies,
+	GetReceiptsMsg:                handleGetReceipts,
+	ReceiptsMsg:                   handleReceipts,
+	GetPooledTransactionsMsg:      handleGetPooledTransactions,
+	PooledTransactionsMsg:         handlePooledTransactions,
+	// Metadium extensions
+	GetPendingTxsMsg:  handleGetPendingTxs,
+	GetStatusExMsg:    handleGetStatusEx,
+	StatusExMsg:       handleStatusEx,
+	EtcdAddMemberMsg:  handleEtcdAddMember,
+	EtcdClusterMsg:    handleEtcdCluster,
+	TransactionsExMsg: handleTransactionsEx,
+}
+
 // eth66 is like eth68 but uses the old NewPooledTransactionHashes format (hashes only,
 // no type/size) and accepts GetNodeData/NodeData from peers that may still send them.
 var eth66 = map[uint64]msgHandler{
@@ -224,7 +251,9 @@ func handleMessage(backend Backend, peer *Peer) error {
 	defer msg.Discard()
 
 	var handlers map[uint64]msgHandler
-	if peer.Version() >= ETH68 {
+	if peer.Version() >= ETH69 {
+		handlers = eth69
+	} else if peer.Version() >= ETH68 {
 		handlers = eth68
 	} else {
 		handlers = eth66
