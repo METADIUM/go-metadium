@@ -156,6 +156,17 @@ blocker for flipping mainnet `CamelliaBlock`**, not for the current chain.
 - Each phase: own commits on a phase-2/fork branch, CGO unit tests + SPoA, no node
   deploy until the coordinated fork window.
 
+**Implementation status (secfix/mainnet-phase2):** P1 done (e35de7f39),
+P2 done (16f953018), **P3 done (5f8eed04b)** — `GetBlobSidecars`/`BlobSidecars`
+packets, serve via `BlockChain.GetBlobSidecars`, `MissingBlobSidecarFn` import
+trigger + serial fetch loop in `eth/metadium_blobsync.go`, `txpool.ValidateBlobSidecar`
++ versioned-hash/KZG check with peer-drop (#31219), per-block cap inherent (#32246).
+Verified: CGO=0/CGO=1 build, unit tests, SPoA meta/69 PASS=19/0/2, blob-tx-e2e ALL
+PASS, and a cross-node M5 e2e (node2/3 — which never pooled the blob tx — obtain and
+persist the sidecar after importing node1's block). **Remaining:** the #30125 fetcher
+ordering backport is primary-path hardening (the M5 message is the fallback when blob
+txs don't pre-land in the pool), tracked as a separate lower-priority follow-up.
+
 ## 8. Risks
 
 - Protocol-version change is lockstep: a bug in version gating can partition the
