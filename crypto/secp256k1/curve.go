@@ -92,6 +92,15 @@ func (BitCurve *BitCurve) Params() *elliptic.CurveParams {
 
 // IsOnCurve returns true if the given (x,y) lies on the BitCurve.
 func (BitCurve *BitCurve) IsOnCurve(x, y *big.Int) bool {
+	// Reject coordinates that are negative or not fully reduced modulo P.
+	// Without this bound, a malformed point supplied by a remote peer during
+	// the RLPx handshake can satisfy the curve equation modulo P yet feed an
+	// out-of-range value into the scalar-multiplication path. This is the
+	// chokepoint elliptic.Unmarshal uses to validate decoded points, so it
+	// guards both the Go and CGo ScalarMult paths. (CVE-2026-26313/26314/26315)
+	if x.Sign() < 0 || y.Sign() < 0 || x.Cmp(BitCurve.P) >= 0 || y.Cmp(BitCurve.P) >= 0 {
+		return false
+	}
 	// y² = x³ + b
 	y2 := new(big.Int).Mul(y, y) //y²
 	y2.Mod(y2, BitCurve.P)       //y²%P

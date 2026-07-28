@@ -32,6 +32,11 @@ import (
 const (
 	ETH66 = 66
 	ETH68 = 68
+	// ETH69 is the Metadium "meta/69" version that bundles blob-sidecar serving
+	// (M5) and meta-message replay protection (M12). It is negotiated only
+	// between Camellia-upgraded nodes; meta/66 and meta/68 remain supported for
+	// interop with the official v0.10.2 mainnet nodes during rollout.
+	ETH69 = 69
 )
 
 // ProtocolName is the official short name of the `eth` protocol used during
@@ -42,12 +47,14 @@ const ProtocolName = "meta"
 // ProtocolVersions are the supported versions of the `eth` protocol (first
 // is primary). ETH68 is primary; ETH66 is supported for backward compatibility
 // with existing Metadium mainnet nodes.
-var ProtocolVersions = []uint{ETH68, ETH66}
+var ProtocolVersions = []uint{ETH69, ETH68, ETH66}
 
 // protocolLengths are the number of message codes used by each protocol version.
 // Must cover the highest Metadium message code (TransactionsExMsg = 0x16 = 22),
 // so length is 23 for both versions.
-var protocolLengths = map[uint]uint64{ETH68: 23, ETH66: 23}
+// meta/69 reserves two extra codes (0x17, 0x18) for blob-sidecar request/reply
+// (M5, wired in P3), so its length is 25; meta/66 and meta/68 stay at 23.
+var protocolLengths = map[uint]uint64{ETH69: 25, ETH68: 23, ETH66: 23}
 
 // maxMessageSize is the maximum cap on the size of a protocol message.
 const maxMessageSize = 10 * 1024 * 1024
@@ -77,6 +84,10 @@ const (
 	EtcdAddMemberMsg  = 0x14
 	EtcdClusterMsg    = 0x15
 	TransactionsExMsg = 0x16
+
+	// meta/69 only (reserved here, handlers wired in P3 — M5 blob serving)
+	GetBlobSidecarsMsg = 0x17
+	BlobSidecarsMsg    = 0x18
 )
 
 var (

@@ -1731,6 +1731,26 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	} else if ctx.IsSet(SyncModeFlag.Name) {
 		cfg.SyncMode = *flags.GlobalTextMarshaler(ctx, SyncModeFlag.Name).(*downloader.SyncMode)
 	}
+	// go-metadium runs full sync only. The snap state-healing path (gentrie
+	// redesign, PRs #29313/#30258/#33428) is not backported to this base and is
+	// known to risk state corruption, so reject snap/fast on the Metadium
+	// networks. For fast new-node bring-up, bootstrap from a chain snapshot
+	// (see docs/sync-policy-and-snapshot-bootstrap.md). Upstream test networks
+	// and --dev are exempt.
+	if cfg.SyncMode != downloader.FullSync {
+		nonMetaNet := ctx.Bool(GoerliFlag.Name) || ctx.Bool(SepoliaFlag.Name) ||
+			ctx.Bool(HoleskyFlag.Name) || ctx.Bool(DeveloperFlag.Name)
+		if !nonMetaNet {
+			network := "mainnet"
+			if ctx.Bool(MetaTestnetFlag.Name) {
+				network = "testnet"
+			}
+			Fatalf("--%s=%v is not supported on the Metadium %s: go-metadium runs full sync only "+
+				"(snap state-healing is not backported). Use --%s=full, or bootstrap from a chain "+
+				"snapshot for fast bring-up (see docs/sync-policy-and-snapshot-bootstrap.md).",
+				SyncModeFlag.Name, cfg.SyncMode, network, SyncModeFlag.Name)
+		}
+	}
 	if ctx.IsSet(NetworkIdFlag.Name) {
 		cfg.NetworkId = ctx.Uint64(NetworkIdFlag.Name)
 	}

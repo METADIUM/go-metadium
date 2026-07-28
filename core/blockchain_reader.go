@@ -258,6 +258,17 @@ func (bc *BlockChain) GetReceiptsByHash(hash common.Hash) types.Receipts {
 	return receipts
 }
 
+// GetBlobSidecars retrieves the blob tx sidecars stored for a block by hash, or
+// nil if the block is unknown or has no stored sidecars. Used to serve meta/69
+// GetBlobSidecars requests (M5).
+func (bc *BlockChain) GetBlobSidecars(hash common.Hash) []*types.BlobTxSidecar {
+	number := rawdb.ReadHeaderNumber(bc.db, hash)
+	if number == nil {
+		return nil
+	}
+	return rawdb.ReadBlobSidecars(bc.db, hash, *number)
+}
+
 // GetUnclesInChain retrieves all the uncles from a given block backwards until
 // a specific distance is reached.
 func (bc *BlockChain) GetUnclesInChain(block *types.Block, length int) []*types.Header {

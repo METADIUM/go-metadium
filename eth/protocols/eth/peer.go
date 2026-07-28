@@ -20,6 +20,7 @@ import (
 	"math/big"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/ethereum/go-ethereum/common"
@@ -90,6 +91,13 @@ type Peer struct {
 
 	term chan struct{} // Termination channel to stop the broadcasters
 	lock sync.RWMutex  // Mutex protecting the internal fields
+
+	// meta/69 replay protection (M12). metaSendNonce is a per-connection
+	// monotonic counter stamped on outbound meta messages; metaRecvNonce is the
+	// highest nonce accepted from this peer. Both are meaningful only on meta/69
+	// links; on meta/66/68 the legacy unprotected packets are used.
+	metaSendNonce atomic.Uint64
+	metaRecvNonce atomic.Uint64
 }
 
 // NewPeer creates a wrapper for a network connection and negotiated  protocol

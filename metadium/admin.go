@@ -62,6 +62,7 @@ type metaAdmin struct {
 
 	bootNodeId  string // allowed to generate block without admin contract
 	bootAccount common.Address
+	genesisHash common.Hash // identifies the network (set in getGenesisInfo)
 	nodeInfo    *p2p.NodeInfo
 	registry    *metclient.RemoteContract
 	gov         *metclient.RemoteContract
@@ -223,6 +224,7 @@ func (ma *metaAdmin) getGenesisInfo() (string, common.Address, error) {
 	if err != nil {
 		return "", common.Address{}, err
 	}
+	ma.genesisHash = block.Hash()
 
 	var nodeId string
 	if len(block.Extra) < 64 {
@@ -1689,7 +1691,37 @@ func signBlock(height *big.Int, hash common.Hash, isPangyo bool) (coinbase commo
 	return
 }
 
+// acceptUnverifiableBlock decides whether a block whose governance data is
+// unavailable can be accepted without miner signature verification. Two
+// legitimate cases exist:
+//
+//	(a) genuinely pre-governance blocks: local state at height exists but the
+//	    registry/governance contracts are not deployed yet (early chain
+//	    segment during full sync from genesis)
+//	(b) snap-sync header gap: headers are verified ahead of state download,
+//	    so state at height is not available locally yet
+//
+// For (b), only heights at or beyond the locally executed head are accepted.
+// Below the executed head, state must be available; its absence means the
+// block cannot be tied to governance and is rejected, so a synced node never
+// accepts an unverified side-chain header.
+func (ma *metaAdmin) acceptUnverifiableBlock(ctx context.Context, height *big.Int) bool {
+	if _, err := ma.cli.BalanceAt(ctx, common.Address{}, height); err == nil {
+		// state is present, so the governance lookup failed because the
+		// contracts are genuinely not deployed at this height
+		return true
+	}
+	head, err := ma.cli.BlockNumber(ctx)
+	if err != nil {
+		return false
+	}
+	return height.Uint64() >= head
+}
+
 func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, isPangyo bool) bool {
+	if admin == nil {
+		return false
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1697,11 +1729,13 @@ func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, has
 	num := new(big.Int).Sub(height, common.Big1)
 	_, gov, _, _, _, err := admin.getRegGovEnvContracts(ctx, num)
 	if err != nil {
-		// Governance not yet initialized (early blocks before contract deployment).
-		// Allow these blocks — they are pre-governance and cannot be verified.
-		return true
+		// Governance data unavailable: either pre-governance blocks or a
+		// snap-sync gap. Accept only the cases that cannot be abused to
+		// bypass signature verification.
+		return admin.acceptUnverifiableBlock(ctx, num)
 	} else if count, err := admin.getInt(ctx, gov, num, "getMemberLength"); err != nil || count == 0 {
-		// No members registered yet — governance exists but is empty.
+		// Governance contracts exist in locally executed state but have no
+		// members yet (bootstrap phase); not remotely forgeable.
 		return true
 	}
 	// if minerNodeId is given, i.e. present in block header, use it,

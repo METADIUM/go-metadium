@@ -402,21 +402,28 @@ echo ""
 
 # ── I-07: EIP-3860 initcode limit ────────────────────────────
 log "--- I-07: EIP-3860: initcode size limit ---"
-INITCODE_HEX=$(python3 -c "print('0x' + '00' * 49153)" 2>/dev/null || true)
+# Metadium extends MaxCodeSize to 253952 (params/protocol_params.go), so the
+# EIP-3860 init-code limit is MaxInitCodeSize = 2*253952 = 507904 bytes — NOT
+# the stock 49152. Send one byte over the Metadium limit; EIP-3860 must reject
+# it, either at txpool admission (error) or during execution (status 0x0).
+OVERSIZE=507905   # MaxInitCodeSize (507904) + 1
+INITCODE_HEX=$(python3 -c "print('0x' + '00' * $OVERSIZE)" 2>/dev/null || true)
 if [[ -z "$INITCODE_HEX" ]]; then
   skip "I-07: initcode generation failed"
 else
-  TXHASH=$(send_tx "{\"from\":\"$FROM\",\"data\":\"$INITCODE_HEX\",\"gas\":\"0x500000\"}")
-  if [[ -z "$TXHASH" || "$TXHASH" == "0x" ]]; then
-    skip "I-07: tx send failed"
-  else
-    RECEIPT=$(wait_receipt "$TXHASH" 2>/dev/null || true)
+  RES=$(send_tx "{\"from\":\"$FROM\",\"data\":\"$INITCODE_HEX\",\"gas\":\"0x4000000\"}")
+  if [[ "$RES" == *"max initcode size exceeded"* ]]; then
+    pass "I-07: EIP-3860: oversized initcode ($OVERSIZE > 507904) rejected at submission"
+  elif [[ "$RES" == 0x* && ${#RES} -ge 66 ]]; then
+    RECEIPT=$(wait_receipt "$RES" 2>/dev/null || true)
     STATUS=$(echo "$RECEIPT" | cut -d'|' -f2)
     if [[ "$STATUS" == "0x0" ]]; then
-      pass "I-07: EIP-3860: 49153 bytes initcode rejected (status=0x0)"
+      pass "I-07: EIP-3860: oversized initcode ($OVERSIZE > 507904) rejected (status=0x0)"
     else
       fail "I-07: EIP-3860 not applied — oversized initcode accepted (status=$STATUS)"
     fi
+  else
+    skip "I-07: tx send failed for unrelated reason: $RES"
   fi
 fi
 echo ""

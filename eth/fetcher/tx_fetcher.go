@@ -17,7 +17,6 @@
 package fetcher
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -122,6 +121,15 @@ type txMetadata struct {
 	size uint32 // Transaction size in bytes
 }
 
+// txMetadataWithSeq wraps txMetadata with the announcement's arrival sequence
+// number, so fetches can be scheduled in arrival order to minimize nonce gaps
+// that would otherwise get transactions rejected by the pool (upstream #30125).
+// meta may be nil for pre-eth/68 (meta/66) announcements that carry no type/size.
+type txMetadataWithSeq struct {
+	meta *txMetadata
+	seq  uint64
+}
+
 // txRequest represents an in-flight transaction retrieval request destined to
 // a specific peers.
 type txRequest struct {
@@ -167,18 +175,20 @@ type TxFetcher struct {
 	drop    chan *txDrop
 	quit    chan struct{}
 
+	txSeq uint64 // Monotonic arrival-sequence counter for announcements (fetch ordering, #30125)
+
 	underpriced *lru.Cache[common.Hash, time.Time] // Transactions discarded as too cheap (don't re-fetch)
 
 	// Stage 1: Waiting lists for newly discovered transactions that might be
 	// broadcast without needing explicit request/reply round trips.
-	waitlist  map[common.Hash]map[string]struct{}    // Transactions waiting for an potential broadcast
-	waittime  map[common.Hash]mclock.AbsTime         // Timestamps when transactions were added to the waitlist
-	waitslots map[string]map[common.Hash]*txMetadata // Waiting announcements grouped by peer (DoS protection)
+	waitlist  map[common.Hash]map[string]struct{}           // Transactions waiting for an potential broadcast
+	waittime  map[common.Hash]mclock.AbsTime                // Timestamps when transactions were added to the waitlist
+	waitslots map[string]map[common.Hash]*txMetadataWithSeq // Waiting announcements grouped by peer (DoS protection)
 
 	// Stage 2: Queue of transactions that waiting to be allocated to some peer
 	// to be retrieved directly.
-	announces map[string]map[common.Hash]*txMetadata // Set of announced transactions, grouped by origin peer
-	announced map[common.Hash]map[string]struct{}    // Set of download locations, grouped by transaction hash
+	announces map[string]map[common.Hash]*txMetadataWithSeq // Set of announced transactions, grouped by origin peer
+	announced map[common.Hash]map[string]struct{}           // Set of download locations, grouped by transaction hash
 
 	// Stage 3: Set of transactions currently being retrieved, some which may be
 	// fulfilled and some rescheduled. Note, this step shares 'announces' from the
@@ -216,8 +226,8 @@ func NewTxFetcherForTests(
 		quit:        make(chan struct{}),
 		waitlist:    make(map[common.Hash]map[string]struct{}),
 		waittime:    make(map[common.Hash]mclock.AbsTime),
-		waitslots:   make(map[string]map[common.Hash]*txMetadata),
-		announces:   make(map[string]map[common.Hash]*txMetadata),
+		waitslots:   make(map[string]map[common.Hash]*txMetadataWithSeq),
+		announces:   make(map[string]map[common.Hash]*txMetadataWithSeq),
 		announced:   make(map[common.Hash]map[string]struct{}),
 		fetching:    make(map[common.Hash]string),
 		requests:    make(map[string]*txRequest),
@@ -314,8 +324,9 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 	// Push all the transactions into the pool, tracking underpriced ones to avoid
 	// re-requesting them and dropping the peer in case of malicious transfers.
 	var (
-		added = make([]common.Hash, 0, len(txs))
-		metas = make([]txMetadata, 0, len(txs))
+		added         = make([]common.Hash, 0, len(txs))
+		metas         = make([]txMetadata, 0, len(txs))
+		maliciousBlob bool
 	)
 	// proceed in batches
 	for i := 0; i < len(txs); i += 128 {
@@ -347,6 +358,13 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 			case errors.Is(err, txpool.ErrUnderpriced) || errors.Is(err, txpool.ErrReplaceUnderpriced):
 				underpriced++
 
+			case errors.Is(err, txpool.ErrInvalidBlob):
+				// Cryptographically invalid blob sidecar (KZG proof / commitment /
+				// count). An honest peer never sends this, so flag the peer to be
+				// dropped after the batch. (CVE-2026-22862/22868 hardening)
+				otherreject++
+				maliciousBlob = true
+
 			default:
 				otherreject++
 			}
@@ -365,6 +383,10 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 			time.Sleep(200 * time.Millisecond)
 			log.Debug("Peer delivering stale transactions", "peer", peer, "rejected", otherreject)
 		}
+	}
+	if maliciousBlob {
+		log.Debug("Dropping peer for invalid blob sidecar", "peer", peer)
+		f.dropPeer(peer)
 	}
 	select {
 	case f.cleanup <- &txDelivery{origin: peer, hashes: added, metas: metas, direct: direct}:
@@ -432,7 +454,20 @@ func (f *TxFetcher) loop() {
 			idleWait := len(f.waittime) == 0
 			_, oldPeer := f.announces[ann.origin]
 
+			// hasBlob tracks whether a blob-tx announcement was added this round so
+			// the wait timer is rescheduled to fetch it immediately (#30125).
+			hasBlob := false
+
+			// nextSeq hands out a monotonically increasing sequence number used to
+			// preserve announcement arrival order when scheduling fetches (#30125).
+			nextSeq := func() uint64 {
+				seq := f.txSeq
+				f.txSeq++
+				return seq
+			}
+
 			for i, hash := range ann.hashes {
+				meta := ann.metas[i]
 				// If the transaction is already downloading, add it to the list
 				// of possible alternates (in case the current retrieval fails) and
 				// also account it for the peer.
@@ -441,9 +476,11 @@ func (f *TxFetcher) loop() {
 
 					// Stage 2 and 3 share the set of origins per tx
 					if announces := f.announces[ann.origin]; announces != nil {
-						announces[hash] = ann.metas[i]
+						announces[hash] = &txMetadataWithSeq{meta: meta, seq: nextSeq()}
 					} else {
-						f.announces[ann.origin] = map[common.Hash]*txMetadata{hash: ann.metas[i]}
+						f.announces[ann.origin] = map[common.Hash]*txMetadataWithSeq{
+							hash: {meta: meta, seq: nextSeq()},
+						}
 					}
 					continue
 				}
@@ -454,9 +491,11 @@ func (f *TxFetcher) loop() {
 
 					// Stage 2 and 3 share the set of origins per tx
 					if announces := f.announces[ann.origin]; announces != nil {
-						announces[hash] = ann.metas[i]
+						announces[hash] = &txMetadataWithSeq{meta: meta, seq: nextSeq()}
 					} else {
-						f.announces[ann.origin] = map[common.Hash]*txMetadata{hash: ann.metas[i]}
+						f.announces[ann.origin] = map[common.Hash]*txMetadataWithSeq{
+							hash: {meta: meta, seq: nextSeq()},
+						}
 					}
 					continue
 				}
@@ -473,24 +512,40 @@ func (f *TxFetcher) loop() {
 					f.waitlist[hash][ann.origin] = struct{}{}
 
 					if waitslots := f.waitslots[ann.origin]; waitslots != nil {
-						waitslots[hash] = ann.metas[i]
+						waitslots[hash] = &txMetadataWithSeq{meta: meta, seq: nextSeq()}
 					} else {
-						f.waitslots[ann.origin] = map[common.Hash]*txMetadata{hash: ann.metas[i]}
+						f.waitslots[ann.origin] = map[common.Hash]*txMetadataWithSeq{
+							hash: {meta: meta, seq: nextSeq()},
+						}
 					}
 					continue
 				}
 				// Transaction unknown to the fetcher, insert it into the waiting list
 				f.waitlist[hash] = map[string]struct{}{ann.origin: {}}
-				f.waittime[hash] = f.clock.Now()
+
+				// Assign the current timestamp as the wait time, but for blob
+				// transactions skip the wait (set the timestamp into the past) so
+				// they are fetched promptly: blob txs are only announced, never
+				// broadcast, so waiting cannot satisfy them (#30125).
+				if meta == nil || meta.kind != types.BlobTxType {
+					f.waittime[hash] = f.clock.Now()
+				} else {
+					hasBlob = true
+					f.waittime[hash] = f.clock.Now() - mclock.AbsTime(txArriveTimeout)
+				}
 
 				if waitslots := f.waitslots[ann.origin]; waitslots != nil {
-					waitslots[hash] = ann.metas[i]
+					waitslots[hash] = &txMetadataWithSeq{meta: meta, seq: nextSeq()}
 				} else {
-					f.waitslots[ann.origin] = map[common.Hash]*txMetadata{hash: ann.metas[i]}
+					f.waitslots[ann.origin] = map[common.Hash]*txMetadataWithSeq{
+						hash: {meta: meta, seq: nextSeq()},
+					}
 				}
 			}
-			// If a new item was added to the waitlist, schedule it into the fetcher
-			if idleWait && len(f.waittime) > 0 {
+			// If a new item was added to the waitlist, schedule it into the fetcher.
+			// A blob announcement forces a reschedule even if the wait set was not
+			// previously idle, so its zero wait time fires right away (#30125).
+			if hasBlob || (idleWait && len(f.waittime) > 0) {
 				f.rescheduleWait(waitTimer, waitTrigger)
 			}
 			// If this peer is new and announced something already queued, maybe
@@ -514,7 +569,7 @@ func (f *TxFetcher) loop() {
 						if announces := f.announces[peer]; announces != nil {
 							announces[hash] = f.waitslots[peer][hash]
 						} else {
-							f.announces[peer] = map[common.Hash]*txMetadata{hash: f.waitslots[peer][hash]}
+							f.announces[peer] = map[common.Hash]*txMetadataWithSeq{hash: f.waitslots[peer][hash]}
 						}
 						delete(f.waitslots[peer], hash)
 						if len(f.waitslots[peer]) == 0 {
@@ -588,7 +643,8 @@ func (f *TxFetcher) loop() {
 			for i, hash := range delivery.hashes {
 				if _, ok := f.waitlist[hash]; ok {
 					for peer, txset := range f.waitslots {
-						if meta := txset[hash]; meta != nil {
+						if entry := txset[hash]; entry != nil && entry.meta != nil {
+							meta := entry.meta
 							if delivery.metas[i].kind != meta.kind {
 								log.Warn("Announced transaction type mismatch", "peer", peer, "tx", hash, "type", delivery.metas[i].kind, "ann", meta.kind)
 								f.dropPeer(peer)
@@ -614,7 +670,8 @@ func (f *TxFetcher) loop() {
 					delete(f.waittime, hash)
 				} else {
 					for peer, txset := range f.announces {
-						if meta := txset[hash]; meta != nil {
+						if entry := txset[hash]; entry != nil && entry.meta != nil {
+							meta := entry.meta
 							if delivery.metas[i].kind != meta.kind {
 								log.Warn("Announced transaction type mismatch", "peer", peer, "tx", hash, "type", delivery.metas[i].kind, "ann", meta.kind)
 								f.dropPeer(peer)
@@ -941,28 +998,27 @@ func (f *TxFetcher) forEachPeer(peers map[string]struct{}, do func(peer string))
 	}
 }
 
-// forEachAnnounce does a range loop over a map of announcements in production,
-// but during testing it does a deterministic sorted random to allow reproducing
-// issues.
-func (f *TxFetcher) forEachAnnounce(announces map[common.Hash]*txMetadata, do func(hash common.Hash, meta *txMetadata) bool) {
-	// If we're running production, use whatever Go's map gives us
-	if f.rand == nil {
-		for hash, meta := range announces {
-			if !do(hash, meta) {
-				return
-			}
-		}
-		return
+// forEachAnnounce loops over the given announcements in arrival (sequence) order,
+// invoking do for each until it returns false. Enforcing arrival ordering
+// minimizes transaction nonce-gaps, which would otherwise cause transactions to
+// be rejected by the txpool (#30125). The meta passed to do may be nil for
+// pre-eth/68 (meta/66) announcements that carry no type/size.
+func (f *TxFetcher) forEachAnnounce(announces map[common.Hash]*txMetadataWithSeq, do func(hash common.Hash, meta *txMetadata) bool) {
+	type announcement struct {
+		hash common.Hash
+		meta *txMetadata
+		seq  uint64
 	}
-	// We're running the test suite, make iteration deterministic
-	list := make([]common.Hash, 0, len(announces))
-	for hash := range announces {
-		list = append(list, hash)
+	// Process announcements by their arrival order
+	list := make([]announcement, 0, len(announces))
+	for hash, entry := range announces {
+		list = append(list, announcement{hash: hash, meta: entry.meta, seq: entry.seq})
 	}
-	sortHashes(list)
-	rotateHashes(list, f.rand.Intn(len(list)))
-	for _, hash := range list {
-		if !do(hash, announces[hash]) {
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].seq < list[j].seq
+	})
+	for i := range list {
+		if !do(list[i].hash, list[i].meta) {
 			return
 		}
 	}
@@ -972,29 +1028,6 @@ func (f *TxFetcher) forEachAnnounce(announces map[common.Hash]*txMetadata, do fu
 // used in tests to simulate random map iteration but keep it deterministic.
 func rotateStrings(slice []string, n int) {
 	orig := make([]string, len(slice))
-	copy(orig, slice)
-
-	for i := 0; i < len(orig); i++ {
-		slice[i] = orig[(i+n)%len(orig)]
-	}
-}
-
-// sortHashes sorts a slice of hashes. This method is only used in tests in order
-// to simulate random map iteration but keep it deterministic.
-func sortHashes(slice []common.Hash) {
-	for i := 0; i < len(slice); i++ {
-		for j := i + 1; j < len(slice); j++ {
-			if bytes.Compare(slice[i][:], slice[j][:]) > 0 {
-				slice[i], slice[j] = slice[j], slice[i]
-			}
-		}
-	}
-}
-
-// rotateHashes rotates the contents of a slice by n steps. This method is only
-// used in tests to simulate random map iteration but keep it deterministic.
-func rotateHashes(slice []common.Hash, n int) {
-	orig := make([]common.Hash, len(slice))
 	copy(orig, slice)
 
 	for i := 0; i < len(orig); i++ {

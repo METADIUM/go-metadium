@@ -81,6 +81,11 @@ func (h *ethHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 	case *eth.PooledTransactionsResponse:
 		return h.txFetcher.Enqueue(peer.ID(), *packet, true)
 
+	case *eth.BlobSidecarsPacket:
+		// meta/69 blob-sidecar reply (M5): correlate with the in-flight request.
+		(*handler)(h).deliverBlobSidecars(packet.RequestId, packet.Sidecars)
+		return nil
+
 	default:
 		return fmt.Errorf("unexpected eth packet type: %T", packet)
 	}

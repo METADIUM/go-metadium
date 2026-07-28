@@ -139,15 +139,24 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	return nil
 }
 
+// ValidateBlobSidecar verifies a blob sidecar received over the wire against the
+// expected versioned hashes: blob/commitment/proof counts, commitment-to-hash
+// derivation, and the KZG proofs. It wraps ErrInvalidBlob on any failure so
+// callers (e.g. the meta/69 blob-sidecar fetcher, M5/#31219) can drop the
+// offending peer. It is the exported entry point for validateBlobSidecar.
+func ValidateBlobSidecar(hashes []common.Hash, sidecar *types.BlobTxSidecar) error {
+	return validateBlobSidecar(hashes, sidecar)
+}
+
 func validateBlobSidecar(hashes []common.Hash, sidecar *types.BlobTxSidecar) error {
 	if len(sidecar.Blobs) != len(hashes) {
-		return fmt.Errorf("invalid number of %d blobs compared to %d blob hashes", len(sidecar.Blobs), len(hashes))
+		return fmt.Errorf("%w: invalid number of %d blobs compared to %d blob hashes", ErrInvalidBlob, len(sidecar.Blobs), len(hashes))
 	}
 	if len(sidecar.Commitments) != len(hashes) {
-		return fmt.Errorf("invalid number of %d blob commitments compared to %d blob hashes", len(sidecar.Commitments), len(hashes))
+		return fmt.Errorf("%w: invalid number of %d blob commitments compared to %d blob hashes", ErrInvalidBlob, len(sidecar.Commitments), len(hashes))
 	}
 	if len(sidecar.Proofs) != len(hashes) {
-		return fmt.Errorf("invalid number of %d blob proofs compared to %d blob hashes", len(sidecar.Proofs), len(hashes))
+		return fmt.Errorf("%w: invalid number of %d blob proofs compared to %d blob hashes", ErrInvalidBlob, len(sidecar.Proofs), len(hashes))
 	}
 	// Blob quantities match up, validate that the provers match with the
 	// transaction hash before getting to the cryptography
@@ -156,7 +165,7 @@ func validateBlobSidecar(hashes []common.Hash, sidecar *types.BlobTxSidecar) err
 		commit := (*kzg4844.Commitment)(sidecar.Commitments[i])
 		computed := kzg4844.CalcBlobHashV1(hasher, commit)
 		if vhash != computed {
-			return fmt.Errorf("blob %d: computed hash %#x mismatches transaction one %#x", i, computed, vhash)
+			return fmt.Errorf("%w: blob %d computed hash %#x mismatches transaction one %#x", ErrInvalidBlob, i, computed, vhash)
 		}
 	}
 	// Blob commitments match with the hashes in the transaction, verify the
@@ -166,7 +175,7 @@ func validateBlobSidecar(hashes []common.Hash, sidecar *types.BlobTxSidecar) err
 		commit := (*kzg4844.Commitment)(sidecar.Commitments[i])
 		proof := (*kzg4844.Proof)(sidecar.Proofs[i])
 		if err := kzg4844.VerifyBlobProof(*blob, *commit, *proof); err != nil {
-			return fmt.Errorf("invalid blob %d: %v", i, err)
+			return fmt.Errorf("%w: blob %d failed KZG proof: %v", ErrInvalidBlob, i, err)
 		}
 	}
 	return nil

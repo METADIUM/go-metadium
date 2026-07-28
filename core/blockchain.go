@@ -224,6 +224,13 @@ type BlockChain struct {
 	// Set externally after construction to enable sidecar storage on block import.
 	BlobSidecarFn func(txHash common.Hash) *types.BlobTxSidecar
 
+	// MissingBlobSidecarFn is invoked after a block is imported whose blob txs
+	// could not all be sourced locally (sidecars missing from the pool). A higher
+	// layer (the eth handler, meta/69 M5) uses it to fetch the missing sidecars
+	// from peers and persist them, closing the data-availability gap. It must not
+	// block. Set externally after construction; nil disables wire fetching.
+	MissingBlobSidecarFn func(block *types.Block)
+
 	hc            *HeaderChain
 	rmLogsFeed    event.Feed
 	chainFeed     event.Feed
@@ -1853,11 +1860,17 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		blockValidationTimer.Update(vtime - (triehash + trieUpdate))    // The time spent on block validation
 
 		// Collect blob sidecars from the pool BEFORE writing the block
-		// (the pool evicts included txs on chain head update).
-		var blobSidecars []*types.BlobTxSidecar
-		if bc.BlobSidecarFn != nil {
-			for _, tx := range block.Transactions() {
-				if tx.Type() == types.BlobTxType {
+		// (the pool evicts included txs on chain head update). Count blob txs
+		// independently so we can detect sidecars that could not be sourced
+		// locally and trigger a wire fetch below (meta/69 M5).
+		var (
+			blobSidecars []*types.BlobTxSidecar
+			blobTxCount  int
+		)
+		for _, tx := range block.Transactions() {
+			if tx.Type() == types.BlobTxType {
+				blobTxCount++
+				if bc.BlobSidecarFn != nil {
 					if sc := bc.BlobSidecarFn(tx.Hash()); sc != nil {
 						blobSidecars = append(blobSidecars, sc)
 					}
@@ -1883,6 +1896,12 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		// Persist collected blob sidecars.
 		if len(blobSidecars) > 0 {
 			rawdb.WriteBlobSidecars(bc.db, block.Hash(), block.NumberU64(), blobSidecars)
+		}
+		// If the block carries blob txs whose sidecars could not be sourced
+		// locally, ask a higher layer to fetch the missing data over the wire
+		// (meta/69 M5). The callback must not block.
+		if blobTxCount > 0 && len(blobSidecars) < blobTxCount && bc.MissingBlobSidecarFn != nil {
+			bc.MissingBlobSidecarFn(block)
 		}
 		// Update the metrics touched during block commit
 		accountCommitTimer.Update(statedb.AccountCommits)   // Account commits are complete, we can mark them
