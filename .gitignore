@@ -69,3 +69,6 @@ tests/spec-tests/
 
 # Build artifacts
 /core/txpool/blobpool/blobpool/
+
+# Operator-local notes (never commit: addresses, accounts, keys, schedules)
+*.local.md
