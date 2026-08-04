@@ -149,9 +149,14 @@ function start ()
     [ -f "$d/.rc" ] && source "$d/.rc"
     [ "$COINBASE" = "" ] && COINBASE="" || COINBASE="--miner.etherbase $COINBASE"
 
-    RPCOPT="--http --http.addr ${HTTP_ADDR:-127.0.0.1}"
+    # Bind address for the JSON-RPC / WS endpoints. Override per node in .rc,
+    # e.g. HTTP_ADDR=127.0.0.1 on a block producer that must not expose RPC.
+    # The default stays 0.0.0.0 so that a node whose .rc predates these knobs
+    # keeps serving the endpoint it served before, rather than silently
+    # dropping to loopback on the next restart.
+    RPCOPT="--http --http.addr ${HTTP_ADDR:-0.0.0.0}"
     [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --http.port ${PORT}"
-    RPCOPT="${RPCOPT} --ws --ws.addr ${WS_ADDR:-127.0.0.1}"
+    RPCOPT="${RPCOPT} --ws --ws.addr ${WS_ADDR:-0.0.0.0}"
     [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --ws.port $((${PORT}+10))"
     [ "$NONCE_LIMIT" = "" ] || NONCE_LIMIT="--noncelimit $NONCE_LIMIT"
     [ "$BOOT_NODES" = "" ] || BOOT_NODES="--bootnodes $BOOT_NODES"
@@ -252,6 +257,18 @@ case "$1" in
 "stop")
     echo -n "stopping..."
     dir=$(get_data_dir $2)
+    # Shutdown knobs, overridable per node in $dir/.rc. The defaults reproduce
+    # the historical behaviour: wait 200s for SIGTERM, then SIGKILL.
+    #   STOP_TIMEOUT  seconds to wait for the node to exit on its own
+    #   STOP_FORCE    1 = escalate to SIGKILL, 0 = never SIGKILL and fail instead
+    #   LOCK_TIMEOUT  seconds to wait for the chaindata lock to be released
+    # A node with a large database can need well over 200s to flush; SIGKILL
+    # there means an unclean database, so raise STOP_TIMEOUT (or set
+    # STOP_FORCE=0) instead of letting the escalation fire.
+    [ -f "${dir}/.rc" ] && source "${dir}/.rc"
+    STOP_TIMEOUT=${STOP_TIMEOUT:-200}
+    STOP_FORCE=${STOP_FORCE:-1}
+    LOCK_TIMEOUT=${LOCK_TIMEOUT:-200}
     PIDS=$(get_gmet_pids ${dir})
     if [ ! "$PIDS" = "" ]; then
         # check if we're the miner or leader
@@ -292,20 +309,29 @@ if (admin.metadiumInfo != null && admin.metadiumInfo.self != null) {
 	${dir}/bin/gmet attach --exec "$CMD" ipc:${dir}/gmet.ipc | grep -v "undefined"
 	echo $PIDS | xargs -L1 kill
     fi
-    for i in {1..200}; do
+    i=0
+    while [ $i -lt $STOP_TIMEOUT ]; do
 	PIDS=$(get_gmet_pids ${dir})
 	[ "$PIDS" = "" ] && break
 	echo -n "."
 	sleep 1
+	i=$((i + 1))
     done
     PIDS=$(get_gmet_pids ${dir})
     if [ ! "$PIDS" = "" ]; then
+	if [ "$STOP_FORCE" = "0" ]; then
+	    echo "still running after ${STOP_TIMEOUT}s, refusing to SIGKILL (STOP_FORCE=0)."
+	    exit 1
+	fi
+	echo -n "forcing..."
 	echo $PIDS | xargs -L1 kill -9
     fi
     # wait until geth/chaindata is free
-    for i in {1..200}; do
+    i=0
+    while [ $i -lt $LOCK_TIMEOUT ]; do
 	lsof ${dir}/geth/chaindata/LOG 2>&1 | grep -q gmet > /dev/null 2>&1 || break
 	sleep 1
+	i=$((i + 1))
     done
     echo "done."
     ;;
@@ -323,7 +349,8 @@ if (admin.metadiumInfo != null && admin.metadiumInfo.self != null) {
     ;;
 
 "restart")
-    $0 stop $2
+    # Never start a second instance on top of a node that refused to stop.
+    $0 stop $2 || exit 1
     start $2
     ;;
 
