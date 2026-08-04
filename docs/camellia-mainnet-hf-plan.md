@@ -95,6 +95,14 @@ no extra step is needed, provided it is running a binary that knows the fork.
 - **Verify every node before the activation day**: `gmet version` plus the
   `Camellia Fork: #<block>` line in the startup banner. This also catches any node that was
   rebuilt or restored from an image carrying an older binary.
+- **Upgrade snapshot-publishing nodes first.** Any node that periodically stops, tars its
+  chaindata and publishes it for others to bootstrap from must be on the fork-aware binary
+  *before* its first publish after activation — otherwise it follows a pre-fork chain past the
+  activation block and hands that chaindata to downstream users. Their next publishing window,
+  not the activation day, is the real deadline.
+- **Bootstrapping after the fork** requires the fork-aware binary. A pre-fork chaindata
+  snapshot is fine as a starting point (see the section above), but pairing it with a pre-fork
+  binary stalls at the activation block. Say so in the release notes.
 
 ### Relative timeline
 
