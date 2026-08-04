@@ -202,6 +202,31 @@ function get_gmet_pids ()
     ps axww | grep -v grep | grep "gmet.*datadir.*${1}" | awk '{print $1}'
 }
 
+# Print the pids of gmet processes holding this node's chaindata open.
+#
+# This identifies a running node by an open file instead of by its command
+# line, so it stays correct when the get_gmet_pids match fails. The two
+# together are what lets "stop" tell "already stopped" apart from "running,
+# but I could not recognize it" - see the "stop" case below.
+function get_chaindata_holders ()
+{
+    local d=$1 log=$1/geth/chaindata/LOG p
+
+    [ -e "$log" ] || return 0
+    if command -v lsof > /dev/null 2>&1; then
+	lsof -- "$log" 2>/dev/null | awk 'NR > 1 && $1 == "gmet" { print $2 }' | sort -u
+	return 0
+    fi
+    # No lsof: fall back to /proc. Only processes owned by the caller are
+    # visible there, which covers the normal case of gmet.sh having started
+    # the node itself.
+    for p in /proc/[0-9]*; do
+	[ "$(cat $p/comm 2>/dev/null)" = "gmet" ] || continue
+	readlink $p/fd/* 2>/dev/null | grep -q "^${d}/geth/chaindata/" && \
+	    echo ${p#/proc/}
+    done
+}
+
 function do_nodes ()
 {
     LHN=$(hostname)
@@ -270,7 +295,23 @@ case "$1" in
     STOP_FORCE=${STOP_FORCE:-1}
     LOCK_TIMEOUT=${LOCK_TIMEOUT:-200}
     PIDS=$(get_gmet_pids ${dir})
-    if [ ! "$PIDS" = "" ]; then
+    if [ "$PIDS" = "" ]; then
+	# Nothing matched the command line. Before reporting success, confirm the
+	# node really is down: an empty match used to be indistinguishable from a
+	# running node whose command line we failed to recognize, and in that case
+	# stop returned 0 without ever sending a signal. Callers that archive the
+	# chaindata afterwards then tar a live database, which yields a snapshot
+	# with no state trie. Refuse loudly instead of stopping nothing quietly.
+	HOLDERS=$(get_chaindata_holders ${dir})
+	if [ ! "$HOLDERS" = "" ]; then
+	    echo "failed."
+	    echo "$0: ${dir}/geth/chaindata is open by gmet pid(s) $(echo $HOLDERS)," >&2
+	    echo "$0: but no matching command line was found, so the node was left" >&2
+	    echo "$0: running. Refusing to report a stop that did not happen." >&2
+	    ps -o pid=,args= -p $(echo $HOLDERS | tr ' ' ',') >&2
+	    exit 1
+	fi
+    else
         # check if we're the miner or leader
         CMD='
 function check_if_mining() {
@@ -329,10 +370,16 @@ if (admin.metadiumInfo != null && admin.metadiumInfo.self != null) {
     # wait until geth/chaindata is free
     i=0
     while [ $i -lt $LOCK_TIMEOUT ]; do
-	lsof ${dir}/geth/chaindata/LOG 2>&1 | grep -q gmet > /dev/null 2>&1 || break
+	HOLDERS=$(get_chaindata_holders ${dir})
+	[ "$HOLDERS" = "" ] && break
 	sleep 1
 	i=$((i + 1))
     done
+    if [ ! "$(get_chaindata_holders ${dir})" = "" ]; then
+	echo "failed."
+	echo "$0: ${dir}/geth/chaindata is still open after ${LOCK_TIMEOUT}s." >&2
+	exit 1
+    fi
     echo "done."
     ;;
 
