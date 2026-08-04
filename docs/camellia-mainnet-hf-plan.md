@@ -2,7 +2,8 @@
 
 **Status:** proposal — the fork block is **not finalized yet**
 **Date:** 2026-08-03
-**Target binary:** `v1.1.0-stable` (`e3f51b3e6`)
+**Target binary:** `v1.1.0-stable` (`e3f51b3e6`) **plus the shutdown deadlock fix** — see
+[Shutdown behaviour](#shutdown-behaviour). `e3f51b3e6` on its own must not be rolled out.
 
 ## Current state
 
@@ -80,6 +81,54 @@ hardcoded mainnet config overrides it, and `CheckCompatible` passes while the re
 behind the fork block. Such a node catches up and applies Camellia at the fork block normally —
 no extra step is needed, provided it is running a binary that knows the fork.
 
+## Shutdown behaviour
+
+A rolling upgrade stops every node once, so shutdown has to be reliable. Two problems were
+found and fixed while preparing this rollout.
+
+### The node could ignore SIGTERM indefinitely
+
+`metclient.CallContract` held the global `metaminer.TrieAccessMu` read lock across the whole
+contract read, and its callers pass a context with no deadline. `contract.Cli` is an in-process
+client, so once the node begins shutting down the call can stop being answered — and the read
+lock is then never released:
+
+- the admin loop parks inside the call while holding the read lock
+- `writeBlockWithState`, running under the downloader's block import, blocks on the write lock
+- that goroutine is one of the downloader's fetchers, so `Downloader.Cancel` never returns
+- `chainSyncer.loop` never releases its `handler.wg` entry, so `handler.Stop` blocks in
+  `wg.Wait` and `node.Close` never returns
+
+The process then survives SIGTERM indefinitely and only dies on SIGKILL — the unclean shutdown
+the lock exists to prevent. The fix bounds the lock hold with a deadline and releases it via
+`defer`; the lock itself is unchanged, so the state-commit serialisation it provides is intact.
+
+Reproduced on isolated nodes and confirmed with a goroutine dump: **4 of 4 hangs before the
+fix** (LevelDB and RocksDB alike, surviving 150–200 s+), **9 of 9 clean shutdowns after**
+(1–17 s, each logging `Blockchain stopped`).
+
+### The control script escalated to SIGKILL on a fixed timer
+
+`gmet.sh stop` waited a hardcoded 200 s and then sent SIGKILL unconditionally, so any node
+slower than that — or wedged, as above — was killed with an unclean database. The timeout and
+the escalation are now `.rc` settings (`STOP_TIMEOUT`, `STOP_FORCE`, `LOCK_TIMEOUT`) whose
+defaults reproduce the old behaviour. With `STOP_FORCE=0` the stop fails instead of killing,
+which also required fixing `restart`: it previously ran `start` regardless of whether the stop
+succeeded, which would leave two nodes running against one datadir.
+
+### Operational rule
+
+**Treat a stop as complete only when the process is gone _and_ the log shows
+`Blockchain stopped`.** A missing `Blockchain stopped` after `Got interrupt` means the shutdown
+did not finish, and anything that reads the datadir afterwards — a tarball, a snapshot, a
+restore — is being taken from a node that never flushed. Automation that stops a node in order
+to copy its data must verify this rather than assume it, and must not fall through to the copy
+when verification fails.
+
+If a node does hang, capture `kill -QUIT <pid>` before resorting to SIGKILL: the runtime dumps
+every goroutine to stderr, which is what identified the cause above. The IPC socket is already
+closed by that point, so `debug.stacks()` over IPC is not available.
+
 ## Rollout
 
 - **One tarball per database engine.** The fleet runs both LevelDB and RocksDB builds; a
@@ -137,3 +186,9 @@ no extra step is needed, provided it is running a binary that knows the fork.
 - upstream #30125 — arrival-order transaction fetching
 
 It stays backward compatible with the current mainnet release over meta/66 and meta/68.
+
+On top of that, the rollout binary must carry the shutdown fixes described in
+[Shutdown behaviour](#shutdown-behaviour): the bounded `TrieAccessMu` hold in
+`metadium/metclient`, and the configurable stop behaviour in `metadium/scripts/gmet.sh`. The
+deadlock only manifests while stopping, which is why months of steady-state operation did not
+surface it.
