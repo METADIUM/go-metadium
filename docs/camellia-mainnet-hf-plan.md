@@ -1,7 +1,7 @@
 # Camellia Mainnet Hard Fork — Activation Plan
 
-**Status:** proposal — the fork block is **not finalized yet**
-**Date:** 2026-08-03
+**Status:** confirmed — fork block `117,764,000`, activating 2026-08-27 12:00 KST
+**Date:** 2026-08-03 (decision recorded 2026-08-06)
 **Target binary:** `v1.1.0-stable` (`e3f51b3e6`) **plus the shutdown deadlock fix** — see
 [Shutdown behaviour](#shutdown-behaviour). `e3f51b3e6` on its own must not be rolled out.
 
@@ -9,7 +9,7 @@
 
 | Network | `CamelliaBlock` | Notes |
 |---|---|---|
-| Mainnet | `nil` | not activated (`params/config.go`) |
+| Mainnet | `117,764,000` | activates 2026-08-27 12:00 KST (`params/config.go`) |
 | Testnet | `86,449,000` | activated 2026-05-20 12:00 KST, ~2.5 months with no incident |
 
 ## Choosing the fork block
@@ -28,8 +28,13 @@ last 1k / 10k / 100k blocks), **43,200 blocks/day**.
 Conventions, both following the testnet precedent: round the fork block to the nearest
 **1,000**, and pick an activation time of **12:00 KST**.
 
-**Recommendation: `117,764,000` (2026-08-27 12:00 KST)** — leaves a two-week window for
+**Confirmed: `117,764,000` (2026-08-27 12:00 KST)** — leaves a two-week window for
 exchange notice while keeping enough lead time to build, stage and roll out.
+
+Re-measured 2026-08-06 14:51 KST against a synced node: head **116,861,511**, block time
+**2.000014 s** over the last 100k / 500k / 1M blocks. The exact block for 12:00 KST is
+`117,763,549`; rounded to the nearest 1,000 the fork lands at roughly **12:15 KST**, which
+keeps activation inside working hours.
 
 ## Code change
 
