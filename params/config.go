@@ -166,7 +166,7 @@ var (
 		PangyoBlock:         big.NewInt(73_225_410),
 		ApplepieBlock:       big.NewInt(73_225_410),
 		BokbunjaBlock:       big.NewInt(73_225_410),
-		CamelliaBlock:       nil, // Not yet activated on mainnet
+		CamelliaBlock:       big.NewInt(117_764_000), // 2026-08-27 12:00 KST mainnet activation
 		Ethash:              new(EthashConfig),
 	}
 
