@@ -1,0 +1,44 @@
+# Metadium gmet node -- systemd unit template (non-sealer defaults).
+#
+# Install:
+#   cp gmet.service /etc/systemd/system/gmet.service
+#   systemctl daemon-reload && systemctl enable --now gmet
+#
+# Sealers (block producers) additionally install gmet-bp-override.conf as
+# /etc/systemd/system/gmet.service.d/override.conf and stay disabled at boot,
+# so a sealer never rejoins consensus without an operator's judgement.
+#
+# The stop policy must match the .rc knobs (STOP_TIMEOUT / STOP_FORCE) that
+# gmet.sh honors: TimeoutStopSec has to exceed STOP_TIMEOUT and SendSIGKILL
+# must stay off, otherwise systemd SIGKILLs the node mid-flush and the .rc
+# no-force policy is silently voided.
+
+[Unit]
+Description=Metadium gmet node
+Documentation=file:///opt/meta/bin/gmet.sh
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/opt/meta
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/meta
+# Refuse to start a node whose volume lost its config, chain data or identity
+# (e.g. a replaced instance-store volume) -- that recovery needs an operator.
+ExecStartPre=/usr/bin/test -f /opt/meta/.rc
+ExecStartPre=/usr/bin/test -d /opt/meta/geth/chaindata
+ExecStartPre=/usr/bin/test -s /opt/meta/geth/nodekey
+ExecStart=/opt/meta/bin/gmet.sh start-inner /opt/meta
+ExecStop=/opt/meta/bin/gmet.sh stop /opt/meta
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=1830
+SendSIGKILL=no
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
