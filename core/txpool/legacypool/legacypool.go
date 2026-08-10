@@ -53,10 +53,11 @@ const (
 	// to validate whether they fit into the pool or not.
 	//
 	// Metadium pins this to params.MaxTransactionSize (256KB) rather than the
-	// upstream 4*txSlotSize (128KB): a max-size contract deployment must be
-	// admitted, not rejected with ErrOversizedData before the EIP-3860 check.
-	// The named constant is deliberate, and its comment documents the exact
-	// headroom over MaxCodeSize -- see params.MaxTransactionSize.
+	// upstream 4*txSlotSize (128KB): a max-size contract deployment with a
+	// small constructor is admitted rather than rejected with ErrOversizedData
+	// before the EIP-3860 check. The named constant is deliberate, and its
+	// comment documents the exact scope of the guarantee (8KB headroom over
+	// MaxCodeSize) -- see params.MaxTransactionSize.
 	txMaxSize = params.MaxTransactionSize
 )
 
