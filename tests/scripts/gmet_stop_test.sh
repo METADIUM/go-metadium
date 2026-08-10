@@ -85,6 +85,28 @@ check "escalates and succeeds" 0 $RC "forcing" "$OUT"
 alive $HOLDER && { echo "  FAIL  survived SIGKILL"; FAIL=$((FAIL + 1)); } \
     || { echo "  PASS  process is gone"; PASS=$((PASS + 1)); }
 
+echo "== F. unresolvable data dir: refuse, and do not touch other nodes =="
+# A decoy that the degraded 'gmet.*datadir.*' pattern would have matched:
+# with an empty dir the old code killed every gmet on the host.
+start_holder "$T/node/bin/gmet --datadir /some/other/node"
+DECOY=$HOLDER
+OUT=$(timeout 60 "$GMETSH" stop "/does/not/exist" 2>&1); RC=$?
+check "refuses on unresolvable dir" 1 $RC "cannot resolve" "$OUT"
+alive $DECOY && { echo "  PASS  unrelated node untouched"; PASS=$((PASS + 1)); } \
+    || { echo "  FAIL  unrelated node was killed"; FAIL=$((FAIL + 1)); }
+kill -9 $DECOY 2>/dev/null; sleep 0.3
+
+echo "== G. renamed binary (gmet-rocksdb) holding chaindata: still detected =="
+# lsof truncates COMMAND to 9 chars ("gmet-rock"); exact-matching 'gmet'
+# could never see this documented deploy practice.
+cp /bin/sleep "$T/node/bin/gmet-rocksdb"
+( exec 9< "$LOG"; exec -a "gmet-rocksdb" "$T/node/bin/gmet-rocksdb" 600 ) > /dev/null 2>&1 &
+HOLDER=$!; HOLDERS="$HOLDERS $HOLDER"; sleep 0.5
+OUT=$(run_stop STOP_TIMEOUT=3 LOCK_TIMEOUT=3); RC=$?
+check "refuses instead of claiming success" 1 $RC "did not happen" "$OUT"
+check "names the renamed holder pid" 1 $RC "$HOLDER" "$OUT"
+kill -9 $HOLDER 2>/dev/null; sleep 0.3
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ $FAIL -eq 0 ]
