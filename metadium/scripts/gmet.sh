@@ -142,13 +142,19 @@ function start ()
     if [ -x "$d/bin/gmet" ]; then
 	GMET="$d/bin/gmet"
     else
-	echo "Cannot find gmet"
-	return
+	# Fail loudly: under systemd (Type=simple, Restart=on-failure) a zero
+	# exit here would count as a successful run and the unit would go
+	# inactive without ever starting a node.
+	echo "Cannot find gmet" >&2
+	return 1
     fi
 
     [ -f "$d/.rc" ] && source "$d/.rc"
     [ "$COINBASE" = "" ] && COINBASE="" || COINBASE="--miner.etherbase $COINBASE"
 
+    # Bind address for the JSON-RPC / WS endpoints. The default is loopback
+    # (the audited, safe-by-default choice); a node that serves RPC/WS
+    # externally opts in per node with HTTP_ADDR/WS_ADDR in its .rc.
     RPCOPT="--http --http.addr ${HTTP_ADDR:-127.0.0.1}"
     [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --http.port ${PORT}"
     RPCOPT="${RPCOPT} --ws --ws.addr ${WS_ADDR:-127.0.0.1}"
@@ -195,6 +201,40 @@ function start ()
 function get_gmet_pids ()
 {
     ps axww | grep -v grep | grep "gmet.*datadir.*${1}" | awk '{print $1}'
+}
+
+# Print the pids of gmet processes holding this node's chaindata open.
+#
+# This identifies a running node by an open file instead of by its command
+# line, so it stays correct when the get_gmet_pids match fails. The two
+# together are what lets "stop" tell "already stopped" apart from "running,
+# but I could not recognize it" - see the "stop" case below.
+function get_chaindata_holders ()
+{
+    # Resolve symlinks first: /proc fd paths come back fully resolved, and
+    # lsof is asked for the resolved file, so a symlinked datadir
+    # (/opt/meta -> /data/meta) or a relative path would otherwise never match.
+    local d=$(readlink -f -- "$1") log p fd
+    [ "$d" = "" ] && return 0
+    log=$d/geth/chaindata/LOG
+
+    [ -e "$log" ] || return 0
+    if command -v lsof > /dev/null 2>&1; then
+	# Prefix match, not exact: lsof truncates COMMAND to 9 chars and
+	# renamed binaries (gmet-rocksdb) are a documented deploy practice.
+	lsof -- "$log" 2>/dev/null | \
+	    awk 'NR > 1 && index($1, "gmet") == 1 { print $2 }' | sort -u
+	return 0
+    fi
+    # No lsof: fall back to /proc. Only processes owned by the caller are
+    # visible there, which covers the normal case of gmet.sh having started
+    # the node itself.
+    for p in /proc/[0-9]*; do
+	case "$(cat $p/comm 2>/dev/null)" in gmet*) ;; *) continue;; esac
+	for fd in $(readlink $p/fd/* 2>/dev/null); do
+	    case "$fd" in "${d}/geth/chaindata/"*) echo ${p#/proc/}; break;; esac
+	done
+    done
 }
 
 function do_nodes ()
@@ -252,8 +292,51 @@ case "$1" in
 "stop")
     echo -n "stopping..."
     dir=$(get_data_dir $2)
+    # A data dir we cannot resolve must stop the world here: passed further
+    # down, an empty ${dir} degrades the get_gmet_pids pattern to
+    # "gmet.*datadir.*", which matches every gmet on the host and would kill
+    # unrelated nodes on a multi-node machine.
+    if [ "${dir}" = "" ]; then
+	echo "failed."
+	echo "$0: cannot resolve the data directory for '$2'" >&2
+	exit 1
+    fi
+    # Shutdown knobs. Precedence: environment > $dir/.rc > default, so an
+    # operator can raise a knob for a single invocation
+    # (STOP_TIMEOUT=1800 gmet.sh stop ...) without editing the node's .rc.
+    # The defaults reproduce the historical behaviour: wait 200s for SIGTERM,
+    # then SIGKILL.
+    #   STOP_TIMEOUT  seconds to wait for the node to exit on its own
+    #   STOP_FORCE    1 = escalate to SIGKILL, 0 = never SIGKILL and fail instead
+    #   LOCK_TIMEOUT  seconds to wait for the chaindata lock to be released
+    # A node with a large database can need well over 200s to flush; SIGKILL
+    # there means an unclean database, so raise STOP_TIMEOUT (or set
+    # STOP_FORCE=0) instead of letting the escalation fire.
+    ENV_STOP_TIMEOUT=$STOP_TIMEOUT
+    ENV_STOP_FORCE=$STOP_FORCE
+    ENV_LOCK_TIMEOUT=$LOCK_TIMEOUT
+    [ -f "${dir}/.rc" ] && source "${dir}/.rc"
+    STOP_TIMEOUT=${ENV_STOP_TIMEOUT:-${STOP_TIMEOUT:-200}}
+    STOP_FORCE=${ENV_STOP_FORCE:-${STOP_FORCE:-1}}
+    LOCK_TIMEOUT=${ENV_LOCK_TIMEOUT:-${LOCK_TIMEOUT:-200}}
     PIDS=$(get_gmet_pids ${dir})
-    if [ ! "$PIDS" = "" ]; then
+    if [ "$PIDS" = "" ]; then
+	# Nothing matched the command line. Before reporting success, confirm the
+	# node really is down: an empty match used to be indistinguishable from a
+	# running node whose command line we failed to recognize, and in that case
+	# stop returned 0 without ever sending a signal. Callers that archive the
+	# chaindata afterwards then tar a live database, which yields a snapshot
+	# with no state trie. Refuse loudly instead of stopping nothing quietly.
+	HOLDERS=$(get_chaindata_holders ${dir})
+	if [ ! "$HOLDERS" = "" ]; then
+	    echo "failed."
+	    echo "$0: ${dir}/geth/chaindata is open by gmet pid(s) $(echo $HOLDERS)," >&2
+	    echo "$0: but no matching command line was found, so the node was left" >&2
+	    echo "$0: running. Refusing to report a stop that did not happen." >&2
+	    ps -o pid=,args= -p $(echo $HOLDERS | tr ' ' ',') >&2
+	    exit 1
+	fi
+    else
         # check if we're the miner or leader
         CMD='
 function check_if_mining() {
@@ -289,24 +372,48 @@ if (admin.metadiumInfo != null && admin.metadiumInfo.self != null) {
   }
   check_if_mining()
 }'
-	${dir}/bin/gmet attach --exec "$CMD" ipc:${dir}/gmet.ipc | grep -v "undefined"
+	# The handoff is best-effort: a node whose RPC stack is wedged accepts
+	# the IPC connection but never answers, and an unbounded attach here
+	# would eat the whole stop budget before the first SIGTERM is sent.
+	if command -v timeout > /dev/null 2>&1; then
+	    timeout 30 ${dir}/bin/gmet attach --exec "$CMD" ipc:${dir}/gmet.ipc | \
+		grep -v "undefined"
+	else
+	    ${dir}/bin/gmet attach --exec "$CMD" ipc:${dir}/gmet.ipc | \
+		grep -v "undefined"
+	fi
 	echo $PIDS | xargs -L1 kill
     fi
-    for i in {1..200}; do
+    i=0
+    while [ $i -lt $STOP_TIMEOUT ]; do
 	PIDS=$(get_gmet_pids ${dir})
 	[ "$PIDS" = "" ] && break
 	echo -n "."
 	sleep 1
+	i=$((i + 1))
     done
     PIDS=$(get_gmet_pids ${dir})
     if [ ! "$PIDS" = "" ]; then
+	if [ "$STOP_FORCE" = "0" ]; then
+	    echo "still running after ${STOP_TIMEOUT}s, refusing to SIGKILL (STOP_FORCE=0)."
+	    exit 1
+	fi
+	echo -n "forcing..."
 	echo $PIDS | xargs -L1 kill -9
     fi
     # wait until geth/chaindata is free
-    for i in {1..200}; do
-	lsof ${dir}/geth/chaindata/LOG 2>&1 | grep -q gmet > /dev/null 2>&1 || break
+    i=0
+    while [ $i -lt $LOCK_TIMEOUT ]; do
+	HOLDERS=$(get_chaindata_holders ${dir})
+	[ "$HOLDERS" = "" ] && break
 	sleep 1
+	i=$((i + 1))
     done
+    if [ ! "$(get_chaindata_holders ${dir})" = "" ]; then
+	echo "failed."
+	echo "$0: ${dir}/geth/chaindata is still open after ${LOCK_TIMEOUT}s." >&2
+	exit 1
+    fi
     echo "done."
     ;;
 
@@ -323,7 +430,8 @@ if (admin.metadiumInfo != null && admin.metadiumInfo.self != null) {
     ;;
 
 "restart")
-    $0 stop $2
+    # Never start a second instance on top of a node that refused to stop.
+    $0 stop $2 || exit 1
     start $2
     ;;
 

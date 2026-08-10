@@ -6,11 +6,18 @@ Metadium blockchain node implementation, forked from [go-ethereum](https://githu
 
 Metadium is a Proof-of-Authority (PoA) blockchain with on-chain governance. It uses a custom consensus layer built on top of go-ethereum's ethash engine, with block signing via node keys and reward distribution through governance smart contracts.
 
-**Current version:** 1.0.0-stable (Camellia fork)
+**Current version:** 1.1.1-stable (Camellia fork)
 
 ## Camellia Fork
 
 Camellia is Metadium's hard fork that activates Ethereum's Shanghai and Cancun EIPs in a single upgrade:
+
+| Network | Activation block | Activation time |
+|---------|------------------|-----------------|
+| Testnet | 86,449,000 | 2026-05-20 12:00 KST (activated) |
+| Mainnet | 117,764,000 | 2026-08-27 12:00 KST (scheduled) |
+
+Nodes must run this release before the mainnet activation block; older binaries will follow a diverging chain.
 
 | EIP | Feature | Status |
 |-----|---------|--------|
