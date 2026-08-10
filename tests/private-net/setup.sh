@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-GMET_BIN="${GMET_BIN:-/data/jsong/gmet-rocksdb}"
+GMET_BIN="${GMET_BIN:-/path/to/gmet}"
 USE_ROCKSDB="${USE_ROCKSDB:-1}"
 NETWORKID=1337
 PASSWORD="privatenet123"

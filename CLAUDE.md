@@ -35,9 +35,8 @@ Metadium blockchain node implementation (go-ethereum v1.13.14 fork). Camellia fo
 - Mixed tx e2e: `go run ./tests/private-net-poa/mixed-tx-e2e/ http://localhost:8545`
 
 ## Branch Strategy
-- `master` -- upstream sync (official releases)
-- `develop` -- main development branch
-- `feature/geth-v1.13.14` -- Camellia fork implementation (current)
+- `master` -- release line (official releases, tagged)
+- `dev` -- main development branch; PRs target `dev`, then `dev` is promoted to `master` per release
 
 ## Project Management
 - Method: file
