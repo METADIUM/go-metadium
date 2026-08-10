@@ -8,10 +8,18 @@
 # /etc/systemd/system/gmet.service.d/override.conf and stay disabled at boot,
 # so a sealer never rejoins consensus without an operator's judgement.
 #
-# The stop policy must match the .rc knobs (STOP_TIMEOUT / STOP_FORCE) that
-# gmet.sh honors: TimeoutStopSec has to exceed STOP_TIMEOUT and SendSIGKILL
-# must stay off, otherwise systemd SIGKILLs the node mid-flush and the .rc
-# no-force policy is silently voided.
+# The stop policy must match the .rc knobs (STOP_TIMEOUT / STOP_FORCE /
+# LOCK_TIMEOUT) that gmet.sh honors: ExecStop can legitimately take up to
+# 30s (leader handoff) + STOP_TIMEOUT + LOCK_TIMEOUT, so keep
+# TimeoutStopSec above that sum when raising the knobs, and keep SendSIGKILL
+# off, otherwise systemd SIGKILLs the node mid-flush and the .rc no-force
+# policy is silently voided. The default 1830 covers the default knobs
+# (200+200) with wide margin.
+#
+# First boot of a brand-new node: the ExecStartPre gates below require an
+# existing chaindata and nodekey (restore a snapshot / place the nodekey, or
+# run the node once by hand via gmet.sh), so provision the volume before
+# `systemctl enable --now gmet` -- a bare volume fails the gates by design.
 
 [Unit]
 Description=Metadium gmet node
@@ -29,6 +37,9 @@ Group=ubuntu
 WorkingDirectory=/opt/meta
 # Refuse to start a node whose volume lost its config, chain data or identity
 # (e.g. a replaced instance-store volume) -- that recovery needs an operator.
+# The binary check keeps a partial deploy (scripts without gmet) from being
+# reported as a successful start.
+ExecStartPre=/usr/bin/test -x /opt/meta/bin/gmet
 ExecStartPre=/usr/bin/test -f /opt/meta/.rc
 ExecStartPre=/usr/bin/test -d /opt/meta/geth/chaindata
 ExecStartPre=/usr/bin/test -s /opt/meta/geth/nodekey
