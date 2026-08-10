@@ -5,7 +5,7 @@
 #   (on server) bash update-node.sh [--rocksdb|--leveldb] [--datadir <path>] [--restart]
 #
 # Example:
-#   bash update-node.sh --rocksdb --datadir /data/jsong/gmet-rocksdb-data --restart
+#   bash update-node.sh --rocksdb --datadir /path/to/datadir --restart
 #
 # Prerequisites: Go 1.21+, librocksdb-dev (for rocksdb build)
 
@@ -40,10 +40,10 @@ log "Repository: $REPO_DIR"
 
 # Pull latest code
 cd "$REPO_DIR"
-log "git pull origin develop..."
+log "git pull origin dev..."
 git fetch origin
-git checkout develop
-git pull origin develop
+git checkout dev
+git pull origin dev
 
 # Build
 if [[ $USE_ROCKSDB -eq 1 ]]; then
@@ -84,8 +84,8 @@ if [[ $DO_RESTART -eq 1 ]]; then
 
   log "Restarting node..."
   log "Replace the binary and start the node:"
-  log "  cp $REPO_DIR/$BINARY_NAME /data/jsong/$BINARY_NAME"
-  log "  /data/jsong/$BINARY_NAME [original start options]"
+  log "  cp $REPO_DIR/$BINARY_NAME <install-dir>/$BINARY_NAME"
+  log "  <install-dir>/$BINARY_NAME [original start options]"
   log ""
   log "To avoid detectDb() LOG file issues:"
   log "  Use --userocksdb 1 flag to always use RocksDB regardless of LOG file"

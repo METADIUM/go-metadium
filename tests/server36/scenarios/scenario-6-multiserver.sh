@@ -1,27 +1,48 @@
 #!/usr/bin/env bash
 # scenario-6-multiserver.sh - Distributed Performance Benchmark
-# Runs scenario-6 simultaneously on servers 31, 33, and 36 (same hardware).
-# Collects results from all three and generates a combined comparison report.
+# Runs scenario-6 simultaneously on several identical hosts and collects the
+# results into a combined comparison report.
 #
 # Prerequisites:
-#   - SSH key access to all three servers
-#   - tests/server36/ deployed and setup.sh run on each server
-#   - Binaries (gmet-leveldb, gmet-rocksdb, gmet-old-built) on each server
+#   - SSH key access to every target host
+#   - tests/server36/ deployed and setup.sh run on each host
+#   - Binaries (gmet-leveldb, gmet-rocksdb, gmet-old-built) on each host
 #
-# Usage: ./scenario-6-multiserver.sh
+# Configuration (set in the environment, e.g. an untracked local file):
+#   SSH_KEY   path to the SSH private key for the targets
+#   SERVERS   space-separated user@host list (also sets the count)
+#   SERVER_NAMES  optional space-separated short names, one per SERVERS entry
+#
+# Usage:
+#   SSH_KEY=~/.ssh/id_bench \
+#   SERVERS="user@host-a user@host-b user@host-c" \
+#   ./scenario-6-multiserver.sh
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/aws-jsong-nopass.pem}"
-SERVERS=(
-  "cplabs@10.150.255.36"
-  "jsong@10.150.255.31"
-  "jsuhr@10.150.255.33"
-)
-SERVER_NAMES=(server36 server31 server33)
+SSH_KEY="${SSH_KEY:?set SSH_KEY to the private key for the benchmark hosts}"
+read -r -a SERVERS <<< "${SERVERS:?set SERVERS to a space-separated user@host list}"
+read -r -a SERVER_NAMES <<< "${SERVER_NAMES:-}"
+if [ "${#SERVER_NAMES[@]}" -ne 0 ] && [ "${#SERVER_NAMES[@]}" -ne "${#SERVERS[@]}" ]; then
+  log "WARNING: SERVER_NAMES has ${#SERVER_NAMES[@]} entries but SERVERS has ${#SERVERS[@]}; deriving names from hosts."
+  SERVER_NAMES=()
+fi
+if [ "${#SERVER_NAMES[@]}" -ne "${#SERVERS[@]}" ]; then
+  # Derive a short name from each host; suffix the index on collision so that
+  # two accounts on one host (alice@h1 / bob@h1) don't clobber each other's
+  # result dir, log, and report column.
+  declare -A _seen=()
+  SERVER_NAMES=()
+  for i in "${!SERVERS[@]}"; do
+    n="${SERVERS[$i]##*@}"
+    [ -n "${_seen[$n]:-}" ] && n="${n}-${i}"
+    _seen[$n]=1
+    SERVER_NAMES+=("$n")
+  done
+fi
 
 SCENARIO="scenario-6-multiserver"
 RESULT_DIR="$RESULTS_DIR/$SCENARIO"
@@ -38,33 +59,42 @@ run_remote_bench() {
   local remote_results="/tmp/go-metadium-bench-results-$name"
 
   log "[$name] Starting benchmark on $server..."
+  local rc=0
   ssh -i "$SSH_KEY" -o ConnectTimeout=30 "$server" "
     cd ~/go-metadium/tests/server36
     RESULTS_DIR=$remote_results bash scenarios/scenario-6.sh 2>&1
-  " > "$RESULT_DIR/$name-bench.log" 2>&1
+  " > "$RESULT_DIR/$name-bench.log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    log "[$name] Benchmark FAILED (rc=$rc); see $name-bench.log"
+    return "$rc"
+  fi
   log "[$name] Benchmark complete."
 
-  # Fetch results
+  # Fetch results (a fetch failure is not a benchmark failure)
   scp -i "$SSH_KEY" -r "$server:$remote_results/scenario-6-performance/" \
-    "$RESULT_DIR/$name/" 2>/dev/null || true
+    "$RESULT_DIR/$name/" 2>/dev/null || log "[$name] WARNING: results fetch failed."
   log "[$name] Results fetched."
 }
 
-# Launch all benchmarks in parallel
+# Launch all benchmarks in parallel (one per configured host, any count)
 PIDS=()
-for i in 0 1 2; do
+for i in "${!SERVERS[@]}"; do
   run_remote_bench "${SERVERS[$i]}" "${SERVER_NAMES[$i]}" &
   PIDS+=($!)
 done
 
-# Wait for all to complete
+# Wait for all to complete, counting failures so the summary reflects reality
+PASS=0; FAIL=0
 for pid in "${PIDS[@]}"; do
-  wait "$pid" || true
+  if wait "$pid"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 done
 
 log "All server benchmarks complete. Generating combined report..."
 
-# Generate combined comparison
+# Generate combined comparison. REPORT_TS is computed here (not inside the
+# quoted heredoc, where $(...) would be emitted literally) and read from the
+# environment by the python block.
+export REPORT_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 python3 - "$RESULT_DIR" "${SERVER_NAMES[@]}" <<'PYEOF' > "$RESULT_DIR/combined-comparison.md"
 import sys, json, re, os
 
@@ -133,13 +163,14 @@ for label, phase_key in phases:
 
 print()
 print("## Notes")
-print("- All servers are identical hardware: Intel i5-11400T 12-core, 15GB RAM")
-print("- Results variation indicates OS/scheduling noise, not hardware differences")
-print(f"- Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)")
+print("- Cross-host variation may reflect hardware or OS/scheduling differences;")
+print("  interpret against the actual specs of the configured hosts.")
+print(f"- Generated: {os.environ.get('REPORT_TS', 'unknown')}")
 PYEOF
 
 log "Combined report: $RESULT_DIR/combined-comparison.md"
 cat "$RESULT_DIR/combined-comparison.md"
 
-write_summary "$RESULT_DIR" 1 0 "Multi-server benchmark complete"
-log "=== Scenario 6 Multi-Server complete ==="
+write_summary "$RESULT_DIR" "$PASS" "$FAIL" "Multi-server benchmark: $PASS ok, $FAIL failed"
+log "=== Scenario 6 Multi-Server complete ($PASS ok, $FAIL failed) ==="
+[ "$FAIL" -eq 0 ]

@@ -578,9 +578,9 @@ type TxData interface {
 
 ## 13. 참조 문서
 
-- `/Users/jsong/dev/jsong1230-github/go-metadium/README.md`
-- `/Users/jsong/dev/jsong1230-github/go-metadium/FEEDELEGATION.md`
-- `/Users/jsong/dev/jsong1230-github/go-metadium/docs/vrf.md`
-- `/Users/jsong/dev/jsong1230-github/go-metadium/docs/modernization-plan.md`
-- `/Users/jsong/dev/jsong1230-github/go-metadium/go.mod`
-- `/Users/jsong/dev/jsong1230-github/go-metadium/Makefile`
+- `README.md`
+- `FEEDELEGATION.md`
+- `docs/vrf.md`
+- `docs/modernization-plan.md`
+- `go.mod`
+- `Makefile`

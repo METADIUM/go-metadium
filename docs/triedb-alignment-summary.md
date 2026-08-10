@@ -120,7 +120,7 @@ Build is clean with `CGO_ENABLED=0 go build ./...`.
 
 ### 2. PoA Private Network — Basic Operation
 
-3-node Docker PoA network (`chainId=1337`, `camelliaBlock=100`) on gram-jsong:
+3-node Docker PoA network (`chainId=1337`, `camelliaBlock=100`) on a dev host:
 
 | Check | Result |
 |---|---|

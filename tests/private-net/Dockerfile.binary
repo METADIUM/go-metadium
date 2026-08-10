@@ -4,7 +4,7 @@
 #   (run from the tests/private-net directory)
 #
 # Or specify a server binary path:
-#   sudo docker build -f Dockerfile.binary --build-arg BINARY_PATH=/data/jsong/gmet-rocksdb -t gmet-rocksdb:latest .
+#   sudo docker build -f Dockerfile.binary --build-arg BINARY_PATH=/path/to/gmet -t gmet-rocksdb:latest .
 
 FROM debian:bookworm-slim
 
