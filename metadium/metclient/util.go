@@ -245,7 +245,7 @@ func GetContractReceipt(ctx context.Context, cli *ethclient.Client, hash common.
 }
 
 func Deploy(ctx context.Context, cli *ethclient.Client, from *keystore.Key,
-	contractData *ContractData, args []interface{}, gas, _gasPrice int) (
+	contractData *ContractData, args []interface{}, gas int, _gasPrice int64) (
 	hash common.Hash, err error) {
 	// pull transaction parameters from metadium node
 	chainId, gasPrice, nonce, err := GetOpportunisticTxParams(
@@ -255,7 +255,7 @@ func Deploy(ctx context.Context, cli *ethclient.Client, from *keystore.Key,
 	}
 
 	if _gasPrice > 0 {
-		gasPrice = big.NewInt(int64(_gasPrice))
+		gasPrice = big.NewInt(_gasPrice)
 	}
 
 	var data []byte
@@ -436,14 +436,14 @@ func SendContract(ctx context.Context, contract *RemoteContract, method string,
 	return
 }
 
-func SendValue(ctx context.Context, cli *ethclient.Client, from *keystore.Key, to common.Address, amount, gas, _gasPrice int) (hash common.Hash, err error) {
+func SendValue(ctx context.Context, cli *ethclient.Client, from *keystore.Key, to common.Address, amount, gas int, _gasPrice int64) (hash common.Hash, err error) {
 	chainId, gasPrice, nonce, err := GetOpportunisticTxParams(
 		ctx, cli, from.Address, false, true)
 	if err != nil {
 		return
 	}
 	if _gasPrice > 0 {
-		gasPrice = big.NewInt(int64(_gasPrice))
+		gasPrice = big.NewInt(_gasPrice)
 	}
 
 	var tx, stx *types.Transaction

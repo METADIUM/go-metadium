@@ -88,7 +88,7 @@ func deployGovernanceContracts(cliCtx *cli.Context) error {
 	// get command line arguments
 	url := cliCtx.String(urlFlag.Name)
 	gas := cliCtx.Int(gasFlag.Name)
-	gasPrice := cliCtx.Int(gasPriceFlag.Name)
+	gasPrice := cliCtx.Int64(gasPriceFlag.Name)
 
 	if gas <= 0 {
 		gas = 0xF000000

@@ -503,7 +503,8 @@ func limitMaxRss(max int64) {
 		if err != nil {
 			log.Error("Getrusage() failed:", "reason", err)
 		} else {
-			if rusage.Maxrss > max {
+			// Maxrss is int32 on 32-bit platforms and int64 on 64-bit ones.
+			if int64(rusage.Maxrss) > max {
 				log.Info("Calling FreeOSMemory()", "Max", max, "Rusage.Maxrss", rusage.Maxrss)
 				godebug.FreeOSMemory()
 			}

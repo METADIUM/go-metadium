@@ -189,9 +189,9 @@ To give password in command line, use "--password <(echo <password>)".
 		Name:  "gas",
 		Usage: "gas amount",
 	}
-	gasPriceFlag = &cli.IntFlag{
+	gasPriceFlag = &cli.Int64Flag{
 		Name:  "gasprice",
-		Usage: "gas price",
+		Usage: "gas price", // in wei; exceeds a 32-bit int
 	}
 	urlFlag = &cli.StringFlag{
 		Name:  "url",
@@ -504,7 +504,7 @@ func deployContract(ctx *cli.Context) error {
 	passwd := ctx.String(utils.PasswordFileFlag.Name)
 	url := ctx.String(urlFlag.Name)
 	gas := ctx.Int(gasFlag.Name)
-	gasPrice := ctx.Int(gasPriceFlag.Name)
+	gasPrice := ctx.Int64(gasPriceFlag.Name)
 
 	if len(url) == 0 || ctx.Args().Len() != 3 {
 		return fmt.Errorf("Invalid Arguments")
