@@ -51,7 +51,13 @@ const (
 	// non-trivial consequences: larger transactions are significantly harder and
 	// more expensive to propagate; larger transactions also take more resources
 	// to validate whether they fit into the pool or not.
-	txMaxSize = 4 * txSlotSize // 128KB
+	//
+	// Metadium pins this to params.MaxTransactionSize (256KB) rather than the
+	// upstream 4*txSlotSize (128KB): a max-size contract deployment must be
+	// admitted, not rejected with ErrOversizedData before the EIP-3860 check.
+	// The named constant is deliberate, and its comment documents the exact
+	// headroom over MaxCodeSize -- see params.MaxTransactionSize.
+	txMaxSize = params.MaxTransactionSize
 )
 
 var (

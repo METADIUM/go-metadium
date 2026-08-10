@@ -130,6 +130,27 @@ const (
 
 	MaxCodeSize = 253952 // Maximum bytecode to permit for a contract (Metadium: extended)
 
+	// MaxTransactionSize is the txpool admission ceiling for a single
+	// transaction (Metadium: fork-specific), restoring the pre-Camellia 256KB
+	// value. It sits above MaxCodeSize (253952) so a creation tx for a max-size
+	// contract is admitted rather than rejected with ErrOversizedData before
+	// the EIP-3860 check.
+	//
+	// Scope of the guarantee: the headroom over MaxCodeSize is 8192 bytes, so a
+	// max-size contract deployment carrying more than ~8KB of ABI-encoded
+	// constructor arguments is still pool-rejected, and consensus-legal initcode
+	// in (256KB, MaxInitCodeSize=2*MaxCodeSize] likewise. This restores
+	// pre-Camellia parity, it does not make every consensus-legal deployment
+	// submittable -- raising it further would widen propagation cost beyond the
+	// historical behaviour.
+	//
+	// This is a named, grep-able constant on purpose: the value lived here
+	// pre-Camellia, a go-ethereum rebase silently reverted the pool ceiling to
+	// the upstream default, and the regression only surfaced at release time. A
+	// bare 8*txSlotSize would be invisible to the next rebase; this name (and
+	// TestTxMaxSizeCoversMaxCode) is what makes it fail loudly.
+	MaxTransactionSize = 262144 // 256KB
+
 	// Precompiled contract gas prices
 
 	EcrecoverGas        uint64 = 3000 // Elliptic curve sender recovery gas price
