@@ -503,8 +503,10 @@ func limitMaxRss(max int64) {
 		if err != nil {
 			log.Error("Getrusage() failed:", "reason", err)
 		} else {
-			// Maxrss is int32 on 32-bit platforms and int64 on 64-bit ones.
-			if int64(rusage.Maxrss) > max {
+			// Maxrss is int32 on 32-bit platforms and int64 on 64-bit
+			// ones, so the conversion is required there and redundant
+			// here -- which is why unconvert must be silenced.
+			if int64(rusage.Maxrss) > max { //nolint:unconvert
 				log.Info("Calling FreeOSMemory()", "Max", max, "Rusage.Maxrss", rusage.Maxrss)
 				godebug.FreeOSMemory()
 			}
