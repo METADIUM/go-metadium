@@ -267,6 +267,5 @@ CamelliaBlock: big.NewInt(<block_number>),
 
 ## 참고
 
-- 설계 문서: `~/.gstack/projects/jsong1230-go-metadium/jsong-feature-camellia-design-20260403-235011.md`
 - EIP-4788 (Beacon roots), EIP-4895 (Withdrawals): PoA 특성상 N/A, 의도적 생략
 - 다음 fork (Doraji/Prague): 이 체크리스트를 템플릿으로 재활용
