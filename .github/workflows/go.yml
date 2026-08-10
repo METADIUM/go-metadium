@@ -11,13 +11,16 @@ jobs:
   build:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v5
         with:
           go-version: 1.21.4
       - name: Run tests
-        run: go test -short ./...
+        # The v1.13.14 tree's triedb/pathdb suite runs long on 32-bit and
+        # blows go test's default 10m per-package timeout on this runner;
+        # it passes, it is just slow.
+        run: go test -short -timeout 20m ./...
         env:
           GOOS: linux
           GOARCH: 386
