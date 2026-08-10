@@ -304,9 +304,9 @@ func IsArray(x interface{}) bool {
 }
 
 // callContractTimeout bounds how long a single contract read may hold
-// metaminer.TrieAccessMu for reading. A governance read against the in-process
-// client is a sub-millisecond operation, so this only ever fires when the RPC
-// stack has stopped answering.
+// metaminer.TrieAccessMu for reading. Once the lock is held, a governance read
+// against the in-process client is a sub-millisecond operation, so this only
+// ever fires when the RPC stack has stopped answering.
 const callContractTimeout = 30 * time.Second
 
 // callContractSerialized runs the EVM read while holding metaminer.TrieAccessMu
@@ -324,15 +324,20 @@ const callContractTimeout = 30 * time.Second
 // deadlocks node shutdown (the process then only dies via SIGKILL). Bounding
 // the call with a deadline, and releasing via defer so a panic cannot leak the
 // lock either, keeps the writer able to make progress.
+//
+// The deadline is armed only after the lock is acquired. Time spent waiting on
+// a slow writer must not consume the budget: reward reads arrive with no
+// deadline of their own, and calculateRewards treats any error as "governance
+// not initialized" and quietly falls back to fees-only distribution, so an
+// expired-while-waiting context would let a >30s triedb commit turn a
+// correct-but-slow read into a wrong-rewards block. Blocking on the lock is
+// the pre-existing, safe behaviour; only the hold is bounded.
 func callContractSerialized(ctx context.Context, contract *RemoteContract,
 	msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, callContractTimeout)
-		defer cancel()
-	}
 	metaminer.TrieAccessMu.RLock()
 	defer metaminer.TrieAccessMu.RUnlock()
+	ctx, cancel := context.WithTimeout(ctx, callContractTimeout)
+	defer cancel()
 	return contract.Cli.CallContract(ctx, msg, block)
 }
 
