@@ -70,5 +70,6 @@ tests/spec-tests/
 # Build artifacts
 /core/txpool/blobpool/blobpool/
 
-# Operator-local notes (never commit: addresses, accounts, keys, schedules)
-*.local.md
+# Operator-local files (never commit: addresses, accounts, keys, schedules)
+# Any *.local.* suffix, not just .md -- covers ad-hoc .sh/.html scratch too.
+*.local.*

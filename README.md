@@ -128,7 +128,6 @@ docs/               Camellia fork documentation and test reports
 - [Camellia Fork Test Report](docs/camellia-test-report.md) -- full test results and bug fixes
 - [Camellia Fork Summary](docs/camellia-fork-summary.md) -- design overview
 - [Fee Delegation](FEEDELEGATION.md) -- Type 22 transaction specification
-- [TODOS](TODOS.md) -- tracked work items and deployment roadmap
 
 ## Upstream
 
