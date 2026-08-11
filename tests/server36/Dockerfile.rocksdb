@@ -1,0 +1,21 @@
+FROM debian:bookworm-slim
+
+# gmet-rocksdb is dynamically linked against librocksdb.so.7.8
+# Debian Bookworm ships librocksdb7.8 in its default repos
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    librocksdb7.8 \
+    libsnappy1v5 \
+    liblz4-1 \
+    libzstd1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY gmet /usr/local/bin/gmet
+RUN chmod +x /usr/local/bin/gmet
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8545 30303 30303/udp
+
+ENTRYPOINT ["/entrypoint.sh"]

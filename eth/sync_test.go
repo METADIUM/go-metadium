@@ -17,7 +17,6 @@
 package eth
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,33 +28,28 @@ import (
 )
 
 // Tests that snap sync is disabled after a successful sync cycle.
-func TestSnapSyncDisabling65(t *testing.T) { testSnapSyncDisabling(t, eth.ETH65, snap.SNAP1) }
-func TestSnapSyncDisabling66(t *testing.T) { testSnapSyncDisabling(t, eth.ETH66, snap.SNAP1) }
+func TestSnapSyncDisabling68(t *testing.T) { testSnapSyncDisabling(t, eth.ETH68, snap.SNAP1) }
 
 // Tests that snap sync gets disabled as soon as a real block is successfully
 // imported into the blockchain.
 func testSnapSyncDisabling(t *testing.T, ethVer uint, snapVer uint) {
-	if testing.Short() {
-		t.Skip("skipping test in short mode")
-	}
-
 	t.Parallel()
 
 	// Create an empty handler and ensure it's in snap sync mode
 	empty := newTestHandler()
-	if atomic.LoadUint32(&empty.handler.snapSync) == 0 {
+	if !empty.handler.snapSync.Load() {
 		t.Fatalf("snap sync disabled on pristine blockchain")
 	}
 	defer empty.close()
 
 	// Create a full handler and ensure snap sync ends up disabled
 	full := newTestHandlerWithBlocks(1024)
-	if atomic.LoadUint32(&full.handler.snapSync) == 1 {
+	if full.handler.snapSync.Load() {
 		t.Fatalf("snap sync not disabled on non-empty blockchain")
 	}
 	defer full.close()
 
-	// Sync up the two handlers via both `meta` and `snap`
+	// Sync up the two handlers via both `eth` and `snap`
 	caps := []p2p.Cap{{Name: "meta", Version: ethVer}, {Name: "snap", Version: snapVer}}
 
 	emptyPipeEth, fullPipeEth := p2p.MsgPipe()
@@ -95,7 +89,7 @@ func testSnapSyncDisabling(t *testing.T, ethVer uint, snapVer uint) {
 	if err := empty.handler.doSync(op); err != nil {
 		t.Fatal("sync failed:", err)
 	}
-	if atomic.LoadUint32(&empty.handler.snapSync) == 1 {
+	if empty.handler.snapSync.Load() {
 		t.Fatalf("snap sync not disabled after successful synchronisation")
 	}
 }

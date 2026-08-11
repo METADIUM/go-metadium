@@ -62,6 +62,7 @@ type metaAdmin struct {
 
 	bootNodeId  string // allowed to generate block without admin contract
 	bootAccount common.Address
+	genesisHash common.Hash // identifies the network (set in getGenesisInfo)
 	nodeInfo    *p2p.NodeInfo
 	registry    *metclient.RemoteContract
 	gov         *metclient.RemoteContract
@@ -223,6 +224,7 @@ func (ma *metaAdmin) getGenesisInfo() (string, common.Address, error) {
 	if err != nil {
 		return "", common.Address{}, err
 	}
+	ma.genesisHash = block.Hash()
 
 	var nodeId string
 	if len(block.Extra) < 64 {
@@ -632,6 +634,38 @@ func (ma *metaAdmin) getTRSListGovContracts(ctx context.Context, height *big.Int
 	gov.To.SetBytes(addr.Bytes())
 
 	return
+}
+
+// getFinalizedBlockNumber returns the finalized block number for the given
+// head, computed as headNum - (GovNodeCount/2 + 1) — the BFT majority lookback
+// on a PoA chain. Governance state is served from coinbaseEnodeCache (keyed by
+// gov.modifiedBlock), so repeated calls within the same governance epoch are
+// cheap. Returns nil if the admin is uninitialized, the contract read fails,
+// or head is shallower than the lookback.
+func getFinalizedBlockNumber(headNum *big.Int) *big.Int {
+	if admin == nil || headNum == nil {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, gov, err := admin.getTRSListGovContracts(ctx, headNum)
+	if err != nil {
+		return nil
+	}
+	entry, err := getCoinbaseEnodeCache(ctx, headNum, gov)
+	if err != nil {
+		return nil
+	}
+	nodeCount := len(entry.nodes)
+	if nodeCount == 0 {
+		return nil
+	}
+	lookback := uint64(nodeCount/2 + 1)
+	n := headNum.Uint64()
+	if n < lookback {
+		return nil
+	}
+	return new(big.Int).SetUint64(n - lookback)
 }
 
 func (ma *metaAdmin) getTrsParameters(height *big.Int) (*trsParameters, error) {
@@ -1244,7 +1278,6 @@ func (ma *metaAdmin) update() error {
 		if data.blockNum != 0 {
 			ma.lastBlock = data.blockNum
 		}
-
 	} else {
 		return err
 	}
@@ -1252,17 +1285,18 @@ func (ma *metaAdmin) update() error {
 }
 
 func StartAdmin(stack *node.Node, datadir string) {
+	if params.ConsensusMethod == params.ConsensusPoW {
+		return
+	}
 	if !(params.ConsensusMethod == params.ConsensusPoA ||
 		params.ConsensusMethod == params.ConsensusETCD ||
 		params.ConsensusMethod == params.ConsensusPBFT) {
 		utils.Fatalf("Invalid Consensus Method: %d\n", params.ConsensusMethod)
 	}
 
-	rpcCli, err := stack.Attach()
-	if err != nil {
-		utils.Fatalf("Failed to attach to self: %v", err)
-	}
+	rpcCli := stack.Attach()
 
+	var err error
 	cli := ethclient.NewClient(rpcCli)
 	admin = &metaAdmin{
 		stack: stack,
@@ -1364,7 +1398,7 @@ func (ma *metaAdmin) checkMining() {
 	if on == *mining {
 		return
 	} else if on {
-		err := ma.rpcCli.CallContext(ctx, &mining, "miner_start", 1)
+		err := ma.rpcCli.CallContext(ctx, &mining, "miner_start")
 		if err != nil {
 			log.Error("Starting miner", "failed", err)
 			return
@@ -1372,7 +1406,7 @@ func (ma *metaAdmin) checkMining() {
 			log.Info("Started miner")
 		}
 	} else {
-		err := ma.rpcCli.CallContext(ctx, &mining, "miner_stop", 1)
+		err := ma.rpcCli.CallContext(ctx, &mining, "miner_stop")
 		if err != nil {
 			log.Error("Stopping miner", "failed", err)
 			return
@@ -1657,7 +1691,37 @@ func signBlock(height *big.Int, hash common.Hash, isPangyo bool) (coinbase commo
 	return
 }
 
+// acceptUnverifiableBlock decides whether a block whose governance data is
+// unavailable can be accepted without miner signature verification. Two
+// legitimate cases exist:
+//
+//	(a) genuinely pre-governance blocks: local state at height exists but the
+//	    registry/governance contracts are not deployed yet (early chain
+//	    segment during full sync from genesis)
+//	(b) snap-sync header gap: headers are verified ahead of state download,
+//	    so state at height is not available locally yet
+//
+// For (b), only heights at or beyond the locally executed head are accepted.
+// Below the executed head, state must be available; its absence means the
+// block cannot be tied to governance and is rejected, so a synced node never
+// accepts an unverified side-chain header.
+func (ma *metaAdmin) acceptUnverifiableBlock(ctx context.Context, height *big.Int) bool {
+	if _, err := ma.cli.BalanceAt(ctx, common.Address{}, height); err == nil {
+		// state is present, so the governance lookup failed because the
+		// contracts are genuinely not deployed at this height
+		return true
+	}
+	head, err := ma.cli.BlockNumber(ctx)
+	if err != nil {
+		return false
+	}
+	return height.Uint64() >= head
+}
+
 func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, isPangyo bool) bool {
+	if admin == nil {
+		return false
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1665,9 +1729,14 @@ func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, has
 	num := new(big.Int).Sub(height, common.Big1)
 	_, gov, _, _, _, err := admin.getRegGovEnvContracts(ctx, num)
 	if err != nil {
-		return err == metaminer.ErrNotInitialized
+		// Governance data unavailable: either pre-governance blocks or a
+		// snap-sync gap. Accept only the cases that cannot be abused to
+		// bypass signature verification.
+		return admin.acceptUnverifiableBlock(ctx, num)
 	} else if count, err := admin.getInt(ctx, gov, num, "getMemberLength"); err != nil || count == 0 {
-		return err == metaminer.ErrNotInitialized || count == 0
+		// Governance contracts exist in locally executed state but have no
+		// members yet (bootstrap phase); not remotely forgeable.
+		return true
 	}
 	// if minerNodeId is given, i.e. present in block header, use it,
 	// otherwise, derive it from the codebase
@@ -2314,6 +2383,7 @@ func init() {
 	metaminer.AcquireMiningTokenFunc = acquireMiningToken
 	metaminer.ReleaseMiningTokenFunc = releaseMiningToken
 	metaminer.HasMiningTokenFunc = hasMiningToken
+	metaminer.GetFinalizedBlockNumberFunc = getFinalizedBlockNumber
 	metaminer.GetTRSListMapFunc = getTRSListMap // Add TRS
 	metaapi.TRSInfo = TRSInfo                   // Add TRS
 	metaapi.Info = Info

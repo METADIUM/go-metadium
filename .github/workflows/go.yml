@@ -1,0 +1,37 @@
+name: i386 linux tests
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+# What this job is for: catching 32-bit portability breaks (int-overflow
+# constants, int32/int64 mismatches) -- it found two real ones when the
+# v1.13.14 tree first ran here. The full upstream test suite is not viable
+# under GOARCH=386 on this runner (core alone exceeds 40m, and the amd64
+# suite already runs on every PR via master-ci/dev-ci), so this compiles
+# everything -- test binaries included -- and executes only the
+# Metadium-specific packages.
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.21.4
+      - name: Compile everything (including test binaries)
+        run: |
+          go build ./...
+          go test -run '^$' -count=1 ./...
+        env:
+          GOOS: linux
+          GOARCH: 386
+      - name: Run Metadium package tests
+        run: go test -short -timeout 20m ./metadium/... ./params/...
+        env:
+          GOOS: linux
+          GOARCH: 386

@@ -26,8 +26,6 @@ build/_vendor/pkg
 /build/_workspace/
 /build/cache/
 /build/bin/
-/build/conf/
-/build/*.tar.gz
 /geth*.zip
 
 # travis
@@ -49,10 +47,35 @@ profile.cov
 /dashboard/assets/package-lock.json
 
 **/yarn-error.log
+logs/
 
-vendor/*
+tests/spec-tests/
 
-# Metadium
-/metadium/admin_abi.go
-/metadium/governance_abi.go
-/metadium/governance_legacy_abi.go
+# Binaries
+/geth
+/gmet
+/dbbench
+/blob-tx-e2e
+/mixed-tx-e2e
+/tests/private-net-poa/geth
+
+# Claude / AI tools
+/.claude/
+/.gstack/
+/.mcp.json
+
+# Local config
+/genesis-test-local.json
+
+# Build artifacts
+/core/txpool/blobpool/blobpool/
+
+# Operator-local files (never commit: addresses, accounts, keys, schedules)
+# Any *.local.* suffix, not just .md -- covers ad-hoc .sh/.html scratch too,
+# plus extensionless foo.local. Caveats: *.local.* also matches names meant
+# to be committed (config.local.json -- none exist today; `git add -f` if one
+# ever should), and *.local also matches directories, which git won't descend
+# into -- files inside a data.local/ can only be re-included per-file with
+# `git add -f`, not with a negation pattern.
+*.local.*
+*.local

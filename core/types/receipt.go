@@ -69,6 +69,16 @@ type Receipt struct {
 	BlockHash        common.Hash `json:"blockHash,omitempty"`
 	BlockNumber      *big.Int    `json:"blockNumber,omitempty"`
 	TransactionIndex uint        `json:"transactionIndex"`
+
+	// EffectiveGasPrice is the actual value per gas deducted from the sender's account.
+	EffectiveGasPrice *big.Int `json:"effectiveGasPrice"`
+
+	// BlobGasUsed is the amount of blob gas used in the transaction. For non-blob transactions this
+	// value is 0.
+	BlobGasUsed uint64 `json:"blobGasUsed,omitempty"`
+
+	// BlobGasPrice is the actual value per blob gas deducted from the sender's account.
+	BlobGasPrice *big.Int `json:"blobGasPrice,omitempty"`
 }
 
 type receiptMarshaling struct {
@@ -214,7 +224,7 @@ func (r *Receipt) decodeTyped(b []byte) error {
 		return errShortTypedReceipt
 	}
 	switch b[0] {
-	case DynamicFeeTxType, AccessListTxType, FeeDelegateDynamicFeeTxType: // fee delegation
+	case DynamicFeeTxType, AccessListTxType, BlobTxType, FeeDelegateDynamicFeeTxType: // fee delegation
 		var data receiptRLP
 		err := rlp.DecodeBytes(b[1:], &data)
 		if err != nil {
@@ -387,6 +397,9 @@ func (rs Receipts) EncodeIndex(i int, w *bytes.Buffer) {
 	case DynamicFeeTxType:
 		w.WriteByte(DynamicFeeTxType)
 		rlp.Encode(w, data)
+	case BlobTxType:
+		w.WriteByte(BlobTxType)
+		rlp.Encode(w, data)
 	// fee delegation
 	case FeeDelegateDynamicFeeTxType:
 		w.WriteByte(FeeDelegateDynamicFeeTxType)
@@ -401,7 +414,7 @@ func (rs Receipts) EncodeIndex(i int, w *bytes.Buffer) {
 // DeriveFields fills the receipts with their computed fields based on consensus
 // data and contextual infos like containing block and transactions.
 func (rs Receipts) DeriveFields(config *params.ChainConfig, hash common.Hash, number uint64, txs Transactions) error {
-	signer := MakeSigner(config, new(big.Int).SetUint64(number))
+	signer := MakeSigner(config, new(big.Int).SetUint64(number), 0)
 
 	logIndex := uint(0)
 	if len(txs) != len(rs) {

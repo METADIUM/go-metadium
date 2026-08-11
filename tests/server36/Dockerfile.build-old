@@ -1,0 +1,41 @@
+# Dockerfile.build-old
+# Builds gmet-old (v0.10.2) as the pre-Camellia baseline for A/B benchmarks.
+#
+# Pinned to the m0.10.2.mainnet tag rather than the master branch: once the
+# Camellia release-line transition lands, master moves to 1.1.1, so a branch
+# ref would no longer build the old binary. The tag is the stable 0.10.2 point.
+#
+# Problem: the 0.10.2 tree is missing governance_abi.go and governance_legacy_abi.go
+# Fix: check out those two files from dev (which defines the same ABI variables
+# that admin.go references).
+#
+# Usage (run from tests/server36/):
+#   docker build -f Dockerfile.build-old -t gmet-old-builder:latest .
+#   docker run --rm -v $(pwd):/output gmet-old-builder:latest \
+#     cp /build/gmet-old /output/gmet-old-built
+
+FROM golang:1.21-bullseye AS builder
+
+ARG REPO=https://github.com/METADIUM/go-metadium.git
+ARG OLD_REF=m0.10.2.mainnet
+ARG ABI_REF=dev
+
+WORKDIR /build
+
+# Clone the pinned 0.10.2 tag
+RUN git clone --depth 50 --branch ${OLD_REF} ${REPO} .
+
+# Apply fix: check out missing ABI files from dev
+# These define RegistryAbi, GovAbi, StakingAbi, EnvStorageImpAbi, TRSListAbi
+# and their legacy counterparts — referenced by admin.go but absent from 0.10.2
+RUN git fetch --depth 1 origin ${ABI_REF} && \
+    git checkout FETCH_HEAD -- \
+        metadium/governance_abi.go \
+        metadium/governance_legacy_abi.go
+
+# Build LevelDB binary (statically linked, no CGO)
+RUN CGO_ENABLED=0 go build -o gmet-old ./cmd/geth && \
+    ./gmet-old version
+
+FROM scratch
+COPY --from=builder /build/gmet-old /gmet-old

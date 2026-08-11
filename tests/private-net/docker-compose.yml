@@ -1,0 +1,130 @@
+version: "3.8"
+
+# go-metadium 3-node private network for ElderflowerFork testing
+# Prerequisites: ./setup.sh
+# Start:         ./start.sh
+# Stop:          ./stop.sh
+
+networks:
+  gmet-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+x-gmet-common: &gmet-common
+  image: gmet-private:latest
+  restart: unless-stopped
+  networks:
+    - gmet-net
+
+services:
+  node1:
+    <<: *gmet-common
+    container_name: gmet-node1
+    hostname: gmet-node1
+    volumes:
+      - ./genesis.json:/data/genesis.json:ro
+      - ./static-nodes.json:/data/geth/geth/static-nodes.json:ro
+      - ./data/node1/keystore:/data/geth/keystore:ro
+      - ./data/node1/geth/nodekey:/data/geth/geth/nodekey:ro
+      - ./data/node1:/data/geth
+    ports:
+      - "8545:8545"
+      - "30303:30303"
+      - "30303:30303/udp"
+    networks:
+      gmet-net:
+        ipv4_address: 172.30.0.11
+    entrypoint: ["/entrypoint.sh"]
+    command: >
+      --networkid 1337
+      --consensusmethod 1
+      --syncmode full
+      --mine
+      --miner.etherbase 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,admin,miner,txpool,debug
+      --http.corsdomain "*"
+      --http.vhosts "*"
+      --port 30303
+      --nat extip:172.30.0.11
+      --maxpeers 10
+      --verbosity 3
+      --userocksdb 1
+
+  node2:
+    <<: *gmet-common
+    container_name: gmet-node2
+    hostname: gmet-node2
+    depends_on:
+      - node1
+    volumes:
+      - ./genesis.json:/data/genesis.json:ro
+      - ./static-nodes.json:/data/geth/geth/static-nodes.json:ro
+      - ./data/node2/keystore:/data/geth/keystore:ro
+      - ./data/node2:/data/geth
+    ports:
+      - "8546:8545"
+      - "30304:30304"
+      - "30304:30304/udp"
+    networks:
+      gmet-net:
+        ipv4_address: 172.30.0.12
+    entrypoint: ["/entrypoint.sh"]
+    command: >
+      --networkid 1337
+      --consensusmethod 1
+      --syncmode full
+      --mine
+      --miner.etherbase 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,admin,miner,txpool
+      --http.corsdomain "*"
+      --http.vhosts "*"
+      --port 30304
+      --nat extip:172.30.0.12
+      --maxpeers 10
+      --verbosity 3
+      --userocksdb 1
+
+  node3:
+    <<: *gmet-common
+    container_name: gmet-node3
+    hostname: gmet-node3
+    depends_on:
+      - node1
+    volumes:
+      - ./genesis.json:/data/genesis.json:ro
+      - ./static-nodes.json:/data/geth/geth/static-nodes.json:ro
+      - ./data/node3/keystore:/data/geth/keystore:ro
+      - ./data/node3:/data/geth
+    ports:
+      - "8547:8545"
+      - "30305:30305"
+      - "30305:30305/udp"
+    networks:
+      gmet-net:
+        ipv4_address: 172.30.0.13
+    entrypoint: ["/entrypoint.sh"]
+    command: >
+      --networkid 1337
+      --consensusmethod 1
+      --syncmode full
+      --mine
+      --miner.etherbase 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,admin,miner,txpool
+      --http.corsdomain "*"
+      --http.vhosts "*"
+      --port 30305
+      --nat extip:172.30.0.13
+      --maxpeers 10
+      --verbosity 3
+      --userocksdb 1

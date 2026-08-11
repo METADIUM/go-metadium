@@ -22,6 +22,16 @@ extern int secp256k1_ext_scalar_mul(const secp256k1_context* ctx, const unsigned
 import "C"
 
 func (BitCurve *BitCurve) ScalarMult(Bx, By *big.Int, scalar []byte) (*big.Int, *big.Int) {
+	// Reject base points that are not on the curve, including coordinates that
+	// are >= P. secp256k1_ext_scalar_mul ignores the return of
+	// secp256k1_fe_set_b32 and does not validate the input point, so without
+	// this guard a malformed remote point (e.g. from the RLPx/ECIES handshake)
+	// would be fed into the scalar-multiplication path. Callers treat a nil
+	// result as point-at-infinity / shared-key failure.
+	// (CVE-2026-26313/26314/26315 defense-in-depth)
+	if Bx == nil || By == nil || !BitCurve.IsOnCurve(Bx, By) {
+		return nil, nil
+	}
 	// Ensure scalar is exactly 32 bytes. We pad always, even if
 	// scalar is 32 bytes long, to avoid a timing side channel.
 	if len(scalar) > 32 {

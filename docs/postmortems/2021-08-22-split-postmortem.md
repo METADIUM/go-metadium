@@ -68,7 +68,7 @@ Since we had merged the removal of `ETH65`, if the entire network were to upgrad
 
 ## Exploit
 
-At block [13107518](https://etherscan.io/block/13107518), mined at (Aug-27-2021 12:50:07 PM +UTC), a minority chain split occurred. The discord user @AlexSSD7 notified the allcoredevs-channel on the Eth R&D discord, on Aug 27 13:09  UTC. 
+At block [13107518](https://etherscan.io/block/13107518), mined at Aug-27-2021 12:50:07 PM +UTC, a minority chain split occurred. The discord user @AlexSSD7 notified the allcoredevs-channel on the Eth R&D discord, on Aug 27 13:09  UTC. 
 
 
 At 14:09 UTC, it was confirmed that the transaction `0x1cb6fb36633d270edefc04d048145b4298e67b8aa82a9e5ec4aa1435dd770ce4` had triggered the bug, leading to a minority-split of the chain. The term 'minority split' means that the majority of miners continued to mine on the correct chain.
@@ -87,7 +87,7 @@ The blocks on the 'bad' chain were investigated, and Tim Beiko reached out to th
 
 ### Disclosure decision
 
-The geth-team have an official policy regarding [vulnerability disclosure](https://geth.ethereum.org/docs/vulnerabilities/vulnerabilities). 
+The geth-team have an official policy regarding [vulnerability disclosure](https://geth.ethereum.org/docs/developers/geth-developer/disclosures). 
 
 > The primary goal for the Geth team is the health of the Ethereum network as a whole, and the decision whether or not to publish details about a serious vulnerability boils down to minimizing the risk and/or impact of discovery and exploitation.
 

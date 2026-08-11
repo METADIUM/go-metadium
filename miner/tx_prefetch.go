@@ -27,8 +27,7 @@ func tx_prefetch(w *worker, env *environment, to *TxOrderer, numWorkers int) {
 				blockContext = core.NewEVMBlockContext(header, w.chain, nil)
 				statedb, _   = w.chain.StateAt(header.Root)
 				evm          = vm.NewEVM(blockContext, vm.TxContext{}, statedb, w.chainConfig, vm.Config{})
-				signer       = types.MakeSigner(w.chainConfig, header.Number)
-				tix          = 0
+				signer       = types.MakeSigner(w.chainConfig, header.Number, header.Time)
 			)
 
 			for {
@@ -47,13 +46,13 @@ func tx_prefetch(w *worker, env *environment, to *TxOrderer, numWorkers int) {
 					continue
 				}
 
-				msg, err := tx.AsMessage(signer, header.BaseFee)
+				msg, err := core.TransactionToMessage(tx, signer, header.BaseFee)
 				if err != nil {
 					log.Error("Prefetch", "failed to turn tx to msg", err)
 					return
 				}
-				statedb.Prepare(tx.Hash(), tix)
-				tix++
+				rules := w.chainConfig.Rules(header.Number, true, header.Time)
+				statedb.Prepare(rules, msg.From, header.Coinbase, msg.To, nil, nil)
 
 				ictx, cancel := context.WithTimeout(ctx, time.Second)
 				evm.Reset(core.NewEVMTxContext(msg), statedb)

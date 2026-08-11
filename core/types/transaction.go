@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"container/heap"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -38,6 +40,9 @@ var (
 	ErrTxTypeNotSupported   = errors.New("transaction type not supported")
 	ErrGasFeeCapTooLow      = errors.New("fee cap less than base fee")
 	errShortTypedTx         = errors.New("typed transaction too short")
+	errInvalidYParity       = errors.New("'yParity' field must be 0 or 1")
+	errVYParityMismatch     = errors.New("'v' and 'yParity' fields do not match")
+	errVYParityMissing      = errors.New("missing 'yParity' or 'v' field in transaction")
 )
 
 // Transaction types.
@@ -45,6 +50,7 @@ const (
 	LegacyTxType = iota
 	AccessListTxType
 	DynamicFeeTxType
+	BlobTxType                  = 3  // EIP-4844
 	FeeDelegateDynamicFeeTxType = 22 // fee delegation
 )
 
@@ -58,6 +64,17 @@ type Transaction struct {
 	size     atomic.Value
 	from     atomic.Value
 	feePayer atomic.Value // fee delegation
+}
+
+// Time returns when the transaction was first seen on the network (spam avoidance).
+func (tx *Transaction) Time() time.Time {
+	return tx.time
+}
+
+// SetTime sets the decoding time of a transaction. This is used by tests to set
+// arbitrary times and by persistent transaction pools when loading old txs from disk.
+func (tx *Transaction) SetTime(t time.Time) {
+	tx.time = t
 }
 
 type TransactionEx struct {
@@ -95,6 +112,9 @@ type TxData interface {
 	// fee delegation
 	feePayer() *common.Address
 	rawFeePayerSignatureValues() (v, r, s *big.Int)
+	// EIP-4844 blob transactions
+	blobHashes() []common.Hash
+	blobGasCost() *big.Int
 }
 
 // EncodeRLP implements rlp.Encoder
@@ -192,6 +212,10 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		return &inner, err
 	case DynamicFeeTxType:
 		var inner DynamicFeeTx
+		err := rlp.DecodeBytes(b[1:], &inner)
+		return &inner, err
+	case BlobTxType:
+		var inner BlobTx
 		err := rlp.DecodeBytes(b[1:], &inner)
 		return &inner, err
 	// fee delegation
@@ -310,39 +334,89 @@ func (tx *Transaction) To() *common.Address {
 	return copyAddressPtr(tx.inner.to())
 }
 
-// Cost returns gas * gasPrice + value.
+// BlobHashes returns the versioned hashes of the blobs committed to by the transaction.
+// Returns nil for non-blob transactions.
+func (tx *Transaction) BlobHashes() []common.Hash {
+	return tx.inner.blobHashes()
+}
+
+// BlobGas returns the data blob gas of a blob transaction, 0 otherwise.
+func (tx *Transaction) BlobGas() uint64 {
+	if blobtx, ok := tx.inner.(*BlobTx); ok {
+		return uint64(len(blobtx.BlobHashes)) * params.BlobTxBlobGasPerBlob
+	}
+	return 0
+}
+
+// BlobTxSidecar returns the sidecar of a blob transaction, nil otherwise.
+func (tx *Transaction) BlobTxSidecar() *BlobTxSidecar {
+	if blobtx, ok := tx.inner.(*BlobTx); ok {
+		return blobtx.Sidecar
+	}
+	return nil
+}
+
+// MaxFeePerBlobGas returns the maximum fee per blob gas for the transaction.
+// Returns nil for non-blob transactions.
+func (tx *Transaction) MaxFeePerBlobGas() *big.Int {
+	if b, ok := tx.inner.(*BlobTx); ok && b.MaxFeePerBlobGas != nil {
+		return b.MaxFeePerBlobGas.ToBig()
+	}
+	return nil
+}
+
+// BlobGasFeeCap is an alias for MaxFeePerBlobGas.
+func (tx *Transaction) BlobGasFeeCap() *big.Int {
+	return tx.MaxFeePerBlobGas()
+}
+
+// Cost returns gas * gasPrice + value + blob gas cost.
 func (tx *Transaction) Cost() *big.Int {
 	// fee delegation
 	if tx.Type() == FeeDelegateDynamicFeeTxType {
-		signer := LatestSignerForChainID(tx.ChainId())
-		from, _ := Sender(signer, tx)
-		if *tx.FeePayer() != from {
-			total := tx.Value()
-			return total
+		fp := tx.FeePayer()
+		if fp == nil {
+			// Malformed fee-delegate tx without FeePayer: fall through to standard cost
 		} else {
+			signer := LatestSignerForChainID(tx.ChainId())
+			from, _ := Sender(signer, tx)
+			if *fp != from {
+				return tx.Value()
+			}
 			total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
 			total.Add(total, tx.Value())
+			if blobCost := tx.inner.blobGasCost(); blobCost != nil {
+				total.Add(total, blobCost)
+			}
 			return total
 		}
 	}
 	total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
 	total.Add(total, tx.Value())
+	if blobCost := tx.inner.blobGasCost(); blobCost != nil {
+		total.Add(total, blobCost)
+	}
 	return total
 }
 
 // fee delegation
 // FeePayerCost returns feePayer's gas * gasPrice + value.
 func (tx *Transaction) FeePayerCost() *big.Int {
-	signer := LatestSignerForChainID(tx.ChainId())
-	from, _ := Sender(signer, tx)
-	if *tx.FeePayer() != from {
-		total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
-		return total
-	} else {
+	fp := tx.FeePayer()
+	if fp == nil {
+		// Malformed: fall through to full cost
 		total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
 		total.Add(total, tx.Value())
 		return total
 	}
+	signer := LatestSignerForChainID(tx.ChainId())
+	from, _ := Sender(signer, tx)
+	if *fp != from {
+		return new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
+	}
+	total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
+	total.Add(total, tx.Value())
+	return total
 }
 
 // RawSignatureValues returns the V, R, S signature values of the transaction.
@@ -369,6 +443,53 @@ func (tx *Transaction) GasTipCapCmp(other *Transaction) int {
 // GasTipCapIntCmp compares the gasTipCap of the transaction against the given gasTipCap.
 func (tx *Transaction) GasTipCapIntCmp(other *big.Int) int {
 	return tx.inner.gasTipCap().Cmp(other)
+}
+
+// BlobGasFeeCapIntCmp compares the blob fee cap of the transaction against the given blob fee cap.
+func (tx *Transaction) BlobGasFeeCapIntCmp(other *big.Int) int {
+	return tx.BlobGasFeeCap().Cmp(other)
+}
+
+// WithoutBlobTxSidecar returns a copy of tx with the blob sidecar removed.
+func (tx *Transaction) WithoutBlobTxSidecar() *Transaction {
+	blobtx, ok := tx.inner.(*BlobTx)
+	if !ok {
+		return tx
+	}
+	cpy := &Transaction{
+		inner: blobtx.withoutSidecar(),
+		time:  tx.time,
+	}
+	// Note: tx.size cache not carried over because the sidecar is included in size!
+	if h := tx.hash.Load(); h != nil {
+		cpy.hash.Store(h)
+	}
+	if f := tx.from.Load(); f != nil {
+		cpy.from.Store(f)
+	}
+	return cpy
+}
+
+// WithBlobTxSidecar returns a copy of tx with the given sidecar attached.
+// Returns the original tx unchanged if it is not a blob transaction.
+func (tx *Transaction) WithBlobTxSidecar(sidecar *BlobTxSidecar) *Transaction {
+	blobtx, ok := tx.inner.(*BlobTx)
+	if !ok {
+		return tx
+	}
+	cpy := *blobtx
+	cpy.Sidecar = sidecar
+	newTx := &Transaction{
+		inner: &cpy,
+		time:  tx.time,
+	}
+	if h := tx.hash.Load(); h != nil {
+		newTx.hash.Store(h)
+	}
+	if f := tx.from.Load(); f != nil {
+		newTx.from.Store(f)
+	}
+	return newTx
 }
 
 // EffectiveGasTip returns the effective miner gasTipCap for the given base fee.
@@ -410,6 +531,8 @@ func (tx *Transaction) EffectiveGasTipIntCmp(other *big.Int, baseFee *big.Int) i
 }
 
 // Hash returns the transaction hash.
+// For blob transactions, the hash is always computed from the canonical encoding
+// (without sidecar), regardless of whether a sidecar is attached.
 func (tx *Transaction) Hash() common.Hash {
 	if hash := tx.hash.Load(); hash != nil {
 		return hash.(common.Hash)
@@ -418,6 +541,13 @@ func (tx *Transaction) Hash() common.Hash {
 	var h common.Hash
 	if tx.Type() == LegacyTxType {
 		h = rlpHash(tx.inner)
+	} else if tx.Type() == BlobTxType {
+		// Use canonical encoding (without sidecar) for blob tx hash.
+		if blobtx, ok := tx.inner.(*BlobTx); ok && blobtx.Sidecar != nil {
+			h = prefixedRlpHash(tx.Type(), blobtx.withoutSidecar())
+		} else {
+			h = prefixedRlpHash(tx.Type(), tx.inner)
+		}
 	} else {
 		h = prefixedRlpHash(tx.Type(), tx.inner)
 	}
@@ -433,8 +563,13 @@ func (tx *Transaction) Size() common.StorageSize {
 	}
 	c := writeCounter(0)
 	rlp.Encode(&c, &tx.inner)
-	tx.size.Store(common.StorageSize(c))
-	return common.StorageSize(c)
+	size := common.StorageSize(c)
+	// For typed transactions, the encoding also includes the leading type byte.
+	if tx.Type() != LegacyTxType {
+		size += 1
+	}
+	tx.size.Store(size)
+	return size
 }
 
 // Convert []*Transaction to []*TransactionEx
@@ -455,11 +590,18 @@ func Txs2TxExs(txs []*Transaction) []*TransactionEx {
 }
 
 // Convert []*TransactionEx to []*Transaction
+// Even for trusted partners, verify that the claimed From address matches
+// the cryptographic signature to prevent sender cache poisoning.
 func TxExs2Txs(signer Signer, txs []*TransactionEx, trustIt bool) []*Transaction {
 	var out []*Transaction
 	for _, i := range txs {
 		if trustIt {
-			i.Tx.from.Store(sigCache{signer: signer, from: i.From})
+			// Verify signature before caching the sender address.
+			recovered, err := signer.Sender(i.Tx)
+			if err == nil && recovered == i.From {
+				i.Tx.from.Store(sigCache{signer: signer, from: i.From})
+			}
+			// If verification fails, skip caching; Sender() will recover later.
 		}
 		out = append(out, i.Tx)
 	}
@@ -493,6 +635,9 @@ func (tx *Transaction) WithSignature(signer Signer, sig []byte) (*Transaction, e
 	r, s, v, err := signer.SignatureValues(tx, sig)
 	if err != nil {
 		return nil, err
+	}
+	if r == nil || s == nil || v == nil {
+		return nil, fmt.Errorf("%w: r: %s, s: %s, v: %s", ErrInvalidSig, r, s, v)
 	}
 	cpy := tx.inner.copy()
 	cpy.setSignatureValues(signer.ChainID(), v, r, s)
@@ -677,6 +822,9 @@ type Message struct {
 	isFake     bool
 	// fee delegation
 	feePayer *common.Address
+	// EIP-4844: blob transaction fields
+	blobHashes       []common.Hash
+	maxFeePerBlobGas *big.Int
 }
 
 func NewMessage(from common.Address, to *common.Address, nonce uint64, amount *big.Int, gasLimit uint64, gasPrice, gasFeeCap, gasTipCap *big.Int, data []byte, accessList AccessList, isFake bool) Message {
@@ -713,6 +861,13 @@ func (tx *Transaction) AsMessage(s Signer, baseFee *big.Int) (Message, error) {
 	if tx.FeePayer() != nil {
 		msg.feePayer = tx.FeePayer()
 	}
+	// EIP-4844: blob transaction fields
+	if tx.Type() == BlobTxType {
+		msg.blobHashes = tx.BlobHashes()
+		if maxFeePerBlobGas := tx.MaxFeePerBlobGas(); maxFeePerBlobGas != nil {
+			msg.maxFeePerBlobGas = new(big.Int).Set(maxFeePerBlobGas)
+		}
+	}
 	// If baseFee provided, set gasPrice to effectiveGasPrice.
 	if baseFee != nil {
 		msg.gasPrice = math.BigMin(msg.gasPrice.Add(msg.gasTipCap, baseFee), msg.gasFeeCap)
@@ -737,6 +892,10 @@ func (m Message) IsFake() bool           { return m.isFake }
 // fee delegation
 func (m Message) FeePayer() *common.Address { return m.feePayer }
 
+// EIP-4844: blob transaction accessors
+func (m Message) BlobHashes() []common.Hash  { return m.blobHashes }
+func (m Message) MaxFeePerBlobGas() *big.Int { return m.maxFeePerBlobGas }
+
 // copyAddressPtr copies an address.
 func copyAddressPtr(a *common.Address) *common.Address {
 	if a == nil {
@@ -744,4 +903,50 @@ func copyAddressPtr(a *common.Address) *common.Address {
 	}
 	cpy := *a
 	return &cpy
+}
+
+// EIP-4844 blob transaction helper methods
+
+// blobHashes returns nil for non-blob transactions
+func (*LegacyTx) blobHashes() []common.Hash {
+	return nil
+}
+
+func (*AccessListTx) blobHashes() []common.Hash {
+	return nil
+}
+
+func (*DynamicFeeTx) blobHashes() []common.Hash {
+	return nil
+}
+
+// blobGasCost returns nil for non-blob transactions
+func (*LegacyTx) blobGasCost() *big.Int {
+	return nil
+}
+
+func (*AccessListTx) blobGasCost() *big.Int {
+	return nil
+}
+
+func (*DynamicFeeTx) blobGasCost() *big.Int {
+	return nil
+}
+
+// HashDifference returns a new set which is the difference between a and b.
+func HashDifference(a, b []common.Hash) []common.Hash {
+	keep := make([]common.Hash, 0, len(a))
+
+	remove := make(map[common.Hash]struct{})
+	for _, hash := range b {
+		remove[hash] = struct{}{}
+	}
+
+	for _, hash := range a {
+		if _, ok := remove[hash]; !ok {
+			keep = append(keep, hash)
+		}
+	}
+
+	return keep
 }

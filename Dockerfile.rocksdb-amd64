@@ -1,0 +1,16 @@
+FROM golang:1.21-bullseye AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    librocksdb-dev libsnappy-dev liblz4-dev libzstd-dev \
+    gcc g++ make \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY . .
+
+RUN CGO_CFLAGS="-I/usr/include" \
+    CGO_LDFLAGS="-L/usr/lib/x86_64-linux-gnu -lrocksdb -lsnappy -llz4 -lzstd -lm -lstdc++ -ldl" \
+    go build -tags rocksdb -o /out/gmet-rocksdb-linux-amd64 ./cmd/gmet
+
+FROM scratch
+COPY --from=builder /out/gmet-rocksdb-linux-amd64 /gmet-rocksdb-linux-amd64
