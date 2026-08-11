@@ -35,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
@@ -70,6 +71,7 @@ var (
 var (
 	evictionInterval    = time.Minute     // Time interval to check for evictable transactions
 	statsReportInterval = 8 * time.Second // Time interval to report transaction pool stats
+	trsTickerInterval   = 3 * time.Hour   // Metadium: time interval to purge TRS-restricted transactions
 )
 
 var (
@@ -361,10 +363,12 @@ func (pool *LegacyPool) loop() {
 		report  = time.NewTicker(statsReportInterval)
 		evict   = time.NewTicker(evictionInterval)
 		journal = time.NewTicker(pool.config.Rejournal)
+		trs     = time.NewTicker(trsTickerInterval)
 	)
 	defer report.Stop()
 	defer evict.Stop()
 	defer journal.Stop()
+	defer trs.Stop()
 
 	// Notify tests that the init phase is done
 	close(pool.initDoneCh)
@@ -411,6 +415,25 @@ func (pool *LegacyPool) loop() {
 				pool.mu.Lock()
 				if err := pool.journal.rotate(pool.local()); err != nil {
 					log.Warn("Failed to rotate local tx journal", "err", err)
+				}
+				pool.mu.Unlock()
+			}
+
+		// Metadium: periodically remove pending transactions on the TRS
+		// restriction list, regardless of TRS subscription (0.10.x parity).
+		case <-trs.C:
+			if !metaminer.IsPoW() {
+				pool.mu.Lock()
+				if len(pool.trsListMap) > 0 {
+					for addr := range pool.pending {
+						for _, tx := range pool.pending[addr].Flatten() {
+							if pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
+								log.Debug("Discard pending transaction included in trsList", "hash", tx.Hash(), "addr", addr)
+								pool.removeTx(tx.Hash(), true, true)
+								pendingDiscardMeter.Mark(1)
+							}
+						}
+					}
 				}
 				pool.mu.Unlock()
 			}
@@ -694,6 +717,14 @@ func (pool *LegacyPool) validateTx(tx *types.Transaction, local bool) error {
 	}
 	if err := txpool.ValidateTransactionWithState(tx, pool.signer, opts); err != nil {
 		return err
+	}
+	// Metadium: nodes subscribing to TRS reject transactions whose sender or
+	// recipient is on the restriction list (0.10.x parity).
+	if !metaminer.IsPoW() && len(pool.trsListMap) > 0 && pool.trsSubscribe {
+		from, _ := types.Sender(pool.signer, tx) // validated above
+		if pool.trsListMap[from] || (tx.To() != nil && pool.trsListMap[*tx.To()]) {
+			return txpool.ErrIncludedTRSList
+		}
 	}
 	return nil
 }
@@ -1468,10 +1499,50 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	pool.currentState = statedb
 	pool.pendingNonces = newNoncer(statedb)
 
+	// Metadium: refresh the TRS restriction list at the new head (0.10.x parity).
+	if !metaminer.IsPoW() {
+		pool.trsListMap, pool.trsSubscribe, _ = metaminer.GetTRSListMap(newHead.Number)
+	} else {
+		pool.trsListMap = nil
+		pool.trsSubscribe = false
+	}
+
 	// Inject any transactions discarded due to reorgs
 	log.Debug("Reinjecting stale transactions", "count", len(reinject))
 	core.SenderCacher.Recover(pool.signer, reinject)
 	pool.addTxsLocked(reinject, false)
+}
+
+// trsAndFeePayerSweep removes from list any transaction whose sender or
+// recipient is TRS-restricted (when this node subscribes to TRS) and any
+// fee-delegated transaction whose fee payer can no longer cover its cost,
+// returning the dropped transactions. It restores the 0.10.x pool behaviour
+// that the v1.13.14 rebase dropped. The caller holds pool.mu and accounts for
+// the returned transactions in the lookup set and priced heap, exactly as it
+// does for balance-filter drops.
+func (pool *LegacyPool) trsAndFeePayerSweep(addr common.Address, list *list) types.Transactions {
+	doTrs := !metaminer.IsPoW() && len(pool.trsListMap) > 0 && pool.trsSubscribe
+	if !pool.feedelegation && !doTrs {
+		return nil
+	}
+	var drops types.Transactions
+	for _, tx := range list.Flatten() {
+		if pool.feedelegation && tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
+			feePayer := *tx.FeePayer()
+			if cost, _ := uint256.FromBig(tx.FeePayerCost()); cost != nil && pool.currentState.GetBalance(feePayer).Cmp(cost) < 0 {
+				log.Trace("Removed drained fee-delegation transaction", "hash", tx.Hash())
+				list.Remove(tx)
+				drops = append(drops, tx)
+				continue
+			}
+		}
+		if doTrs && (pool.trsListMap[addr] || (tx.To() != nil && pool.trsListMap[*tx.To()])) {
+			log.Trace("Removed transaction included in trsList", "hash", tx.Hash(), "addr", addr)
+			list.Remove(tx)
+			drops = append(drops, tx)
+		}
+	}
+	return drops
 }
 
 // promoteExecutables moves transactions that have become processable from the
@@ -1497,6 +1568,8 @@ func (pool *LegacyPool) promoteExecutables(accounts []common.Address) []*types.T
 		log.Trace("Removed old queued transactions", "count", len(forwards))
 		// Drop all transactions that are too costly (low balance or out of gas)
 		drops, _ := list.Filter(pool.currentState.GetBalance(addr), gasLimit)
+		// Metadium: drop TRS-restricted and drained-fee-payer transactions too
+		drops = append(drops, pool.trsAndFeePayerSweep(addr, list)...)
 		for _, tx := range drops {
 			hash := tx.Hash()
 			pool.all.Remove(hash)
@@ -1698,6 +1771,8 @@ func (pool *LegacyPool) demoteUnexecutables() {
 		}
 		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
 		drops, invalids := list.Filter(pool.currentState.GetBalance(addr), gasLimit)
+		// Metadium: drop TRS-restricted and drained-fee-payer transactions too
+		drops = append(drops, pool.trsAndFeePayerSweep(addr, list)...)
 		for _, tx := range drops {
 			hash := tx.Hash()
 			log.Trace("Removed unpayable pending transaction", "hash", hash)
