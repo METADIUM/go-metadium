@@ -46,17 +46,21 @@ See [docs/camellia-test-report.md](docs/camellia-test-report.md) for full test r
 
 Prerequisites: Go 1.21+, C compiler (for RocksDB builds).
 
-### LevelDB (default)
+The canonical builds are the Makefile targets — they are what CI validates
+and what the release tarballs ship:
 
 ```bash
-CGO_ENABLED=0 go build -o gmet ./cmd/geth
+make gmet                    # gmet binary (RocksDB; USE_ROCKSDB=NO for LevelDB)
+make metadium                # full deploy bundle: build/metadium.tar.gz (bin/ + conf/)
 ```
 
-### RocksDB
+Direct `go build` works for development (`./cmd/gmet` and `./cmd/geth` are
+the same entrypoint; the Makefile uses `./cmd/gmet`):
 
 ```bash
+CGO_ENABLED=0 go build -o gmet ./cmd/gmet                    # LevelDB
 CGO_ENABLED=1 CGO_LDFLAGS="-lrocksdb -lstdc++ -lm -lz -lbz2 -lsnappy -llz4 -lzstd" \
-  go build -tags rocksdb -o gmet ./cmd/geth
+  go build -tags rocksdb -o gmet ./cmd/gmet                  # RocksDB
 ```
 
 ### Docker
@@ -142,15 +146,23 @@ before — but review the following **before** restarting on the new binary.
    did not actually stop (previously it could report success without stopping
    anything), and gained `.rc` tunables: `STOP_TIMEOUT` (seconds to wait for
    graceful shutdown before escalating, default `200`), `STOP_FORCE` (`0` =
-   never SIGKILL, exit non-zero instead), `LOCK_TIMEOUT` (default `200`).
-   Automation that wraps `stop` must check the exit code rather than assume
-   success, and size its own timeout above `STOP_TIMEOUT`. Never `kill -9` a
-   node — RocksDB especially.
-7. **Testnet operators: skip 1.1.0, go straight to 1.1.1.** The 1.1.0 testnet
-   build carries a chain-config regression that rewinds a 0.10.x node to
-   block 5,622,999 (~80M-block resync) on first start. 1.1.1 is safe from
-   both 0.10.x and 1.1.0 starting states. Run testnet nodes with
-   `--metadium-testnet` (or `TESTNET=1` in `.rc` when using `gmet.sh`).
+   never SIGKILL, exit non-zero instead; default `1`), `LOCK_TIMEOUT`
+   (default `200`). One coupling to understand: **under the default
+   `STOP_FORCE=1`, a node that outlives `STOP_TIMEOUT` is SIGKILLed by the
+   script itself and `stop` still exits 0** — the exit code only guarantees
+   a graceful shutdown when `STOP_FORCE=0` is set. Automation must check the
+   exit code *and* set `STOP_FORCE=0`, sizing its own timeout above
+   `STOP_TIMEOUT`. Never `kill -9` a node — RocksDB especially.
+7. **Testnet operators: skip 1.1.0, go straight to the m1.1.1 release
+   build.** The 1.1.0 testnet build carries a chain-config regression that
+   rewinds a 0.10.x node to block 5,622,999 (~80M-block resync) on first
+   start. The fix landed *after* the version string moved to 1.1.1, so
+   "reports 1.1.1-stable" does not prove a build is safe — use the official
+   m1.1.1 release asset, or verify `gmet version`'s `Git Commit` is at or
+   after `e2c0d7413`. Order matters on the remediation too: run testnet
+   nodes with `--metadium-testnet` (or `TESTNET=1` in `.rc`) **only once on
+   a fixed build** — adding the flag while still on a pre-fix binary is
+   exactly what arms the rewind.
 8. **RPC fee cap**: `gmet.sh` now passes `--rpc.txfeecap 0`, preserving the
    0.10.x behaviour of no cap on `eth_sendTransaction` fees. Operators who
    launch `gmet` directly without this flag get upstream's default 1-ether
@@ -161,17 +173,21 @@ before — but review the following **before** restarting on the new binary.
    `--syncmode` that starts on Metadium networks is `full` (item 5). systemd
    unit templates are provided at `metadium/scripts/gmet.service` (plus a
    sealer override).
-10. **`metadium/metclient` library users**: compile-time signature changes —
+10. **`metadium/metclient` library users**: signature changes —
     `SendValue`'s `amount` went `int` → `*big.Int`, and `_gasPrice` went
     `int` → `int64` in both `SendValue` and `Deploy` (`gas` is unchanged).
-    External tools linking the package fail loudly at compile time; update
-    the call sites.
+    `SendValue` call sites fail at compile time; **`Deploy` call sites that
+    pass a constant gas price compile unchanged** (untyped constants satisfy
+    `int64`) — audit those by hand. Note `amount` may now be `nil`, which is
+    a 0-value transfer rather than an error.
 
-Transaction-behaviour note: the pool again admits transactions up to 256KB
-(0.10.x parity; the intermediate 1.1.0 line rejected above 128KB). Until the
-whole network is upgraded, nodes still on old binaries do not propagate
-128–256KB transactions, so propagation of large contract deployments is
-path-dependent during a rolling upgrade.
+Transaction-behaviour note: the pool admits transactions of code plus
+constructor data up to 256KB total, restoring 0.10.x parity — 0.10.x has
+carried the same 256KB ceiling since 2018, so a mixed 0.10.x + 1.1.1 fleet
+behaves uniformly. Only the intermediate **1.1.0** line rejected above
+128KB: propagation of 128–256KB transactions is path-dependent only while
+1.1.0 nodes are present (relevant on testnet; the mainnet fleet upgrades
+straight from 0.10.x).
 
 ## Node Configuration Reference (`gmet.sh` / `.rc`)
 
@@ -181,11 +197,11 @@ stock layout). Every knob, with its default:
 
 | `.rc` variable | Default | Meaning |
 |---|---|---|
-| `PORT` | `8588` | HTTP-RPC port. WS is `PORT+10`, p2p is `PORT+1`. |
+| `PORT` | unset | When set: HTTP-RPC = `PORT`, WS = `PORT+10`, p2p = `PORT+1`. When unset, `gmet.sh` passes no port flags and the binary defaults apply: HTTP **8545**, WS **8546**, p2p **8589**. `init`-generated `.rc` files set `PORT=8588`. |
 | `HTTP_ADDR` / `WS_ADDR` | `127.0.0.1` | RPC / WS bind address. Set `0.0.0.0` (or a specific interface) only on nodes that must serve other machines. |
 | `TESTNET` | unset | `1` → `--metadium-testnet`. Anything else is ignored. |
-| `DISCOVER` | unset (on) | `0` → `--nodiscover`. Leave discovery on for ordinary full nodes; mainnet/testnet bootnodes are compiled into the binary, so no `BOOT_NODES` is needed. |
-| `SYNC_MODE` | unset (**archive**) | `full` → pruned full node (recommended for exchange/API nodes, ~600GB-class). **Unset means `--syncmode full --gcmode archive`** — a multi-TB archive node; only choose that if you need historical `debug_traceTransaction`. Any other value refuses to start on Metadium networks (full sync only, see the upgrade checklist). |
+| `DISCOVER` | unset (on) | `0` → `--nodiscover`. Note **`init`-generated `.rc` files contain `DISCOVER=0`** — remove or change it for ordinary full nodes, or the node dials no one. Mainnet/testnet bootnodes are compiled into the binary, so no `BOOT_NODES` is needed. |
+| `SYNC_MODE` | unset (**archive**) | `full` → pruned full node (recommended for exchange/API nodes, ~600GB-class). **Unset — or any unrecognized value, typos included — means `--syncmode full --gcmode archive`**: a multi-TB archive node. `fast`/`snap` make the node exit at startup (Metadium networks are full-sync only) — and since `gmet.sh start` backgrounds the node, `start` itself still returns 0, so check the log. |
 | `BOOT_NODES` | unset | Extra `--bootnodes` enodes (rarely needed, see above). |
 | `GMET_OPTS` | unset | Extra flags appended verbatim to the command line. |
 | `STOP_TIMEOUT` | `200` | Seconds `gmet.sh stop` waits for graceful shutdown before escalating. |
@@ -222,10 +238,16 @@ tarball and survive):
 
 ```bash
 cd /opt/meta
-bin/gmet.sh stop        # graceful; check the exit code -- never kill -9
+bin/gmet.sh stop        # graceful; see item 6 -- exit 0 under the default
+                        # STOP_FORCE=1 may still hide an internal SIGKILL
 tar xzvf metadium-<version>-linux-<leveldb|rocksdb>.tar.gz
+                        # ^ the GitHub release asset name; `make metadium`
+                        #   itself produces build/metadium.tar.gz
 bin/gmet.sh start
-bin/gmet version        # verify version and fork banner
+bin/gmet version        # verify the Git Commit line (gmet version prints
+                        # no fork or engine info)
+grep -m1 Camellia logs/log   # fork config is printed at chain init --
+                             # expect the Camellia activation height
 ```
 
 ## Testing
