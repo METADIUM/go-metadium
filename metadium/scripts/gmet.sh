@@ -60,6 +60,12 @@ function init ()
 
     echo "PORT=8588
 DISCOVER=0" > $d/.rc
+    # Metadium testnet (chain id 12) must run with --metadium-testnet for
+    # compiled-in config updates (fork blocks) to reach the node on upgrades;
+    # record the knob at init time so it cannot be silently forgotten.
+    if grep -qE '"chainId"[[:space:]]*:[[:space:]]*12\b' "$d/genesis.json"; then
+	echo "TESTNET=1" >> $d/.rc
+    fi
     ${GMET} --datadir $d init $d/genesis.json
     # echo "Generating dags for epoch 0 and 1..."
     # ${GMET} makedag 0     $d/.ethash &

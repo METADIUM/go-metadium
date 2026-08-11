@@ -12306,6 +12306,7 @@ var (
     "pangyoBlock": 73225410,
     "applepieBlock": 73225410,
     "bokbunjaBlock": 73225410,
+    "camelliaBlock": 117764000,
     "ethash": {}
   },
   "difficulty": "0x1",
@@ -12359,6 +12360,7 @@ var (
     "pangyoBlock": 44671396,
     "applepieBlock": 44671396,
     "bokbunjaBlock": 44671396,
+    "camelliaBlock": 86449000,
     "ethash": {}
   },
   "difficulty": "0x1",
