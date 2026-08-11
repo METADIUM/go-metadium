@@ -174,15 +174,16 @@ var (
 	MetadiumTestnetChainConfig = &ChainConfig{
 		ChainID:        big.NewInt(12),
 		HomesteadBlock: big.NewInt(0),
-		// DAO fields intentionally differ from mainnet (0/true). Both forms are
-		// inert on Metadium: the extra-data enforcement in
-		// VerifyDAOHeaderExtraData sits behind metaminer.IsPoW(), and a
-		// stored-config mismatch here cannot rewind -- the compat error's
-		// rewind target is genesis, which core/genesis.go suppresses and simply
-		// rewrites the stored config. nil/false is kept as the tidier form;
-		// mainnet keeps 0/true for parity with its 0.10.x stored configs.
-		DAOForkBlock:        nil,
-		DAOForkSupport:      false,
+		// 0/true matches mainnet and every 0.10.x-era stored config (including
+		// the embedded genesis JSON). Behaviourally inert on Metadium PoA --
+		// the extra-data enforcement in VerifyDAOHeaderExtraData sits behind
+		// metaminer.IsPoW() -- but the parity matters for checkCompatible: it
+		// returns on the first mismatch, and the DAO check runs before every
+		// later fork's check, so a nil/false here would mask Petersburg,
+		// Camellia and future-fork compatibility checks on the one startup
+		// (upgrade from 0.10.x) where they must run.
+		DAOForkBlock:        big.NewInt(0),
+		DAOForkSupport:      true,
 		EIP150Block:         big.NewInt(5623000),
 		EIP155Block:         big.NewInt(0),
 		EIP158Block:         big.NewInt(0),
@@ -190,9 +191,13 @@ var (
 		ConstantinopleBlock: big.NewInt(5623000),
 		// Must stay non-nil (0.10.x parity): nodes that last ran 0.10.x store
 		// petersburgBlock=5623000 in chaindata, and a nil here fails the
-		// stored-config compatibility check on startup, silently rewinding the
-		// chain to 5,622,999. IsPetersburg() is unaffected either way since
-		// Constantinople is also 5623000.
+		// stored-config compatibility check on startup, rewinding the chain to
+		// 5,622,999 (loud in the log -- "Rewinding chain to upgrade
+		// configuration" -- but easy to miss). IsPetersburg() is unaffected
+		// either way since Constantinople is also 5623000. Note the check only
+		// runs when this compiled config is consulted, i.e. nodes started with
+		// --metadium-testnet or a genesis file; a no-flag start takes the
+		// stored-config branch in core/genesis.go and never sees this value.
 		PetersburgBlock:  big.NewInt(5623000),
 		IstanbulBlock:    big.NewInt(5623000),
 		MuirGlacierBlock: big.NewInt(5623000),

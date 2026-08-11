@@ -3,7 +3,8 @@
 // A go-ethereum rebase once silently reverted txMaxSize to the upstream
 // default (4*txSlotSize, 128KB), which rejects max-size contract deployments
 // in the pool before the EIP-3860 check. This test makes the next rebase fail
-// loudly instead of shipping that regression again.
+// loudly instead of shipping that regression again. Each assertion has its
+// own failure message so the diagnosis matches the actual cause.
 
 package legacypool
 
@@ -13,27 +14,23 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-// minCreationOverhead is the headroom the pool ceiling must leave above the
-// raw code size: constructor bytecode, ABI-encoded arguments, RLP envelope
-// and signature. 8KB matches the historical MaxTransactionSize-MaxCodeSize gap.
-const minCreationOverhead = 8192
-
 func TestTxMaxSizeCoversMaxCode(t *testing.T) {
-	// A creation tx carries initcode (up to MaxCodeSize) plus constructor
-	// arguments, signature and RLP envelope. The pool admission ceiling must
-	// leave room for that overhead above the raw code size -- zero headroom
-	// would pass a bare ">= MaxCodeSize" check while still rejecting every
-	// real max-size deployment.
-	if txMaxSize < params.MaxCodeSize+minCreationOverhead {
-		t.Fatalf("txMaxSize (%d) < params.MaxCodeSize+minCreationOverhead (%d): "+
-			"max-size contract deployments will be rejected by the pool before "+
-			"EIP-3860. A rebase likely reverted the Metadium ceiling to the "+
-			"upstream default.",
-			txMaxSize, params.MaxCodeSize+minCreationOverhead)
-	}
+	// The pool ceiling must track the fork-specific named constant -- an
+	// inlined value is invisible to the next rebase.
 	if txMaxSize != params.MaxTransactionSize {
-		t.Fatalf("txMaxSize (%d) != params.MaxTransactionSize (%d): the pool "+
-			"ceiling must track the fork-specific constant, not an inlined value.",
+		t.Errorf("txMaxSize (%d) != params.MaxTransactionSize (%d): the pool "+
+			"ceiling must track the fork-specific constant. A rebase likely "+
+			"reverted it to the upstream default.",
 			txMaxSize, params.MaxTransactionSize)
+	}
+	// And the constant itself must keep creation-tx headroom above
+	// MaxCodeSize -- with zero headroom every real max-size deployment is
+	// still rejected even though the ceiling nominally covers the code.
+	if params.MaxTransactionSize < params.MaxCodeSize+params.TxCreationOverhead {
+		t.Errorf("params.MaxTransactionSize (%d) < params.MaxCodeSize+"+
+			"params.TxCreationOverhead (%d): max-size contract deployments "+
+			"will be rejected by the pool before EIP-3860. If MaxCodeSize "+
+			"changed intentionally, move MaxTransactionSize with it.",
+			params.MaxTransactionSize, params.MaxCodeSize+params.TxCreationOverhead)
 	}
 }

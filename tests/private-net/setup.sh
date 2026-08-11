@@ -8,7 +8,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-GMET_BIN="${GMET_BIN:?set GMET_BIN to the gmet binary (e.g. GMET_BIN=../../build/bin/gmet ./setup.sh)}"
+# Defaults to the repo's build output; the -x check below owns the error path.
+GMET_BIN="${GMET_BIN:-$SCRIPT_DIR/../../build/bin/gmet}"
 USE_ROCKSDB="${USE_ROCKSDB:-1}"
 NETWORKID=1337
 PASSWORD="privatenet123"
@@ -16,7 +17,7 @@ PASSWORD="privatenet123"
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
 err()  { echo "[ERROR] $*" >&2; exit 1; }
 
-[[ -x "$GMET_BIN" ]] || err "gmet binary not found: $GMET_BIN"
+[[ -x "$GMET_BIN" ]] || err "gmet binary not found or not executable: $GMET_BIN (build it with 'make gmet', or point GMET_BIN at an absolute path)"
 
 log "=== Private network initialization started (chainId=$NETWORKID, CamelliaFork=100) ==="
 
