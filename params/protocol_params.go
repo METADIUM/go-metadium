@@ -149,7 +149,18 @@ const (
 	// the upstream default, and the regression only surfaced at release time. A
 	// bare 8*txSlotSize would be invisible to the next rebase; this name (and
 	// TestTxMaxSizeCoversMaxCode) is what makes it fail loudly.
+	//
+	// Not consensus-critical -- local pool admission policy only. It sits next
+	// to MaxCodeSize for the arithmetic relationship, but changing it needs no
+	// hard fork.
 	MaxTransactionSize = 262144 // 256KB
+
+	// TxCreationOverhead is the minimum headroom MaxTransactionSize must keep
+	// above MaxCodeSize for the non-code parts of a creation tx: constructor
+	// bytecode, ABI-encoded arguments, RLP envelope and signature. 8KB is the
+	// historical MaxTransactionSize-MaxCodeSize gap, not an independently
+	// derived bound. Named once here; the guard test asserts the relationship.
+	TxCreationOverhead = 8192
 
 	// Precompiled contract gas prices
 
