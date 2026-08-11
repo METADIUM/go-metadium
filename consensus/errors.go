@@ -35,6 +35,10 @@ var (
 	// plus one.
 	ErrInvalidNumber = errors.New("invalid block number")
 
+	// ErrInvalidTerminalBlock is returned if a block is invalid wrt. the terminal
+	// total difficulty.
+	ErrInvalidTerminalBlock = errors.New("invalid terminal block")
+
 	// ErrUnauthorized is returned if a block's minerNodeId or minerNodeSig is invalid.
 	ErrUnauthorized = errors.New("unauthorized block")
 )

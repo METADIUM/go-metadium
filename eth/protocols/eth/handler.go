@@ -35,9 +35,6 @@ const (
 	// softResponseLimit is the target maximum size of replies to data retrievals.
 	softResponseLimit = 2 * 1024 * 1024
 
-	// estHeaderSize is the approximate size of an RLP encoded block header.
-	estHeaderSize = 500
-
 	// maxHeadersServe is the maximum number of block headers to serve. This number
 	// is there to limit the number of disk lookups.
 	maxHeadersServe = 1024
@@ -46,10 +43,6 @@ const (
 	// is mostly there to limit the number of disk lookups. With 24KB block sizes
 	// nowadays, the practical limit will always be softResponseLimit.
 	maxBodiesServe = 1024
-
-	// maxNodeDataServe is the maximum number of state trie nodes to serve. This
-	// number is there to limit the number of disk lookups.
-	maxNodeDataServe = 1024
 
 	// maxReceiptsServe is the maximum number of block receipts to serve. This
 	// number is mostly there to limit the number of disk lookups. With block
@@ -98,11 +91,11 @@ type TxPool interface {
 
 // MakeProtocols constructs the P2P protocol definitions for `eth`.
 func MakeProtocols(backend Backend, network uint64, dnsdisc enode.Iterator) []p2p.Protocol {
-	protocols := make([]p2p.Protocol, len(ProtocolVersions))
-	for i, version := range ProtocolVersions {
+	protocols := make([]p2p.Protocol, 0, len(ProtocolVersions))
+	for _, version := range ProtocolVersions {
 		version := version // Closure
 
-		protocols[i] = p2p.Protocol{
+		protocols = append(protocols, p2p.Protocol{
 			Name:    ProtocolName,
 			Version: version,
 			Length:  protocolLengths[version],
@@ -122,7 +115,7 @@ func MakeProtocols(backend Backend, network uint64, dnsdisc enode.Iterator) []p2
 			},
 			Attributes:     []enr.Entry{currentENREntry(backend.Chain())},
 			DialCandidates: dnsdisc,
-		}
+		})
 	}
 	return protocols
 }
@@ -130,7 +123,7 @@ func MakeProtocols(backend Backend, network uint64, dnsdisc enode.Iterator) []p2
 // NodeInfo represents a short summary of the `eth` sub-protocol metadata
 // known about the host peer.
 type NodeInfo struct {
-	Network    uint64              `json:"network"`    // Ethereum network ID (1=Frontier, 2=Morden, Ropsten=3, Rinkeby=4)
+	Network    uint64              `json:"network"`    // Ethereum network ID (1=Mainnet, Goerli=5)
 	Difficulty *big.Int            `json:"difficulty"` // Total difficulty of the host's blockchain
 	Genesis    common.Hash         `json:"genesis"`    // SHA3 hash of the host's genesis block
 	Config     *params.ChainConfig `json:"config"`     // Chain configuration for the fork rules
@@ -140,12 +133,14 @@ type NodeInfo struct {
 // nodeInfo retrieves some `eth` protocol metadata about the running host node.
 func nodeInfo(chain *core.BlockChain, network uint64) *NodeInfo {
 	head := chain.CurrentBlock()
+	hash := head.Hash()
+
 	return &NodeInfo{
 		Network:    network,
-		Difficulty: chain.GetTd(head.Hash(), head.NumberU64()),
+		Difficulty: chain.GetTd(hash, head.Number.Uint64()),
 		Genesis:    chain.Genesis().Hash(),
 		Config:     chain.Config(),
-		Head:       head.Hash(),
+		Head:       hash,
 	}
 }
 
@@ -167,22 +162,20 @@ type Decoder interface {
 	Time() time.Time
 }
 
-var eth65 = map[uint64]msgHandler{
-	GetBlockHeadersMsg:            handleGetBlockHeaders,
-	BlockHeadersMsg:               handleBlockHeaders,
-	GetBlockBodiesMsg:             handleGetBlockBodies,
-	BlockBodiesMsg:                handleBlockBodies,
-	GetNodeDataMsg:                handleGetNodeData,
-	NodeDataMsg:                   handleNodeData,
-	GetReceiptsMsg:                handleGetReceipts,
-	ReceiptsMsg:                   handleReceipts,
+var eth68 = map[uint64]msgHandler{
 	NewBlockHashesMsg:             handleNewBlockhashes,
 	NewBlockMsg:                   handleNewBlock,
 	TransactionsMsg:               handleTransactions,
 	NewPooledTransactionHashesMsg: handleNewPooledTransactionHashes,
+	GetBlockHeadersMsg:            handleGetBlockHeaders,
+	BlockHeadersMsg:               handleBlockHeaders,
+	GetBlockBodiesMsg:             handleGetBlockBodies,
+	BlockBodiesMsg:                handleBlockBodies,
+	GetReceiptsMsg:                handleGetReceipts,
+	ReceiptsMsg:                   handleReceipts,
 	GetPooledTransactionsMsg:      handleGetPooledTransactions,
 	PooledTransactionsMsg:         handlePooledTransactions,
-	// metadium message handlers - not eth/66 yet
+	// Metadium extensions
 	GetPendingTxsMsg:  handleGetPendingTxs,
 	GetStatusExMsg:    handleGetStatusEx,
 	StatusExMsg:       handleStatusEx,
@@ -191,23 +184,54 @@ var eth65 = map[uint64]msgHandler{
 	TransactionsExMsg: handleTransactionsEx,
 }
 
-var eth66 = map[uint64]msgHandler{
+// eth69 ("meta/69") bundles blob-sidecar serving (M5) and meta-message replay
+// protection (M12). For P1 (scaffolding) it mirrors eth68; P2 replaces the meta
+// handlers with replay-aware variants and P3 adds the blob-sidecar handlers
+// (GetBlobSidecarsMsg / BlobSidecarsMsg). Kept as a distinct map so those phases
+// can diverge from eth68 without affecting meta/68 peers.
+var eth69 = map[uint64]msgHandler{
 	NewBlockHashesMsg:             handleNewBlockhashes,
 	NewBlockMsg:                   handleNewBlock,
 	TransactionsMsg:               handleTransactions,
 	NewPooledTransactionHashesMsg: handleNewPooledTransactionHashes,
-	// eth66 messages with request-id
-	GetBlockHeadersMsg:       handleGetBlockHeaders66,
-	BlockHeadersMsg:          handleBlockHeaders66,
-	GetBlockBodiesMsg:        handleGetBlockBodies66,
-	BlockBodiesMsg:           handleBlockBodies66,
-	GetNodeDataMsg:           handleGetNodeData66,
-	NodeDataMsg:              handleNodeData66,
-	GetReceiptsMsg:           handleGetReceipts66,
-	ReceiptsMsg:              handleReceipts66,
-	GetPooledTransactionsMsg: handleGetPooledTransactions66,
-	PooledTransactionsMsg:    handlePooledTransactions66,
-	// metadium message handlers - not eth/66 yet
+	GetBlockHeadersMsg:            handleGetBlockHeaders,
+	BlockHeadersMsg:               handleBlockHeaders,
+	GetBlockBodiesMsg:             handleGetBlockBodies,
+	BlockBodiesMsg:                handleBlockBodies,
+	GetReceiptsMsg:                handleGetReceipts,
+	ReceiptsMsg:                   handleReceipts,
+	GetPooledTransactionsMsg:      handleGetPooledTransactions,
+	PooledTransactionsMsg:         handlePooledTransactions,
+	// Metadium extensions (meta/69: replay-protected meta handlers, M12)
+	GetPendingTxsMsg:  handleGetPendingTxs,
+	GetStatusExMsg:    handleGetStatusEx69,
+	StatusExMsg:       handleStatusEx69,
+	EtcdAddMemberMsg:  handleEtcdAddMember69,
+	EtcdClusterMsg:    handleEtcdCluster69,
+	TransactionsExMsg: handleTransactionsEx,
+	// Blob-sidecar serving (M5, meta/69 only)
+	GetBlobSidecarsMsg: handleGetBlobSidecars69,
+	BlobSidecarsMsg:    handleBlobSidecars69,
+}
+
+// eth66 is like eth68 but uses the old NewPooledTransactionHashes format (hashes only,
+// no type/size) and accepts GetNodeData/NodeData from peers that may still send them.
+var eth66 = map[uint64]msgHandler{
+	NewBlockHashesMsg:             handleNewBlockhashes,
+	NewBlockMsg:                   handleNewBlock,
+	TransactionsMsg:               handleTransactions,
+	NewPooledTransactionHashesMsg: handleNewPooledTransactionHashes66,
+	GetBlockHeadersMsg:            handleGetBlockHeaders,
+	BlockHeadersMsg:               handleBlockHeaders,
+	GetBlockBodiesMsg:             handleGetBlockBodies,
+	BlockBodiesMsg:                handleBlockBodies,
+	GetReceiptsMsg:                handleGetReceipts,
+	ReceiptsMsg:                   handleReceipts,
+	GetPooledTransactionsMsg:      handleGetPooledTransactions,
+	PooledTransactionsMsg:         handlePooledTransactions,
+	GetNodeDataMsg:                handleGetNodeData,
+	NodeDataMsg:                   handleNodeData,
+	// Metadium extensions
 	GetPendingTxsMsg:  handleGetPendingTxs,
 	GetStatusExMsg:    handleGetStatusEx,
 	StatusExMsg:       handleStatusEx,
@@ -229,8 +253,12 @@ func handleMessage(backend Backend, peer *Peer) error {
 	}
 	defer msg.Discard()
 
-	var handlers = eth65
-	if peer.Version() >= ETH66 {
+	var handlers map[uint64]msgHandler
+	if peer.Version() >= ETH69 {
+		handlers = eth69
+	} else if peer.Version() >= ETH68 {
+		handlers = eth68
+	} else {
 		handlers = eth66
 	}
 

@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/console/prompt"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 )
 
 type ContractData struct {
@@ -244,7 +245,7 @@ func GetContractReceipt(ctx context.Context, cli *ethclient.Client, hash common.
 }
 
 func Deploy(ctx context.Context, cli *ethclient.Client, from *keystore.Key,
-	contractData *ContractData, args []interface{}, gas, _gasPrice int) (
+	contractData *ContractData, args []interface{}, gas int, _gasPrice int64) (
 	hash common.Hash, err error) {
 	// pull transaction parameters from metadium node
 	chainId, gasPrice, nonce, err := GetOpportunisticTxParams(
@@ -254,7 +255,7 @@ func Deploy(ctx context.Context, cli *ethclient.Client, from *keystore.Key,
 	}
 
 	if _gasPrice > 0 {
-		gasPrice = big.NewInt(int64(_gasPrice))
+		gasPrice = big.NewInt(_gasPrice)
 	}
 
 	var data []byte
@@ -302,6 +303,44 @@ func IsArray(x interface{}) bool {
 	}
 }
 
+// callContractTimeout bounds how long a single contract read may hold
+// metaminer.TrieAccessMu for reading. Once the lock is held, a governance read
+// against the in-process client is a sub-millisecond operation, so this only
+// ever fires when the RPC stack has stopped answering.
+const callContractTimeout = 30 * time.Second
+
+// callContractSerialized runs the EVM read while holding metaminer.TrieAccessMu
+// for reading.
+//
+// The lock serializes the read against archive-mode triedb commits: the read
+// dispatches on a fresh statedb sharing the same triedb backend as the
+// block-import goroutine, and without serialization it can observe a transient
+// missing-state for just-committed accounts.
+//
+// The lock must never be held indefinitely. contract.Cli is an in-process
+// client, and once the node begins shutting down the call can stop being
+// answered; a reader parked here forever blocks writeBlockWithState on
+// TrieAccessMu.Lock, which in turn wedges the downloader's cancel WaitGroup and
+// deadlocks node shutdown (the process then only dies via SIGKILL). Bounding
+// the call with a deadline, and releasing via defer so a panic cannot leak the
+// lock either, keeps the writer able to make progress.
+//
+// The deadline is armed only after the lock is acquired. Time spent waiting on
+// a slow writer must not consume the budget: reward reads arrive with no
+// deadline of their own, and calculateRewards treats any error as "governance
+// not initialized" and quietly falls back to fees-only distribution, so an
+// expired-while-waiting context would let a >30s triedb commit turn a
+// correct-but-slow read into a wrong-rewards block. Blocking on the lock is
+// the pre-existing, safe behaviour; only the hold is bounded.
+func callContractSerialized(ctx context.Context, contract *RemoteContract,
+	msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	metaminer.TrieAccessMu.RLock()
+	defer metaminer.TrieAccessMu.RUnlock()
+	ctx, cancel := context.WithTimeout(ctx, callContractTimeout)
+	defer cancel()
+	return contract.Cli.CallContract(ctx, msg, block)
+}
+
 func CallContract(ctx context.Context, contract *RemoteContract,
 	method string, input, output interface{}, block *big.Int) error {
 	var in, out []byte
@@ -329,7 +368,7 @@ func CallContract(ctx context.Context, contract *RemoteContract,
 		To:   contract.To,
 		Data: in,
 	}
-	out, err = contract.Cli.CallContract(ctx, msg, block)
+	out, err = callContractSerialized(ctx, contract, msg, block)
 	if err != nil {
 		return err
 	}
@@ -397,18 +436,18 @@ func SendContract(ctx context.Context, contract *RemoteContract, method string,
 	return
 }
 
-func SendValue(ctx context.Context, cli *ethclient.Client, from *keystore.Key, to common.Address, amount, gas, _gasPrice int) (hash common.Hash, err error) {
+func SendValue(ctx context.Context, cli *ethclient.Client, from *keystore.Key, to common.Address, amount *big.Int, gas int, _gasPrice int64) (hash common.Hash, err error) {
 	chainId, gasPrice, nonce, err := GetOpportunisticTxParams(
 		ctx, cli, from.Address, false, true)
 	if err != nil {
 		return
 	}
 	if _gasPrice > 0 {
-		gasPrice = big.NewInt(int64(_gasPrice))
+		gasPrice = big.NewInt(_gasPrice)
 	}
 
 	var tx, stx *types.Transaction
-	tx = types.NewTransaction(nonce.Uint64(), to, big.NewInt(int64(amount)),
+	tx = types.NewTransaction(nonce.Uint64(), to, amount,
 		uint64(gas), gasPrice, nil)
 
 	signer := types.NewEIP155Signer(chainId)

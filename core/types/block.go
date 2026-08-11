@@ -32,11 +32,6 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
-var (
-	EmptyRootHash  = common.HexToHash("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
-	EmptyUncleHash = rlpHash([]*Header(nil))
-)
-
 // A BlockNonce is a 64-bit hash which proves (combined with the
 // mix-hash) that a sufficient amount of computation has been carried
 // out on a block.
@@ -80,10 +75,10 @@ type Header struct {
 	Number       *big.Int       `json:"number"           gencodec:"required"`
 	GasLimit     uint64         `json:"gasLimit"         gencodec:"required"`
 	GasUsed      uint64         `json:"gasUsed"          gencodec:"required"`
-	Fees         *big.Int       `json:"fees"             gencodec:"required"`
+	Fees         *big.Int       `json:"fees"`
 	Time         uint64         `json:"timestamp"        gencodec:"required"`
 	Extra        []byte         `json:"extraData"        gencodec:"required"`
-	Rewards      []byte         `json:"rewards"          gencodec:"required"`
+	Rewards      []byte         `json:"rewards"`
 	MixDigest    common.Hash    `json:"mixHash"`
 	Nonce        BlockNonce     `json:"nonce"`
 	MinerNodeId  []byte         `json:"minerNode"`
@@ -92,11 +87,17 @@ type Header struct {
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
 	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
 
-	/*
-		TODO (MariusVanDerWijden) Add this field once needed
-		// Random was added during the merge and contains the BeaconState randomness
-		Random common.Hash `json:"random" rlp:"optional"`
-	*/
+	// WithdrawalsHash was added by EIP-4895 and is ignored in legacy headers.
+	WithdrawalsHash *common.Hash `json:"withdrawalsRoot" rlp:"optional"`
+
+	// ExcessBlobGas was added by EIP-4844 for blob transaction support.
+	ExcessBlobGas *big.Int `json:"excessBlobGas" rlp:"optional"`
+
+	// BlobGasUsed tracks the total blob gas consumed by blob transactions in the block.
+	BlobGasUsed *big.Int `json:"blobGasUsed" rlp:"optional"`
+
+	// ParentBeaconRoot was added by EIP-4788 and is ignored in legacy headers.
+	ParentBeaconRoot *common.Hash `json:"parentBeaconBlockRoot" rlp:"optional"`
 }
 
 // TODO: only used for rlp
@@ -112,10 +113,10 @@ type headerRlp struct {
 	Number       *big.Int       `json:"number"           gencodec:"required"`
 	GasLimit     uint64         `json:"gasLimit"         gencodec:"required"`
 	GasUsed      uint64         `json:"gasUsed"          gencodec:"required"`
-	Fees         *big.Int       `json:"fees"             gencodec:"required"`
+	Fees         *big.Int       `json:"fees"`
 	Time         uint64         `json:"timestamp"        gencodec:"required"`
 	Extra        []byte         `json:"extraData"        gencodec:"required"`
-	Rewards      []byte         `json:"rewards"          gencodec:"required"`
+	Rewards      []byte         `json:"rewards"`
 	MixDigest    common.Hash    `json:"mixHash"`
 	Nonce        BlockNonce     `json:"nonce"`
 	MinerNodeId  []byte         `json:"minerNode"`
@@ -124,27 +125,35 @@ type headerRlp struct {
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
 	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
 
-	/*
-		TODO (MariusVanDerWijden) Add this field once needed
-		// Random was added during the merge and contains the BeaconState randomness
-		Random common.Hash `json:"random" rlp:"optional"`
-	*/
+	// WithdrawalsHash was added by EIP-4895 and is ignored in legacy headers.
+	WithdrawalsHash *common.Hash `json:"withdrawalsRoot" rlp:"optional"`
+
+	// ExcessBlobGas was added by EIP-4844 for blob transaction support.
+	ExcessBlobGas *big.Int `json:"excessBlobGas" rlp:"optional"`
+
+	// BlobGasUsed tracks the total blob gas consumed by blob transactions in the block.
+	BlobGasUsed *big.Int `json:"blobGasUsed" rlp:"optional"`
+
+	// ParentBeaconRoot was added by EIP-4788 and is ignored in legacy headers.
+	ParentBeaconRoot *common.Hash `json:"parentBeaconBlockRoot" rlp:"optional"`
 }
 
 // field type overrides for gencodec
 type headerMarshaling struct {
-	Difficulty   *hexutil.Big
-	Number       *hexutil.Big
-	GasLimit     hexutil.Uint64
-	GasUsed      hexutil.Uint64
-	Fees         *hexutil.Big
-	Time         hexutil.Uint64
-	Extra        hexutil.Bytes
-	Rewards      hexutil.Bytes
-	MinerNodeId  hexutil.Bytes
-	MinerNodeSig hexutil.Bytes
-	BaseFee      *hexutil.Big
-	Hash         common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
+	Difficulty    *hexutil.Big
+	Number        *hexutil.Big
+	GasLimit      hexutil.Uint64
+	GasUsed       hexutil.Uint64
+	Fees          *hexutil.Big
+	Time          hexutil.Uint64
+	Extra         hexutil.Bytes
+	Rewards       hexutil.Bytes
+	MinerNodeId   hexutil.Bytes
+	MinerNodeSig  hexutil.Bytes
+	BaseFee       *hexutil.Big
+	ExcessBlobGas *hexutil.Big
+	BlobGasUsed   *hexutil.Big
+	Hash          common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
 }
 
 // HeaderLegacy represents a legacy block header in the Ethereum blockchain.
@@ -168,105 +177,115 @@ type HeaderLegacy struct {
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
 	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
 
-	/*
-		TODO (MariusVanDerWijden) Add this field once needed
-		// Random was added during the merge and contains the BeaconState randomness
-		Random common.Hash `json:"random" rlp:"optional"`
-	*/
+	// ExcessBlobGas was added by EIP-4844 for blob transaction support.
+	ExcessBlobGas *big.Int `json:"excessBlobGas" rlp:"optional"`
+
+	// BlobGasUsed tracks the total blob gas consumed by blob transactions in the block.
+	BlobGasUsed *big.Int `json:"blobGasUsed" rlp:"optional"`
 }
 
 func headerToHeaderRlp(h *Header) *headerRlp {
 	hh := &headerRlp{
-		ParentHash:   h.ParentHash,
-		UncleHash:    h.UncleHash,
-		Coinbase:     h.Coinbase,
-		Root:         h.Root,
-		TxHash:       h.TxHash,
-		ReceiptHash:  h.ReceiptHash,
-		Bloom:        h.Bloom,
-		Difficulty:   h.Difficulty,
-		Number:       h.Number,
-		GasLimit:     h.GasLimit,
-		GasUsed:      h.GasUsed,
-		Fees:         h.Fees,
-		Time:         h.Time,
-		Extra:        h.Extra,
-		Rewards:      h.Rewards,
-		MixDigest:    h.MixDigest,
-		Nonce:        h.Nonce,
-		MinerNodeId:  h.MinerNodeId,
-		MinerNodeSig: h.MinerNodeSig,
-		BaseFee:      h.BaseFee,
+		ParentHash:      h.ParentHash,
+		UncleHash:       h.UncleHash,
+		Coinbase:        h.Coinbase,
+		Root:            h.Root,
+		TxHash:          h.TxHash,
+		ReceiptHash:     h.ReceiptHash,
+		Bloom:           h.Bloom,
+		Difficulty:      h.Difficulty,
+		Number:          h.Number,
+		GasLimit:        h.GasLimit,
+		GasUsed:         h.GasUsed,
+		Fees:            h.Fees,
+		Time:            h.Time,
+		Extra:           h.Extra,
+		Rewards:         h.Rewards,
+		MixDigest:       h.MixDigest,
+		Nonce:           h.Nonce,
+		MinerNodeId:     h.MinerNodeId,
+		MinerNodeSig:    h.MinerNodeSig,
+		BaseFee:         h.BaseFee,
+		WithdrawalsHash: h.WithdrawalsHash,
+		ExcessBlobGas:   h.ExcessBlobGas,
+		BlobGasUsed:     h.BlobGasUsed,
 	}
 	return hh
 }
 
 func headerRlpToHeader(h *headerRlp) *Header {
 	hh := &Header{
-		ParentHash:   h.ParentHash,
-		UncleHash:    h.UncleHash,
-		Coinbase:     h.Coinbase,
-		Root:         h.Root,
-		TxHash:       h.TxHash,
-		ReceiptHash:  h.ReceiptHash,
-		Bloom:        h.Bloom,
-		Difficulty:   h.Difficulty,
-		Number:       h.Number,
-		GasLimit:     h.GasLimit,
-		GasUsed:      h.GasUsed,
-		Fees:         h.Fees,
-		Time:         h.Time,
-		Extra:        h.Extra,
-		Rewards:      h.Rewards,
-		MixDigest:    h.MixDigest,
-		Nonce:        h.Nonce,
-		MinerNodeId:  h.MinerNodeId,
-		MinerNodeSig: h.MinerNodeSig,
-		BaseFee:      h.BaseFee,
+		ParentHash:      h.ParentHash,
+		UncleHash:       h.UncleHash,
+		Coinbase:        h.Coinbase,
+		Root:            h.Root,
+		TxHash:          h.TxHash,
+		ReceiptHash:     h.ReceiptHash,
+		Bloom:           h.Bloom,
+		Difficulty:      h.Difficulty,
+		Number:          h.Number,
+		GasLimit:        h.GasLimit,
+		GasUsed:         h.GasUsed,
+		Fees:            h.Fees,
+		Time:            h.Time,
+		Extra:           h.Extra,
+		Rewards:         h.Rewards,
+		MixDigest:       h.MixDigest,
+		Nonce:           h.Nonce,
+		MinerNodeId:     h.MinerNodeId,
+		MinerNodeSig:    h.MinerNodeSig,
+		BaseFee:         h.BaseFee,
+		WithdrawalsHash: h.WithdrawalsHash,
+		ExcessBlobGas:   h.ExcessBlobGas,
+		BlobGasUsed:     h.BlobGasUsed,
 	}
 	return hh
 }
 
 func HeaderToHeaderLegacy(h *Header) *HeaderLegacy {
 	hh := &HeaderLegacy{
-		ParentHash:  h.ParentHash,
-		UncleHash:   h.UncleHash,
-		Coinbase:    h.Coinbase,
-		Root:        h.Root,
-		TxHash:      h.TxHash,
-		ReceiptHash: h.ReceiptHash,
-		Bloom:       h.Bloom,
-		Difficulty:  h.Difficulty,
-		Number:      h.Number,
-		GasLimit:    h.GasLimit,
-		GasUsed:     h.GasUsed,
-		Time:        h.Time,
-		Extra:       h.Extra,
-		MixDigest:   h.MixDigest,
-		Nonce:       h.Nonce,
-		BaseFee:     h.BaseFee,
+		ParentHash:    h.ParentHash,
+		UncleHash:     h.UncleHash,
+		Coinbase:      h.Coinbase,
+		Root:          h.Root,
+		TxHash:        h.TxHash,
+		ReceiptHash:   h.ReceiptHash,
+		Bloom:         h.Bloom,
+		Difficulty:    h.Difficulty,
+		Number:        h.Number,
+		GasLimit:      h.GasLimit,
+		GasUsed:       h.GasUsed,
+		Time:          h.Time,
+		Extra:         h.Extra,
+		MixDigest:     h.MixDigest,
+		Nonce:         h.Nonce,
+		BaseFee:       h.BaseFee,
+		ExcessBlobGas: h.ExcessBlobGas,
+		BlobGasUsed:   h.BlobGasUsed,
 	}
 	return hh
 }
 
 func HeaderLegacyToHeader(h *HeaderLegacy) *Header {
 	hh := &Header{
-		ParentHash:  h.ParentHash,
-		UncleHash:   h.UncleHash,
-		Coinbase:    h.Coinbase,
-		Root:        h.Root,
-		TxHash:      h.TxHash,
-		ReceiptHash: h.ReceiptHash,
-		Bloom:       h.Bloom,
-		Difficulty:  h.Difficulty,
-		Number:      h.Number,
-		GasLimit:    h.GasLimit,
-		GasUsed:     h.GasUsed,
-		Time:        h.Time,
-		Extra:       h.Extra,
-		MixDigest:   h.MixDigest,
-		Nonce:       h.Nonce,
-		BaseFee:     h.BaseFee,
+		ParentHash:    h.ParentHash,
+		UncleHash:     h.UncleHash,
+		Coinbase:      h.Coinbase,
+		Root:          h.Root,
+		TxHash:        h.TxHash,
+		ReceiptHash:   h.ReceiptHash,
+		Bloom:         h.Bloom,
+		Difficulty:    h.Difficulty,
+		Number:        h.Number,
+		GasLimit:      h.GasLimit,
+		GasUsed:       h.GasUsed,
+		Time:          h.Time,
+		Extra:         h.Extra,
+		MixDigest:     h.MixDigest,
+		Nonce:         h.Nonce,
+		BaseFee:       h.BaseFee,
+		ExcessBlobGas: h.ExcessBlobGas,
+		BlobGasUsed:   h.BlobGasUsed,
 	}
 	return hh
 }
@@ -274,6 +293,9 @@ func HeaderLegacyToHeader(h *HeaderLegacy) *Header {
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
 // RLP encoding.
 func (h *Header) Hash() common.Hash {
+	if h == nil {
+		return common.Hash{}
+	}
 	if metaminer.IsPoW() {
 		return rlpHash(HeaderToHeaderLegacy(h))
 	}
@@ -357,6 +379,7 @@ func (h *Header) EmptyReceipts() bool {
 type Body struct {
 	Transactions []*Transaction
 	Uncles       []*Header
+	Withdrawals  []*Withdrawal `rlp:"optional"`
 }
 
 // Block represents an entire block in the Ethereum blockchain.
@@ -364,6 +387,7 @@ type Block struct {
 	header       *Header
 	uncles       []*Header
 	transactions Transactions
+	withdrawals  Withdrawals
 
 	// caches
 	hash atomic.Value
@@ -381,9 +405,10 @@ type Block struct {
 
 // "external" block encoding. used for eth protocol, etc.
 type extblock struct {
-	Header *Header
-	Txs    []*Transaction
-	Uncles []*Header
+	Header      *Header
+	Txs         []*Transaction
+	Uncles      []*Header
+	Withdrawals []*Withdrawal `rlp:"optional"`
 }
 
 // NewBlock creates a new block. The input data is copied,
@@ -425,6 +450,22 @@ func NewBlock(header *Header, txs []*Transaction, uncles []*Header, receipts []*
 	return b
 }
 
+// NewBlockWithWithdrawals creates a new block with the given header, transactions, uncles, receipts and withdrawals.
+func NewBlockWithWithdrawals(header *Header, txs []*Transaction, uncles []*Header, receipts []*Receipt, withdrawals []*Withdrawal, hasher TrieHasher) *Block {
+	b := NewBlock(header, txs, uncles, receipts, hasher)
+
+	if withdrawals == nil {
+		b.header.WithdrawalsHash = nil
+	} else if len(withdrawals) == 0 {
+		b.header.WithdrawalsHash = &EmptyWithdrawalsHash
+	} else {
+		h := DeriveSha(Withdrawals(withdrawals), hasher)
+		b.header.WithdrawalsHash = &h
+	}
+
+	return b.WithWithdrawals(withdrawals)
+}
+
 // NewBlockWithHeader creates a block with the given header data. The
 // header data is copied, changes to header and to the field values
 // will not affect the block.
@@ -445,6 +486,16 @@ func CopyHeader(h *Header) *Header {
 	if h.BaseFee != nil {
 		cpy.BaseFee = new(big.Int).Set(h.BaseFee)
 	}
+	if h.WithdrawalsHash != nil {
+		cpy.WithdrawalsHash = new(common.Hash)
+		*cpy.WithdrawalsHash = *h.WithdrawalsHash
+	}
+	if h.ExcessBlobGas != nil {
+		cpy.ExcessBlobGas = new(big.Int).Set(h.ExcessBlobGas)
+	}
+	if h.BlobGasUsed != nil {
+		cpy.BlobGasUsed = new(big.Int).Set(h.BlobGasUsed)
+	}
 	if len(h.Extra) > 0 {
 		cpy.Extra = make([]byte, len(h.Extra))
 		copy(cpy.Extra, h.Extra)
@@ -463,17 +514,18 @@ func (b *Block) DecodeRLP(s *rlp.Stream) error {
 	if err := s.Decode(&eb); err != nil {
 		return err
 	}
-	b.header, b.uncles, b.transactions = eb.Header, eb.Uncles, eb.Txs
-	b.size.Store(common.StorageSize(rlp.ListSize(size)))
+	b.header, b.uncles, b.transactions, b.withdrawals = eb.Header, eb.Uncles, eb.Txs, eb.Withdrawals
+	b.size.Store(rlp.ListSize(size))
 	return nil
 }
 
 // EncodeRLP serializes b into the Ethereum RLP block format.
 func (b *Block) EncodeRLP(w io.Writer) error {
 	return rlp.Encode(w, extblock{
-		Header: b.header,
-		Txs:    b.transactions,
-		Uncles: b.uncles,
+		Header:      b.header,
+		Txs:         b.transactions,
+		Uncles:      b.uncles,
+		Withdrawals: b.withdrawals,
 	})
 }
 
@@ -481,6 +533,17 @@ func (b *Block) EncodeRLP(w io.Writer) error {
 
 func (b *Block) Uncles() []*Header          { return b.uncles }
 func (b *Block) Transactions() Transactions { return b.transactions }
+func (b *Block) Withdrawals() Withdrawals   { return b.withdrawals }
+
+// WithWithdrawals sets the withdrawals of the block and returns the modified block.
+func (b *Block) WithWithdrawals(withdrawals []*Withdrawal) *Block {
+	cpy := *b
+	if withdrawals != nil {
+		cpy.withdrawals = make(Withdrawals, len(withdrawals))
+		copy(cpy.withdrawals, withdrawals)
+	}
+	return &cpy
+}
 
 func (b *Block) Transaction(hash common.Hash) *Transaction {
 	for _, transaction := range b.transactions {
@@ -511,8 +574,9 @@ func (b *Block) UncleHash() common.Hash   { return b.header.UncleHash }
 func (b *Block) Extra() []byte            { return common.CopyBytes(b.header.Extra) }
 func (b *Block) Rewards() []byte          { return common.CopyBytes(b.header.Rewards) }
 
-func (b *Block) MinerNodeId() []byte  { return b.header.MinerNodeId }
-func (b *Block) MinerNodeSig() []byte { return b.header.MinerNodeSig }
+func (b *Block) MinerNodeId() []byte      { return b.header.MinerNodeId }
+func (b *Block) MinerNodeSig() []byte     { return b.header.MinerNodeSig }
+func (b *Block) BeaconRoot() *common.Hash { return b.header.ParentBeaconRoot }
 
 func (b *Block) BaseFee() *big.Int {
 	if b.header.BaseFee == nil {
@@ -521,21 +585,37 @@ func (b *Block) BaseFee() *big.Int {
 	return new(big.Int).Set(b.header.BaseFee)
 }
 
+func (b *Block) BlobGasUsed() *uint64 {
+	if b.header.BlobGasUsed == nil {
+		return nil
+	}
+	v := b.header.BlobGasUsed.Uint64()
+	return &v
+}
+
+func (b *Block) ExcessBlobGas() *uint64 {
+	if b.header.ExcessBlobGas == nil {
+		return nil
+	}
+	v := b.header.ExcessBlobGas.Uint64()
+	return &v
+}
+
 func (b *Block) Header() *Header { return CopyHeader(b.header) }
 
 // Body returns the non-header content of the block.
-func (b *Block) Body() *Body { return &Body{b.transactions, b.uncles} }
+func (b *Block) Body() *Body { return &Body{b.transactions, b.uncles, b.withdrawals} }
 
 // Size returns the true RLP encoded storage size of the block, either by encoding
 // and returning it, or returning a previsouly cached value.
-func (b *Block) Size() common.StorageSize {
+func (b *Block) Size() uint64 {
 	if size := b.size.Load(); size != nil {
-		return size.(common.StorageSize)
+		return size.(uint64)
 	}
 	c := writeCounter(0)
 	rlp.Encode(&c, b)
-	b.size.Store(common.StorageSize(c))
-	return common.StorageSize(c)
+	b.size.Store(uint64(c))
+	return uint64(c)
 }
 
 // SanityCheck can be used to prevent that unbounded fields are
@@ -567,6 +647,7 @@ func (b *Block) WithSeal(header *Header) *Block {
 		header:       &cpy,
 		transactions: b.transactions,
 		uncles:       b.uncles,
+		withdrawals:  b.withdrawals,
 	}
 }
 

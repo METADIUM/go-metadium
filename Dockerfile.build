@@ -1,0 +1,35 @@
+# Dockerfile.build - Build Linux binaries (rocksdb + leveldb variants)
+# Usage (local ARM64 Mac → arm64 image):
+#   docker build -f Dockerfile.build --output dist .
+#
+# Usage (for amd64 server):
+#   docker build --platform linux/amd64 -f Dockerfile.build --output dist .
+
+FROM ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    golang-go \
+    librocksdb-dev libsnappy-dev liblz4-dev libzstd-dev \
+    gcc g++ make git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu 24.04 ships Go 1.22 which satisfies go.mod requirement of 1.21
+ENV GOPATH=/go
+ENV CGO_ENABLED=1
+
+WORKDIR /build
+COPY . .
+
+# Build gmet with RocksDB (rocksdb variant)
+RUN CGO_CFLAGS="-I/usr/include" \
+    CGO_LDFLAGS="-L/usr/lib/x86_64-linux-gnu -lrocksdb -lsnappy -llz4 -lzstd -lm -lstdc++ -ldl" \
+    go build -tags rocksdb -o /out/gmet-rocksdb ./cmd/gmet && \
+    echo "gmet-rocksdb build OK"
+
+# Build gmet without RocksDB (leveldb variant)
+RUN go build -o /out/gmet-leveldb ./cmd/gmet && \
+    echo "gmet-leveldb build OK"
+
+FROM scratch
+COPY --from=builder /out/gmet-rocksdb /gmet-rocksdb
+COPY --from=builder /out/gmet-leveldb /gmet-leveldb

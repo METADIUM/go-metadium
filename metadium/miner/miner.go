@@ -5,10 +5,24 @@ package miner
 import (
 	"errors"
 	"math/big"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+// TrieAccessMu serializes archive-mode triedb commits against concurrent
+// in-process RPC EVM reads issued by the metadium admin module. Without
+// this mutex, a triedb.Commit(root, false) performed by writeBlockWithState
+// in archive mode can race with an EVM call dispatched from
+// accumulateRewards -> admin.calculateRewards -> metclient.CallContract,
+// causing a transient "registry not initialized" miss on early historical
+// blocks (e.g. testnet block 18) and a divergent stateRoot.
+//
+// Writers (archive triedb.Commit) take the write lock; readers
+// (metclient.CallContract) take the read lock so concurrent contract reads
+// remain parallel.
+var TrieAccessMu sync.RWMutex
 
 var (
 	ErrNotInitialized = errors.New("not initialized")
@@ -30,9 +44,24 @@ var (
 	AcquireMiningTokenFunc      func(height *big.Int, parentHash common.Hash) (bool, error)
 	ReleaseMiningTokenFunc      func(height *big.Int, hash, parentHash common.Hash) error
 	HasMiningTokenFunc          func() bool
+	// GetFinalizedBlockNumberFunc returns the finalized block number given the
+	// current head number. Metadium PoA finality is the BFT majority depth:
+	// headNum - (GovNodeCount/2 + 1). Returns nil when no block at or below
+	// head is final yet, or when governance state is not yet loaded.
+	GetFinalizedBlockNumberFunc func(headNum *big.Int) *big.Int
 	// Add TRS
 	GetTRSListMapFunc func(height *big.Int) (trsListMap map[common.Address]bool, trsSubscribe bool, err error)
 )
+
+// GetFinalizedBlockNumber returns the finalized block number for the given
+// head, or nil if finality cannot yet be computed (admin uninitialized, head
+// shallower than the BFT lookback, etc.).
+func GetFinalizedBlockNumber(headNum *big.Int) *big.Int {
+	if GetFinalizedBlockNumberFunc == nil {
+		return nil
+	}
+	return GetFinalizedBlockNumberFunc(headNum)
+}
 
 func IsMiner() bool {
 	if IsMinerFunc == nil {
@@ -181,6 +210,17 @@ func GetTRSListMap(height *big.Int) (trsListMap map[common.Address]bool, trsSubs
 		trsListMap, trsSubscribe, err = GetTRSListMapFunc(height)
 	}
 	return
+}
+
+// TRSRestricted reports whether a transaction between from and to touches the
+// TRS restriction list. to is nil for contract creations. This is the single
+// definition of the restriction predicate -- the tx pools and the miner all
+// call it, so admission, sweeping and block building cannot drift apart.
+func TRSRestricted(trsListMap map[common.Address]bool, from common.Address, to *common.Address) bool {
+	if len(trsListMap) == 0 {
+		return false
+	}
+	return trsListMap[from] || (to != nil && trsListMap[*to])
 }
 
 // EOF

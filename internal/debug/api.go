@@ -23,6 +23,7 @@ package debug
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"os"
@@ -36,11 +37,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/ethdb/rocksdb"
 	"github.com/ethereum/go-ethereum/log"
 	metaapi "github.com/ethereum/go-ethereum/metadium/api"
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/hashicorp/go-bexpr"
+	"golang.org/x/exp/slog"
 )
 
 // Handler is the global debugging handler.
@@ -60,19 +62,13 @@ type HandlerT struct {
 // Verbosity sets the log verbosity ceiling. The verbosity of individual packages
 // and source files can be raised using Vmodule.
 func (*HandlerT) Verbosity(level int) {
-	glogger.Verbosity(log.Lvl(level))
+	glogger.Verbosity(slog.Level(level))
 }
 
 // Vmodule sets the log verbosity pattern. See package log for details on the
 // pattern syntax.
 func (*HandlerT) Vmodule(pattern string) error {
 	return glogger.Vmodule(pattern)
-}
-
-// BacktraceAt sets the log backtrace location. See package log for details on
-// the pattern syntax.
-func (*HandlerT) BacktraceAt(location string) error {
-	return glogger.BacktraceAt(location)
 }
 
 // MemStats returns detailed runtime memory statistics.
@@ -102,6 +98,9 @@ func (h *HandlerT) CpuProfile(file string, nsec uint) error {
 
 // StartCPUProfile turns on CPU profiling, writing to the given file.
 func (h *HandlerT) StartCPUProfile(file string) error {
+	if err := validateProfilePath(file); err != nil {
+		return err
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.cpuW != nil {
@@ -248,6 +247,9 @@ func (*HandlerT) SetGCPercent(v int) int {
 }
 
 func writeProfile(name, file string) error {
+	if err := validateProfilePath(file); err != nil {
+		return err
+	}
 	p := pprof.Lookup(name)
 	log.Info("Writing profile records", "count", p.Count(), "type", name, "dump", file)
 	f, err := os.Create(expandHome(file))
@@ -275,13 +277,27 @@ func expandHome(p string) string {
 	return filepath.Clean(p)
 }
 
+// validateProfilePath checks that a profiling output path is safe.
+// It rejects absolute paths and path traversal attempts, allowing only
+// relative paths within the current working directory.
+func validateProfilePath(file string) error {
+	cleaned := expandHome(file)
+	if filepath.IsAbs(cleaned) {
+		return fmt.Errorf("absolute paths not allowed for profiling output: %s", file)
+	}
+	if strings.Contains(cleaned, "..") {
+		return fmt.Errorf("path traversal not allowed: %s", file)
+	}
+	return nil
+}
+
 func (*HandlerT) DbStats(device string, b interface{}) []uint64 {
 	bb, ok := b.(bool)
 	if ok {
-		ethdb.EnableStats(bb)
+		rocksdb.EnableStats(bb)
 	}
 
-	disk_r_count, disk_r_bytes, disk_w_count, disk_w_bytes, r_count, r_bytees, w_count, w_bytes, l_count, d_count := ethdb.Stats(device)
+	disk_r_count, disk_r_bytes, disk_w_count, disk_w_bytes, r_count, r_bytees, w_count, w_bytes, l_count, d_count := rocksdb.Stats(device)
 	return []uint64{disk_r_count, disk_r_bytes, disk_w_count, disk_w_bytes, r_count, r_bytees, w_count, w_bytes, l_count, d_count}
 }
 
@@ -289,17 +305,18 @@ func (*HandlerT) VerifyBlockRewards(block *big.Int) interface{} {
 	return metaminer.VerifyBlockRewards(block)
 }
 
-// Remove an etcd key / value pair
+// EtcdPut is disabled over RPC to prevent unauthorized etcd state manipulation.
+// Use IPC or the etcd client directly for administrative operations.
 func (*HandlerT) EtcdPut(key, value string) error {
-	return metaapi.EtcdPut(key, value)
+	return errors.New("debug_etcdPut is disabled over RPC for security reasons")
 }
 
-// Get etcd key's value
+// Get etcd key's value (read-only, safe to expose)
 func (*HandlerT) EtcdGet(key string) (string, error) {
 	return metaapi.EtcdGet(key)
 }
 
-// Remove an etcd key / value pair
+// EtcdDelete is disabled over RPC to prevent unauthorized etcd state manipulation.
 func (*HandlerT) EtcdDelete(key string) error {
-	return metaapi.EtcdDelete(key)
+	return errors.New("debug_etcdDelete is disabled over RPC for security reasons")
 }

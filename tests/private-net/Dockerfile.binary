@@ -1,0 +1,27 @@
+# Dockerfile.binary
+# Dockerfile for creating a Docker image from an already-built gmet binary
+# Usage: sudo docker build -f Dockerfile.binary -t gmet-rocksdb:latest .
+#   (run from the tests/private-net directory)
+#
+# Or specify a server binary path:
+#   sudo docker build -f Dockerfile.binary --build-arg BINARY_PATH=/path/to/gmet -t gmet-rocksdb:latest .
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /root
+
+# Copy binary from build context (locally built binary)
+# Copy the binary to tests/private-net/ before running setup.sh, or
+# specify the path via --build-arg
+COPY gmet-rocksdb /usr/local/bin/gmet
+
+RUN chmod +x /usr/local/bin/gmet
+
+EXPOSE 8545 8546 30303 30303/udp
+
+ENTRYPOINT ["gmet"]
+CMD ["--help"]

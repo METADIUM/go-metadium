@@ -35,15 +35,11 @@ import (
 
 // Tests that the account management snippets work correctly.
 func TestAccountManagement(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping test in short mode")
-	}
-
 	// Create a temporary folder to work with
 	workdir := t.TempDir()
 
-	// Create an encrypted keystore with standard crypto parameters
-	ks := keystore.NewKeyStore(filepath.Join(workdir, "keystore"), keystore.StandardScryptN, keystore.StandardScryptP)
+	// Create an encrypted keystore (using light scrypt parameters)
+	ks := keystore.NewKeyStore(filepath.Join(workdir, "keystore"), keystore.LightScryptN, keystore.LightScryptP)
 
 	// Create a new account with the specified encryption passphrase
 	newAcc, err := ks.NewAccount("Creation password")

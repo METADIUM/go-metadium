@@ -1,0 +1,47 @@
+{
+  "alloc": {
+    "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266": {
+      "balance": "0x56BC75E2D63100000000"
+    },
+    "0x70997970C51812dc3A010C7d01b50e0d17dc79C8": {
+      "balance": "0x56BC75E2D63100000000"
+    },
+    "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC": {
+      "balance": "0x56BC75E2D63100000000"
+    },
+    "0x90F79bf6EB2c4f870365E785982E1f101E93b906": {
+      "balance": "0x56BC75E2D63100000000"
+    }
+  },
+  "coinbase": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "config": {
+    "chainId": 1337,
+    "homesteadBlock": 0,
+    "eip150Block": 0,
+    "eip155Block": 0,
+    "eip158Block": 0,
+    "byzantiumBlock": 0,
+    "constantinopleBlock": 0,
+    "petersburgBlock": 0,
+    "istanbulBlock": 0,
+    "muirGlacierBlock": 0,
+    "berlinBlock": 0,
+    "londonBlock": 0,
+    "avocadoBlock": 0,
+    "pangyoBlock": 0,
+    "applepieBlock": 0,
+    "bokbunjaBlock": 0,
+    "camelliaBlock": 100,
+    "ethash": {}
+  },
+  "difficulty": "0x1",
+  "extraData": "0x",
+  "gasLimit": "0x10000000",
+  "minerNodeId": "0x0",
+  "minerNodeSig": "0x0",
+  "mixhash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "nonce": "0x0000000000000042",
+  "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "rewards": "0x",
+  "timestamp": "0x00"
+}

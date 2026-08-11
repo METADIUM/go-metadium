@@ -1,549 +1,309 @@
-## Go Metadium
+# go-metadium
 
-Golang implementation of the Metadium project.
+Metadium blockchain node implementation, forked from [go-ethereum](https://github.com/ethereum/go-ethereum) v1.13.14.
+
+## What is Metadium?
+
+Metadium is a Proof-of-Authority (PoA) blockchain with on-chain governance. It uses a custom consensus layer built on top of go-ethereum's ethash engine, with block signing via node keys and reward distribution through governance smart contracts.
+
+**Current version:** 1.1.1-stable (Camellia fork)
+
+## Camellia Fork
+
+Camellia is Metadium's hard fork that activates Ethereum's Shanghai and Cancun EIPs in a single upgrade:
+
+| Network | Activation block | Activation time |
+|---------|------------------|-----------------|
+| Testnet | 86,449,000 | 2026-05-20 12:00 KST (activated) |
+| Mainnet | 117,764,000 | 2026-08-27 12:00 KST (scheduled) |
+
+Nodes must run this release before the mainnet activation block; older binaries will follow a diverging chain.
+
+| EIP | Feature | Status |
+|-----|---------|--------|
+| EIP-3855 | PUSH0 opcode | Verified |
+| EIP-1153 | Transient storage (TLOAD/TSTORE) | Verified |
+| EIP-5656 | MCOPY opcode | Verified |
+| EIP-3651 | Warm COINBASE | Verified |
+| EIP-6780 | SELFDESTRUCT restriction | Verified |
+| EIP-3860 | Initcode size limit (507904 bytes) | Verified |
+| EIP-4844 | Blob transactions (Type 3) | Verified |
+| Type 22 | Fee delegation transactions | Verified |
+
+See [docs/camellia-test-report.md](docs/camellia-test-report.md) for full test results.
+
+## Key Differences from go-ethereum
+
+- **Consensus:** Metadium PoA (not PoW/PoS). Block signing via `MinerNodeId`/`MinerNodeSig` header fields.
+- **Protocol:** `meta/66` and `meta/68` (not `eth/68`). Backward compatible with existing mainnet nodes.
+- **Header fields:** Extra fields `Fees`, `Rewards`, `MinerNodeId`, `MinerNodeSig` in block headers.
+- **Governance:** On-chain governance contracts for validator management and reward distribution.
+- **Fee delegation:** Type 22 transactions where a fee payer covers gas costs on behalf of the sender.
+- **Block time:** 2 seconds (vs Ethereum's 12 seconds).
+- **Network:** Mainnet (ChainID 11, 9 PoA nodes), Testnet (ChainID 12, 3 PoA nodes).
 
 ## Building
 
-`geth` has been renamed to `gmet`. Building it is the same as go-ethereum.
+Prerequisites: Go 1.21+, C compiler (for RocksDB builds).
 
-    make gmet
+The canonical builds are the Makefile targets — they are what CI validates
+and what the release tarballs ship:
 
-For the convenience of installation, other targets have been added to the default target.
-
-    make
-
-will build `logrot` (log rotator) and `metadium.tar.gz` in `build` directory, in addtion. `metadium.tar.gz` has the following files.
-
-    bin/gmet
-    bin/gmet.sh
-    bin/solc.sh
-    bin/logrot
-    conf/MetadiumGovernance.js
-    conf/genesis-template.json
-    conf/config.json.example
-    
-### Build For Ubuntu with a Docker Image
-
-As we use `rocksdb` `C` implementation for better performance, library dependency becomes an issue. To mitigate that, we use a docker image to build our official image.
-
-    make gmet-linux
-
-will build gmet for ubuntu.
-
-### Build with LevelDB instead of Rocksdb
-
-To avoid library dependency issue, one can forgo `rocksdb` with
-
-    make USE_ROCKSDB=NO
-
-This is default behavior in non-linux environment, e.g. in MacOS X.
-
-## Join the Metadium Mainnet or Testnet
-
-One can use the following command lines to join the Metadium networks. Note that the default HTTP port for `gmet` is 8588, p2p port 8589 and WS port 8598. As with `geth`, if `--datadir` is missing, ~/.metadium is the data directory.
-
-### Metadium Mainnet
-
-    gmet --syncmode full --datadir {data_folder} --http --http.addr 0.0.0.0
-    
-### Metadium Testnet
-
-    gmet --metadium-testnet --syncmode full --datadir {data_folder} --http --http.addr 0.0.0.0
-
-## Setting Up a New Network
-
-One can use `gmet.sh` script to make setup process a little easier. `gmet.sh` assumes metadium data directory to be `/opt/<node-name>`
-
-### Initial Network
-
-First create data directory in `/opt/`, say `/opt/meta`. Then, unpack metadium.tar.gz in the directory.
-
-    mkdir /opt/meta
-    cd /opt/meta
-    tar xvfz <dir>/metadium.tar.gz
-
-Once initial members / accounts and nodes are determined (at least one member / account and node are required), create a configuration file using `conf/config.json.example` as a template, say `config.json`. A member designated as `bootnode` has a special meaning. Only that account can create the governance contracts, and only that node is allowed to generate blocks before governance contracts are established. These are recorded in the genesis block as the `coinbase` and the last 64 bytes of the `extraData`.
-
-#### Account and Node IDs
-
-One can reuse existing accounts and nodes. Account files are in `keystore` directory, and `geth/nodekey` is the node key / id file. Or one can use `gmet` to create accounts and node keys, and copy them to data directory.
-
-To create a new account file, run the following.
-
-    bin/gmet metadium new-account --out <account-file-name>
-
-To create a new node key,
-
-    bin/gmet metadium new-nodekey --out <node-key-file-name>
-
-To get node id, which is the public key of a `nodekey`.
-
-    bin/gmet metadium nodeid <node-key-file-name>
-    
-`idv5` is the one that should be used in config.json file.
-
-#### First Node & Governance Contract Initialization
-
-If you are to use existing or pre-created node key, copy the file to `geth` directory.
-
-    mkdir geth
-    cp <node-key-file> geth/nodekey
-
-The same for accounts
-
-    mkdir keystore
-    chmod 0700 keystore
-    cp <account-files> keystore/
-
-Running the following command generates `genesis.json`.
-
-    bin/gmet.sh init <node-name> config.json
-
-e.g.
-
-    bin/gmet.sh init meta config.json
-
-Copy the newly created `genesis.json` to other nodes's data directories.
-
-Now start gmet.
-
-    bin/gmet.sh start
-
-It's time to initialize governance contracts. Here we'll do a simple one-stop setup. Note that this is just for test. The real governance setup is a multi step process involving several proposals and votes. We'll prepare detailed governance setup documents later. Fow now, just do the following is enough.
-
-    bin/gmet.sh init-gov meta config.json <account-file>
-    
-Now start the console, and check if governance contracts are set up or not.
-
-    bin/gmet.sh console
-    > admin.metadiumInfo
-
-If this shows nodes as configured in config.json, it's time to initialize etcd.
-
-    > admin.etcdInit()
-
-Check if `etcd` is configured successfully.
-
-    > admin.metadiumInfo.etcd
-
-#### Other Initial Nodes
-
-Set up the data directory and copy the `genesis` file as follows.
-
-    mkdir /opt/meta
-    cd /opt/meta
-    mkdir geth
-    cp <node-key-file> geth/nodekey
-    mkdir keystore
-    chmod 0700 keystore
-    cp <account-files> keystore/
-    tar xvfz <dir>/metadium.tar.gz
-    # copy genesis.json
-    bin/gmet.sh start
-
-Once these nodes are setup, the first node will automatically connect and chain synchronization will follow.
-
-### Metadium Info
-
-    bin/gmet.sh console
-    ...
-    > admin.metadiumInfo
-
-### Starting & Stopping Nodes
-
-To start or stop a single node
-
-    bin/gmet.sh start
-    bin/gmet.sh stop
-
-### Starting Non-mining Nodes
-
-First download genesis.json from existing nodes to a data directory.
-
-    bin/gmet metadium download-genesis --url http://<ip> --out genesis.json
-
-After getting enodes of mining nodes, run gmet as follows.
-
-    bin/gmet --syncmode full --datadir <data-directory> --bootnodes <enodes> --http --http.addr 0.0.0.0
-
-### The original go-ethereum README follows...
-
-## Go Ethereum
-
-Official Golang implementation of the Ethereum protocol.
-
-[![API Reference](
-https://camo.githubusercontent.com/915b7be44ada53c290eb157634330494ebe3e30a/68747470733a2f2f676f646f632e6f72672f6769746875622e636f6d2f676f6c616e672f6764646f3f7374617475732e737667
-)](https://pkg.go.dev/github.com/ethereum/go-ethereum?tab=doc)
-[![Go Report Card](https://goreportcard.com/badge/github.com/ethereum/go-ethereum)](https://goreportcard.com/report/github.com/ethereum/go-ethereum)
-[![Travis](https://travis-ci.com/ethereum/go-ethereum.svg?branch=master)](https://travis-ci.com/ethereum/go-ethereum)
-[![Discord](https://img.shields.io/badge/discord-join%20chat-blue.svg)](https://discord.gg/nthXNEv)
-
-Automated builds are available for stable releases and the unstable master branch. Binary
-archives are published at https://geth.ethereum.org/downloads/.
-
-## Building the source
-
-For prerequisites and detailed build instructions please read the [Installation Instructions](https://geth.ethereum.org/docs/install-and-build/installing-geth).
-
-Building `geth` requires both a Go (version 1.16 or later) and a C compiler. You can install
-them using your favourite package manager. Once the dependencies are installed, run
-
-```shell
-make geth
+```bash
+make gmet                    # gmet binary (RocksDB; USE_ROCKSDB=NO for LevelDB)
+make metadium                # full deploy bundle: build/metadium.tar.gz (bin/ + conf/)
 ```
 
-or, to build the full suite of utilities:
+Direct `go build` works for development (`./cmd/gmet` and `./cmd/geth` are
+the same entrypoint; the Makefile uses `./cmd/gmet`):
 
-```shell
-make all
+```bash
+CGO_ENABLED=0 go build -o gmet ./cmd/gmet                    # LevelDB
+CGO_ENABLED=1 CGO_LDFLAGS="-lrocksdb -lstdc++ -lm -lz -lbz2 -lsnappy -llz4 -lzstd" \
+  go build -tags rocksdb -o gmet ./cmd/gmet                  # RocksDB
 ```
 
-## Executables
+### Docker
 
-The go-ethereum project comes with several wrappers/executables found in the `cmd`
-directory.
-
-|    Command    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| :-----------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|  **`geth`**   | Our main Ethereum CLI client. It is the entry point into the Ethereum network (main-, test- or private net), capable of running as a full node (default), archive node (retaining all historical state) or a light node (retrieving data live). It can be used by other processes as a gateway into the Ethereum network via JSON RPC endpoints exposed on top of HTTP, WebSocket and/or IPC transports. `geth --help` and the [CLI page](https://geth.ethereum.org/docs/interface/command-line-options) for command line options.          |
-|   `clef`    | Stand-alone signing tool, which can be used as a backend signer for `geth`.  |
-|   `devp2p`    | Utilities to interact with nodes on the networking layer, without running a full blockchain. |
-|   `abigen`    | Source code generator to convert Ethereum contract definitions into easy to use, compile-time type-safe Go packages. It operates on plain [Ethereum contract ABIs](https://docs.soliditylang.org/en/develop/abi-spec.html) with expanded functionality if the contract bytecode is also available. However, it also accepts Solidity source files, making development much more streamlined. Please see our [Native DApps](https://geth.ethereum.org/docs/dapp/native-bindings) page for details. |
-|  `bootnode`   | Stripped down version of our Ethereum client implementation that only takes part in the network node discovery protocol, but does not run any of the higher level application protocols. It can be used as a lightweight bootstrap node to aid in finding peers in private networks.                                                                                                                                                                                                                                                                 |
-|     `evm`     | Developer utility version of the EVM (Ethereum Virtual Machine) that is capable of running bytecode snippets within a configurable environment and execution mode. Its purpose is to allow isolated, fine-grained debugging of EVM opcodes (e.g. `evm --code 60ff60ff --debug run`).                                                                                                                                                                                                                                                                     |
-|   `rlpdump`   | Developer utility tool to convert binary RLP ([Recursive Length Prefix](https://eth.wiki/en/fundamentals/rlp)) dumps (data encoding used by the Ethereum protocol both network as well as consensus wise) to user-friendlier hierarchical representation (e.g. `rlpdump --hex CE0183FFFFFFC4C304050583616263`).                                                                                                                                                                                                                                 |
-|   `puppeth`   | a CLI wizard that aids in creating a new Ethereum network.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-
-## Running `geth`
-
-Going through all the possible command line flags is out of scope here (please consult our
-[CLI Wiki page](https://geth.ethereum.org/docs/interface/command-line-options)),
-but we've enumerated a few common parameter combos to get you up to speed quickly
-on how you can run your own `geth` instance.
-
-### Hardware Requirements
-
-Minimum:
-
-* CPU with 2+ cores
-* 4GB RAM
-* 1TB free storage space to sync the Mainnet
-* 8 MBit/sec download Internet service
-
-Recommended:
-
-* Fast CPU with 4+ cores
-* 16GB+ RAM
-* High Performance SSD with at least 1TB free space
-* 25+ MBit/sec download Internet service
-
-### Full node on the main Ethereum network
-
-By far the most common scenario is people wanting to simply interact with the Ethereum
-network: create accounts; transfer funds; deploy and interact with contracts. For this
-particular use-case the user doesn't care about years-old historical data, so we can
-sync quickly to the current state of the network. To do so:
-
-```shell
-$ geth console
+```bash
+docker build -t gmet:latest .
 ```
 
-This command will:
- * Start `geth` in snap sync mode (default, can be changed with the `--syncmode` flag),
-   causing it to download more data in exchange for avoiding processing the entire history
-   of the Ethereum network, which is very CPU intensive.
- * Start up `geth`'s built-in interactive [JavaScript console](https://geth.ethereum.org/docs/interface/javascript-console),
-   (via the trailing `console` subcommand) through which you can interact using [`web3` methods](https://github.com/ChainSafe/web3.js/blob/0.20.7/DOCUMENTATION.md) 
-   (note: the `web3` version bundled within `geth` is very old, and not up to date with official docs),
-   as well as `geth`'s own [management APIs](https://geth.ethereum.org/docs/rpc/server).
-   This tool is optional and if you leave it out you can always attach to an already running
-   `geth` instance with `geth attach`.
+## Running
 
-### A Full node on the Görli test network
+### Mainnet
 
-Transitioning towards developers, if you'd like to play around with creating Ethereum
-contracts, you almost certainly would like to do that without any real money involved until
-you get the hang of the entire system. In other words, instead of attaching to the main
-network, you want to join the **test** network with your node, which is fully equivalent to
-the main network, but with play-Ether only.
-
-```shell
-$ geth --goerli console
+```bash
+gmet --mainnet --datadir /data/gmet-mainnet \
+  --http --http.addr 127.0.0.1 --http.port 8588 \
+  --http.api eth,net,web3,admin,debug
 ```
 
-The `console` subcommand has the exact same meaning as above and they are equally
-useful on the testnet too. Please, see above for their explanations if you've skipped here.
+### Testnet
 
-Specifying the `--goerli` flag, however, will reconfigure your `geth` instance a bit:
-
- * Instead of connecting the main Ethereum network, the client will connect to the Görli
-   test network, which uses different P2P bootnodes, different network IDs and genesis
-   states.
- * Instead of using the default data directory (`~/.ethereum` on Linux for example), `geth`
-   will nest itself one level deeper into a `goerli` subfolder (`~/.ethereum/goerli` on
-   Linux). Note, on OSX and Linux this also means that attaching to a running testnet node
-   requires the use of a custom endpoint since `geth attach` will try to attach to a
-   production node endpoint by default, e.g.,
-   `geth attach <datadir>/goerli/geth.ipc`. Windows users are not affected by
-   this.
-
-*Note: Although there are some internal protective measures to prevent transactions from
-crossing over between the main network and test network, you should make sure to always
-use separate accounts for play-money and real-money. Unless you manually move
-accounts, `geth` will by default correctly separate the two networks and will not make any
-accounts available between them.*
-
-### Full node on the Rinkeby test network
-
-Go Ethereum also supports connecting to the older proof-of-authority based test network
-called [*Rinkeby*](https://www.rinkeby.io) which is operated by members of the community.
-
-```shell
-$ geth --rinkeby console
+```bash
+gmet --metadium-testnet --datadir /data/gmet-testnet \
+  --http --http.addr 127.0.0.1 --http.port 8588 \
+  --http.api eth,net,web3,admin,debug
 ```
 
-### Full node on the Ropsten test network
+### Private Network (Docker, 3 nodes)
 
-In addition to Görli and Rinkeby, Geth also supports the ancient Ropsten testnet. The
-Ropsten test network is based on the Ethash proof-of-work consensus algorithm. As such,
-it has certain extra overhead and is more susceptible to reorganization attacks due to the
-network's low difficulty/security.
-
-```shell
-$ geth --ropsten console
+```bash
+cd tests/private-net-poa
+./setup.sh    # Initialize and build Docker image
+./start.sh    # Start 3-node PoA network (ports 8545/8546/8547)
+./stop.sh     # Stop (data preserved)
 ```
 
-*Note: Older Geth configurations store the Ropsten database in the `testnet` subdirectory.*
+## Upgrading from 0.10.x
 
-### Configuration
+v1.1.x rebases the tree onto go-ethereum v1.13.14 and changes several
+operational defaults. An in-place upgrade (`gmet.sh stop` → extract tarball →
+`gmet.sh start`) preserves the datadir, `geth/nodekey` and `.rc` exactly as
+before — but review the following **before** restarting on the new binary.
 
-As an alternative to passing the numerous flags to the `geth` binary, you can also pass a
-configuration file via:
+### Upgrade checklist
 
-```shell
-$ geth --config /path/to/your_config.toml
+1. **Upgrade before the activation block** — mainnet 117,764,000. The block
+   height is authoritative; wall-clock estimates are approximate. Nodes on
+   older binaries follow a diverging chain from that block on.
+2. **Use the engine-matched tarball.** The DB engine is decided at build time.
+   Check the node's chaindata before extracting: `.sst` files → rocksdb
+   tarball, `.ldb` files → leveldb tarball. A mismatched binary cannot open
+   the database.
+3. **★ RPC/WS bind default changed** (`gmet.sh`): `--http.addr`/`--ws.addr`
+   now default to **`127.0.0.1`** (was `0.0.0.0`). A node that serves RPC/WS
+   to other machines — exchange wallet backends included — must add to its
+   per-node `.rc` **before** restarting:
+
+   ```bash
+   HTTP_ADDR=0.0.0.0    # or a specific interface address
+   WS_ADDR=0.0.0.0
+   ```
+
+   Without these, the upgraded node silently stops serving external clients
+   while looking healthy in every other way.
+4. **★ The `personal` RPC namespace is disabled by default.** Upstream
+   deprecated it: the node only registers `personal_*` (including
+   `personal_unlockAccount` and `personal_sendTransaction`, common in
+   exchange wallet backends) when started with
+   `--rpc.enabledeprecatedpersonal`. `gmet.sh` does not pass it. Same failure
+   shape as the bind change: the node comes up healthy and the backend stops
+   working. If your tooling uses `personal_*`, **two** things are required:
+   the enable flag *and* `personal` in the HTTP module list (the default is
+   `net,web3` only) — e.g. in `.rc`:
+
+   ```bash
+   GMET_OPTS="--rpc.enabledeprecatedpersonal --http.api eth,net,web3,personal"
+   ```
+
+   (`gmet.sh` passes no `--http.api` of its own, so anyone using the
+   namespace over HTTP is already supplying a module list — extend it.) And
+   plan a migration off the namespace: upstream has removed it entirely in
+   later releases.
+5. **★ Metadium networks run full sync only — every other `--syncmode`
+   refuses to start.** `light` is gone from the tree (0.10.x shipped `les/`;
+   v1.1.x does not), and `snap`/`fast` are deliberately rejected on Metadium
+   mainnet/testnet because the snap state-healing fixes are not backported to
+   this base (state-corruption risk). If any launcher or unit file passes a
+   `--syncmode` other than `full`, change it before restarting. (The guard
+   exempts only the upstream test networks and `--dev` — private chains run
+   off this binary are under it too.) For fast new-node bring-up, bootstrap
+   from a published chain snapshot instead
+   (`docs/sync-policy-and-snapshot-bootstrap.md`).
+6. **`gmet.sh stop` semantics changed.** It now exits non-zero when the node
+   did not actually stop (previously it could report success without stopping
+   anything), and gained `.rc` tunables: `STOP_TIMEOUT` (seconds to wait for
+   graceful shutdown before escalating, default `200`), `STOP_FORCE` (`0` =
+   never SIGKILL, exit non-zero instead; default `1`), `LOCK_TIMEOUT`
+   (default `200`). One coupling to understand: **under the default
+   `STOP_FORCE=1`, a node that outlives `STOP_TIMEOUT` is SIGKILLed by the
+   script itself and `stop` still exits 0** — the exit code only guarantees
+   a graceful shutdown when `STOP_FORCE=0` is set. Automation must check the
+   exit code *and* set `STOP_FORCE=0`, sizing its own timeout above
+   `STOP_TIMEOUT`. Never `kill -9` a node — RocksDB especially.
+7. **Testnet operators: skip 1.1.0, go straight to the m1.1.1 release
+   build.** The 1.1.0 testnet build carries a chain-config regression that
+   rewinds a 0.10.x node to block 5,622,999 (~80M-block resync) on first
+   start. The fix landed *after* the version string moved to 1.1.1, so
+   "reports 1.1.1-stable" does not prove a build is safe — use the official
+   m1.1.1 release asset (its exact commit hash is published in the release
+   notes). Self-builders can check their commit contains the fix with
+   `git merge-base --is-ancestor e2c0d7413 <your-commit>` (exit 0 = fixed).
+   Order matters on the remediation too: run testnet
+   nodes with `--metadium-testnet` (or `TESTNET=1` in `.rc`) **only once on
+   a fixed build** — adding the flag while still on a pre-fix binary is
+   exactly what arms the rewind.
+8. **RPC fee cap**: `gmet.sh` now passes `--rpc.txfeecap 0`, preserving the
+   0.10.x behaviour of no cap on `eth_sendTransaction` fees. Operators who
+   launch `gmet` directly without this flag get upstream's default 1-ether
+   cap — set it explicitly if your tooling sends high-fee transactions.
+9. **Direct-CLI launchers**: the flag surface is upstream go-ethereum
+   v1.13.14. If you maintain a custom launch script or systemd unit instead
+   of `gmet.sh`, dry-run it against the new binary (`gmet --help`); the only
+   `--syncmode` that starts on Metadium networks is `full` (item 5). systemd
+   unit templates are provided at `metadium/scripts/gmet.service` (plus a
+   sealer override).
+10. **`metadium/metclient` library users**: signature changes —
+    `SendValue`'s `amount` went `int` → `*big.Int`, and `_gasPrice` went
+    `int` → `int64` in both `SendValue` and `Deploy` (`gas` is unchanged).
+    `SendValue` call sites fail at compile time; **`Deploy` call sites that
+    pass a constant gas price compile unchanged** (untyped constants satisfy
+    `int64`) — audit those by hand. Note `amount` may now be `nil`, which is
+    a 0-value transfer rather than an error.
+
+Transaction-behaviour note: the pool admits transactions of code plus
+constructor data up to 256KB total, restoring 0.10.x parity — 0.10.x has
+carried the same 256KB ceiling since 2018, so a mixed 0.10.x + 1.1.1 fleet
+behaves uniformly. Only the intermediate **1.1.0** line rejected above
+128KB: propagation of 128–256KB transactions is path-dependent only while
+1.1.0 nodes are present (relevant on testnet; the mainnet fleet upgrades
+straight from 0.10.x).
+
+## Node Configuration Reference (`gmet.sh` / `.rc`)
+
+The standard deployment runs `gmet` through `bin/gmet.sh`, which reads the
+node's configuration from a `.rc` file in the datadir (`/opt/meta/.rc` in the
+stock layout). Every knob, with its default:
+
+| `.rc` variable | Default | Meaning |
+|---|---|---|
+| `PORT` | unset | When set: HTTP-RPC = `PORT`, WS = `PORT+10`, p2p = `PORT+1`. When unset, `gmet.sh` passes no port flags and the binary defaults apply: HTTP **8545**, WS **8546**, p2p **8589**. `init`-generated `.rc` files set `PORT=8588`. |
+| `HTTP_ADDR` / `WS_ADDR` | `127.0.0.1` | RPC / WS bind address. Set `0.0.0.0` (or a specific interface) only on nodes that must serve other machines. |
+| `TESTNET` | unset | `1` → `--metadium-testnet`. Anything else is ignored. |
+| `DISCOVER` | unset (on) | `0` → `--nodiscover`. Note **`init`-generated `.rc` files contain `DISCOVER=0`** — remove or change it for ordinary full nodes, or the node dials no one. Mainnet/testnet bootnodes are compiled into the binary, so no `BOOT_NODES` is needed. |
+| `SYNC_MODE` | unset (**archive**) | `full` → pruned full node (recommended for exchange/API nodes, ~600GB-class). **Unset — or any unrecognized value, typos included — means `--syncmode full --gcmode archive`**: a multi-TB archive node. `fast`/`snap` make the node exit at startup (Metadium networks are full-sync only) — and since `gmet.sh start` backgrounds the node, `start` itself still returns 0, so check the log. |
+| `BOOT_NODES` | unset | Extra `--bootnodes` enodes (rarely needed, see above). |
+| `GMET_OPTS` | unset | Extra flags appended verbatim to the command line. |
+| `STOP_TIMEOUT` | `200` | Seconds `gmet.sh stop` waits for graceful shutdown before escalating. |
+| `STOP_FORCE` | `1` | `0` = never SIGKILL; `stop` exits non-zero instead (recommended for RocksDB nodes and anything driven by automation). |
+| `LOCK_TIMEOUT` | `200` | Seconds to wait for the chaindata lock to be released after exit. |
+| `COINBASE`, `HUB`, `MAX_TXS_PER_BLOCK`, `NONCE_LIMIT` | unset | Special-purpose (sealer / relay setups); ordinary full nodes leave these alone. |
+
+The stop knobs also take one-shot environment overrides
+(`STOP_TIMEOUT=1800 gmet.sh stop`) without editing the `.rc`.
+
+### Example: exchange / API full node
+
+```bash
+# /opt/meta/.rc -- pruned mainnet full node serving RPC to internal backends
+PORT=8588
+SYNC_MODE=full          # pruned; omit this line only if you need an archive node
+HTTP_ADDR=0.0.0.0       # internal backends connect over the network
+WS_ADDR=0.0.0.0         # (firewall the ports -- these binds are not auth)
+STOP_TIMEOUT=1800
+STOP_FORCE=0            # never SIGKILL; fail loudly and retry instead
 ```
 
-To get an idea how the file should look like you can use the `dumpconfig` subcommand to
-export your existing configuration:
+Equivalent direct invocation without `gmet.sh`:
 
-```shell
-$ geth --your-favourite-flags dumpconfig
+```bash
+gmet --datadir /opt/meta --syncmode full \
+  --http --http.addr 0.0.0.0 --http.port 8588 --http.api eth,net,web3 \
+  --ws --ws.addr 0.0.0.0 --ws.port 8598 \
+  --port 8589 --rpc.txfeecap 0 --metrics
 ```
 
-*Note: This works only with `geth` v1.6.0 and above.*
+Deploy/upgrade cycle (datadir, `geth/nodekey` and `.rc` live outside the
+tarball and survive):
 
-#### Docker quick start
-
-One of the quickest ways to get Ethereum up and running on your machine is by using
-Docker:
-
-```shell
-docker run -d --name ethereum-node -v /Users/alice/ethereum:/root \
-           -p 8545:8545 -p 30303:30303 \
-           ethereum/client-go
+```bash
+cd /opt/meta
+bin/gmet.sh stop        # graceful; see item 6 -- exit 0 under the default
+                        # STOP_FORCE=1 may still hide an internal SIGKILL
+tar xzvf metadium-<version>-linux-<leveldb|rocksdb>.tar.gz
+                        # ^ the GitHub release asset name; `make metadium`
+                        #   itself produces build/metadium.tar.gz
+bin/gmet.sh start
+bin/gmet version        # verify the Git Commit line (gmet version prints
+                        # no fork or engine info)
+grep -m1 Camellia logs/log   # fork config is printed at chain init --
+                             # expect the Camellia activation height
 ```
 
-This will start `geth` in snap-sync mode with a DB memory allowance of 1GB just as the
-above command does.  It will also create a persistent volume in your home directory for
-saving your blockchain as well as map the default ports. There is also an `alpine` tag
-available for a slim version of the image.
+## Testing
 
-Do not forget `--http.addr 0.0.0.0`, if you want to access RPC from other containers
-and/or hosts. By default, `geth` binds to the local interface and RPC endpoints are not
-accessible from the outside.
+```bash
+# Unit tests
+make test          # Full test suite (119 packages)
+make test-short    # Short mode
 
-### Programmatically interfacing `geth` nodes
-
-As a developer, sooner rather than later you'll want to start interacting with `geth` and the
-Ethereum network via your own programs and not manually through the console. To aid
-this, `geth` has built-in support for a JSON-RPC based APIs ([standard APIs](https://eth.wiki/json-rpc/API)
-and [`geth` specific APIs](https://geth.ethereum.org/docs/rpc/server)).
-These can be exposed via HTTP, WebSockets and IPC (UNIX sockets on UNIX based
-platforms, and named pipes on Windows).
-
-The IPC interface is enabled by default and exposes all the APIs supported by `geth`,
-whereas the HTTP and WS interfaces need to manually be enabled and only expose a
-subset of APIs due to security reasons. These can be turned on/off and configured as
-you'd expect.
-
-HTTP based JSON-RPC API options:
-
-  * `--http` Enable the HTTP-RPC server
-  * `--http.addr` HTTP-RPC server listening interface (default: `localhost`)
-  * `--http.port` HTTP-RPC server listening port (default: `8545`)
-  * `--http.api` API's offered over the HTTP-RPC interface (default: `eth,net,web3`)
-  * `--http.corsdomain` Comma separated list of domains from which to accept cross origin requests (browser enforced)
-  * `--ws` Enable the WS-RPC server
-  * `--ws.addr` WS-RPC server listening interface (default: `localhost`)
-  * `--ws.port` WS-RPC server listening port (default: `8546`)
-  * `--ws.api` API's offered over the WS-RPC interface (default: `eth,net,web3`)
-  * `--ws.origins` Origins from which to accept websockets requests
-  * `--ipcdisable` Disable the IPC-RPC server
-  * `--ipcapi` API's offered over the IPC-RPC interface (default: `admin,debug,eth,miner,net,personal,shh,txpool,web3`)
-  * `--ipcpath` Filename for IPC socket/pipe within the datadir (explicit paths escape it)
-
-You'll need to use your own programming environments' capabilities (libraries, tools, etc) to
-connect via HTTP, WS or IPC to a `geth` node configured with the above flags and you'll
-need to speak [JSON-RPC](https://www.jsonrpc.org/specification) on all transports. You
-can reuse the same connection for multiple requests!
-
-**Note: Please understand the security implications of opening up an HTTP/WS based
-transport before doing so! Hackers on the internet are actively trying to subvert
-Ethereum nodes with exposed APIs! Further, all browser tabs can access locally
-running web servers, so malicious web pages could try to subvert locally available
-APIs!**
-
-### Operating a private network
-
-Maintaining your own private network is more involved as a lot of configurations taken for
-granted in the official networks need to be manually set up.
-
-#### Defining the private genesis state
-
-First, you'll need to create the genesis state of your networks, which all nodes need to be
-aware of and agree upon. This consists of a small JSON file (e.g. call it `genesis.json`):
-
-```json
-{
-  "config": {
-    "chainId": <arbitrary positive integer>,
-    "homesteadBlock": 0,
-    "eip150Block": 0,
-    "eip155Block": 0,
-    "eip158Block": 0,
-    "byzantiumBlock": 0,
-    "constantinopleBlock": 0,
-    "petersburgBlock": 0,
-    "istanbulBlock": 0,
-    "berlinBlock": 0,
-    "londonBlock": 0
-  },
-  "alloc": {},
-  "coinbase": "0x0000000000000000000000000000000000000000",
-  "difficulty": "0x20000",
-  "extraData": "",
-  "gasLimit": "0x2fefd8",
-  "nonce": "0x0000000000000042",
-  "mixhash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-  "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-  "timestamp": "0x00"
-}
+# Integration tests (requires running private network)
+bash scripts/rpc-test-full.sh http://localhost:8545      # 67 RPC API tests
+bash tests/private-net-poa/camellia-test.sh              # EIP verification (14 tests)
+go run ./tests/private-net-poa/blob-tx-e2e/              # Blob tx e2e
+go run ./tests/private-net-poa/mixed-tx-e2e/             # Mixed tx e2e (Normal + FeeDeleg + Blob)
 ```
 
-The above fields should be fine for most purposes, although we'd recommend changing
-the `nonce` to some random value so you prevent unknown remote nodes from being able
-to connect to you. If you'd like to pre-fund some accounts for easier testing, create
-the accounts and populate the `alloc` field with their addresses.
+## Project Structure
 
-```json
-"alloc": {
-  "0x0000000000000000000000000000000000000001": {
-    "balance": "111111111"
-  },
-  "0x0000000000000000000000000000000000000002": {
-    "balance": "222222222"
-  }
-}
+```
+cmd/geth/           Main binary entrypoint
+core/               Blockchain core (state, transactions, blocks)
+core/types/         Block header, transaction types (BlobTx, FeeDelegateTx)
+consensus/ethash/   Consensus engine (PoA sealing + reward distribution)
+eth/protocols/eth/  P2P protocol handlers (meta/66, meta/68)
+internal/ethapi/    JSON-RPC API implementation
+metadium/           Metadium governance logic
+miner/              Block production (commitTransactionsEx for PoA)
+params/             Chain configuration (fork blocks, gas parameters)
+tests/private-net-poa/  Local 3-node PoA test infrastructure
+scripts/            Build, deploy, and RPC test scripts
+docs/               Camellia fork documentation and test reports
 ```
 
-With the genesis state defined in the above JSON file, you'll need to initialize **every**
-`geth` node with it prior to starting it up to ensure all blockchain parameters are correctly
-set:
+## Documentation
 
-```shell
-$ geth init path/to/genesis.json
-```
+- [Camellia Fork Test Report](docs/camellia-test-report.md) -- full test results and bug fixes
+- [Camellia Fork Summary](docs/camellia-fork-summary.md) -- design overview
+- [Fee Delegation](FEEDELEGATION.md) -- Type 22 transaction specification
 
-#### Creating the rendezvous point
+## Upstream
 
-With all nodes that you want to run initialized to the desired genesis state, you'll need to
-start a bootstrap node that others can use to find each other in your network and/or over
-the internet. The clean way is to configure and run a dedicated bootnode:
-
-```shell
-$ bootnode --genkey=boot.key
-$ bootnode --nodekey=boot.key
-```
-
-With the bootnode online, it will display an [`enode` URL](https://eth.wiki/en/fundamentals/enode-url-format)
-that other nodes can use to connect to it and exchange peer information. Make sure to
-replace the displayed IP address information (most probably `[::]`) with your externally
-accessible IP to get the actual `enode` URL.
-
-*Note: You could also use a full-fledged `geth` node as a bootnode, but it's the less
-recommended way.*
-
-#### Starting up your member nodes
-
-With the bootnode operational and externally reachable (you can try
-`telnet <ip> <port>` to ensure it's indeed reachable), start every subsequent `geth`
-node pointed to the bootnode for peer discovery via the `--bootnodes` flag. It will
-probably also be desirable to keep the data directory of your private network separated, so
-do also specify a custom `--datadir` flag.
-
-```shell
-$ geth --datadir=path/to/custom/data/folder --bootnodes=<bootnode-enode-url-from-above>
-```
-
-*Note: Since your network will be completely cut off from the main and test networks, you'll
-also need to configure a miner to process transactions and create new blocks for you.*
-
-#### Running a private miner
-
-Mining on the public Ethereum network is a complex task as it's only feasible using GPUs,
-requiring an OpenCL or CUDA enabled `ethminer` instance. For information on such a
-setup, please consult the [EtherMining subreddit](https://www.reddit.com/r/EtherMining/)
-and the [ethminer](https://github.com/ethereum-mining/ethminer) repository.
-
-In a private network setting, however a single CPU miner instance is more than enough for
-practical purposes as it can produce a stable stream of blocks at the correct intervals
-without needing heavy resources (consider running on a single thread, no need for multiple
-ones either). To start a `geth` instance for mining, run it with all your usual flags, extended
-by:
-
-```shell
-$ geth <usual-flags> --mine --miner.threads=1 --miner.etherbase=0x0000000000000000000000000000000000000000
-```
-
-Which will start mining blocks and transactions on a single CPU thread, crediting all
-proceedings to the account specified by `--miner.etherbase`. You can further tune the mining
-by changing the default gas limit blocks converge to (`--miner.targetgaslimit`) and the price
-transactions are accepted at (`--miner.gasprice`).
-
-## Contribution
-
-Thank you for considering to help out with the source code! We welcome contributions
-from anyone on the internet, and are grateful for even the smallest of fixes!
-
-If you'd like to contribute to go-ethereum, please fork, fix, commit and send a pull request
-for the maintainers to review and merge into the main code base. If you wish to submit
-more complex changes though, please check up with the core devs first on [our Discord Server](https://discord.gg/invite/nthXNEv)
-to ensure those changes are in line with the general philosophy of the project and/or get
-some early feedback which can make both your efforts much lighter as well as our review
-and merge procedures quick and simple.
-
-Please make sure your contributions adhere to our coding guidelines:
-
- * Code must adhere to the official Go [formatting](https://golang.org/doc/effective_go.html#formatting)
-   guidelines (i.e. uses [gofmt](https://golang.org/cmd/gofmt/)).
- * Code must be documented adhering to the official Go [commentary](https://golang.org/doc/effective_go.html#commentary)
-   guidelines.
- * Pull requests need to be based on and opened against the `master` branch.
- * Commit messages should be prefixed with the package(s) they modify.
-   * E.g. "eth, rpc: make trace configs optional"
-
-Please see the [Developers' Guide](https://geth.ethereum.org/docs/developers/devguide)
-for more details on configuring your environment, managing project dependencies, and
-testing procedures.
+Based on [go-ethereum](https://github.com/ethereum/go-ethereum) v1.13.14 (Cancun/Deneb).
 
 ## License
 
-The go-ethereum library (i.e. all code outside of the `cmd` directory) is licensed under the
-[GNU Lesser General Public License v3.0](https://www.gnu.org/licenses/lgpl-3.0.en.html),
-also included in our repository in the `COPYING.LESSER` file.
-
-The go-ethereum binaries (i.e. all code inside of the `cmd` directory) is licensed under the
-[GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.en.html), also
-included in our repository in the `COPYING` file.
+The go-ethereum library (all code outside `cmd/`) is licensed under [GNU LGPL v3.0](COPYING.LESSER).
+The go-ethereum binaries (all code inside `cmd/`) are licensed under [GNU GPL v3.0](COPYING).

@@ -1,0 +1,11 @@
+{
+  "name": "gmet-governance-deploy",
+  "version": "1.0.0",
+  "description": "Deploy Metadium governance contracts to private PoA network",
+  "scripts": {
+    "deploy": "node deploy.js"
+  },
+  "dependencies": {
+    "ethers": "^6.0.0"
+  }
+}

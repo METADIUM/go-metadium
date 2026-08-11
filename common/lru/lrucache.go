@@ -3,7 +3,7 @@
 package lru
 
 import (
-	"container/list"
+	clist "container/list"
 	"sync"
 )
 
@@ -12,7 +12,7 @@ type LruCache struct {
 	max   int  // max count
 	count int  // current count
 	fifo  bool // if true, element order is not updated on access
-	lru   *list.List
+	lru   *clist.List
 	data  map[interface{}]interface{}
 }
 
@@ -23,7 +23,7 @@ func NewLruCache(max int, fifo bool) *LruCache {
 		max:   max,
 		count: 0,
 		fifo:  fifo,
-		lru:   list.New(),
+		lru:   clist.New(),
 		data:  map[interface{}]interface{}{},
 	}
 }
@@ -38,10 +38,10 @@ func (c *LruCache) Put(key, value interface{}) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	var e *list.Element
+	var e *clist.Element
 	_e, ok := c.data[key]
 	if ok {
-		e = _e.(*list.Element)
+		e = _e.(*clist.Element)
 		e.Value = []interface{}{key, value}
 		c.lru.MoveToFront(e)
 	} else {
@@ -67,7 +67,7 @@ func (c *LruCache) Get(key interface{}) interface{} {
 	if !ok {
 		return nil
 	} else {
-		e := _e.(*list.Element)
+		e := _e.(*clist.Element)
 		if !c.fifo {
 			c.lru.MoveToFront(e)
 		}
@@ -88,12 +88,12 @@ func (c *LruCache) Del(key interface{}) bool {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	var e *list.Element
+	var e *clist.Element
 	_e, ok := c.data[key]
 	if !ok {
 		return false
 	} else {
-		e = _e.(*list.Element)
+		e = _e.(*clist.Element)
 		delete(c.data, e.Value.([]interface{})[0])
 		c.lru.Remove(e)
 		c.count--
@@ -107,7 +107,7 @@ func (c *LruCache) Clear() {
 	defer c.lock.Unlock()
 
 	c.count = 0
-	c.lru = list.New()
+	c.lru = clist.New()
 	c.data = map[interface{}]interface{}{}
 }
 

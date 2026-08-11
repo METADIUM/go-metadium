@@ -2,12 +2,12 @@
 # with Go source code. If you know what GOPATH is then you probably
 # don't need to bother with make.
 
-.PHONY: geth android ios evm all test clean rocksdb
-.PHONY: gmet-linux
+.PHONY: geth evm all test test-short lint fmt clean devtools help rocksdb
+.PHONY: gmet gmet-linux metadium logrot dbbench
 
 GOBIN = ./build/bin
 GO ?= latest
-GORUN = env GO111MODULE=on go run
+GORUN = go run
 
 # USE_ROCKSDB
 # - undefined | "NO": Do not use
@@ -92,8 +92,11 @@ test-short: all
 lint: metadium/governance_abi.go metadium/governance_legacy_abi.go ## Run linters.
 	$(GORUN) build/ci.go lint
 
+fmt:
+	gofmt -s -w $(shell find . -name "*.go")
+
 clean:
-	env GO111MODULE=on go clean -cache
+	go clean -cache
 	rm -fr build/_workspace/pkg/ $(GOBIN)/* build/conf metadium/governance_abi.go metadium/governance_legacy_abi.go
 	@ROCKSDB_DIR=$(ROCKSDB_DIR);			\
 	if [ -e $${ROCKSDB_DIR}/Makefile ]; then	\
@@ -107,7 +110,7 @@ clean:
 devtools:
 	env GOBIN= go install golang.org/x/tools/cmd/stringer@latest
 	env GOBIN= go install github.com/fjl/gencodec@latest
-	env GOBIN= go install github.com/golang/protobuf/protoc-gen-go@latest
+	env GOBIN= go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	env GOBIN= go install ./cmd/abigen
 	@type "solc" 2> /dev/null || echo 'Please install solc'
 	@type "protoc" 2> /dev/null || echo 'Please install protoc'
@@ -213,3 +216,11 @@ build/bin/solc:
 	fi
 
 endif
+
+help: Makefile
+	@echo ''
+	@echo 'Usage:'
+	@echo '  make [target]'
+	@echo ''
+	@echo 'Targets:'
+	@sed -n 's/^#?//p' $< | column -t -s ':' |  sort | sed -e 's/^/ /'

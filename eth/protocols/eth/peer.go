@@ -17,16 +17,14 @@
 package eth
 
 import (
-	"fmt"
 	"math/big"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 
-	mapset "github.com/deckarep/golang-set"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
-	metaapi "github.com/ethereum/go-ethereum/metadium/api"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -34,7 +32,7 @@ import (
 const (
 	// maxKnownTxs is the maximum transactions hashes to keep in the known list
 	// before starting to randomly evict them.
-	maxKnownTxs = 2000000
+	maxKnownTxs = 32768
 
 	// maxKnownBlocks is the maximum block hashes to keep in the known list
 	// before starting to randomly evict them.
@@ -42,11 +40,11 @@ const (
 
 	// maxQueuedTxs is the maximum number of transactions to queue up before dropping
 	// older broadcasts.
-	maxQueuedTxs = 1500000
+	maxQueuedTxs = 4096
 
 	// maxQueuedTxAnns is the maximum number of transaction announcements to queue up
 	// before dropping older announcements.
-	maxQueuedTxAnns = 1500000
+	maxQueuedTxAnns = 4096
 
 	// maxQueuedBlocks is the maximum number of block propagations to queue up before
 	// dropping broadcasts. There's not much point in queueing stale blocks, so a few
@@ -87,15 +85,22 @@ type Peer struct {
 	txBroadcast chan []common.Hash // Channel used to queue transaction propagation requests
 	txAnnounce  chan []common.Hash // Channel used to queue transaction announcement requests
 
-	reqDispatch chan *request  // Dispatch channel to send requests and track then until fulfilment
+	reqDispatch chan *request  // Dispatch channel to send requests and track then until fulfillment
 	reqCancel   chan *cancel   // Dispatch channel to cancel pending requests and untrack them
 	resDispatch chan *response // Dispatch channel to fulfil pending requests and untrack them
 
 	term chan struct{} // Termination channel to stop the broadcasters
 	lock sync.RWMutex  // Mutex protecting the internal fields
+
+	// meta/69 replay protection (M12). metaSendNonce is a per-connection
+	// monotonic counter stamped on outbound meta messages; metaRecvNonce is the
+	// highest nonce accepted from this peer. Both are meaningful only on meta/69
+	// links; on meta/66/68 the legacy unprotected packets are used.
+	metaSendNonce atomic.Uint64
+	metaRecvNonce atomic.Uint64
 }
 
-// NewPeer create a wrapper for a network connection and negotiated  protocol
+// NewPeer creates a wrapper for a network connection and negotiated  protocol
 // version.
 func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool) *Peer {
 	peer := &Peer{
@@ -118,9 +123,7 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool) *Pe
 	// Start up all the broadcasters
 	go peer.broadcastBlocks()
 	go peer.broadcastTransactions()
-	if version >= ETH65 {
-		go peer.announceTransactions()
-	}
+	go peer.announceTransactions()
 	go peer.dispatcher()
 
 	return peer
@@ -138,7 +141,7 @@ func (p *Peer) ID() string {
 	return p.id
 }
 
-// Version retrieves the peer's negoatiated `eth` protocol version.
+// Version retrieves the peer's negotiated `eth` protocol version.
 func (p *Peer) Version() uint {
 	return p.version
 }
@@ -193,7 +196,7 @@ func (p *Peer) markTransaction(hash common.Hash) {
 // not be managed directly.
 //
 // The reasons this is public is to allow packages using this protocol to write
-// tests that directly send messages without having to do the asyn queueing.
+// tests that directly send messages without having to do the async queueing.
 func (p *Peer) SendTransactions(txs types.Transactions) error {
 	// Mark all the transactions as known, but ensure we don't overflow our limits
 	for _, tx := range txs {
@@ -215,16 +218,16 @@ func (p *Peer) AsyncSendTransactions(hashes []common.Hash) {
 	}
 }
 
-// sendPooledTransactionHashes sends transaction hashes to the peer and includes
-// them in its transaction hash set for future reference.
+// sendPooledTransactionHashes sends transaction hashes (tagged with their type
+// and size) to the peer and includes them in its transaction hash set for future
+// reference.
 //
 // This method is a helper used by the async transaction announcer. Don't call it
 // directly as the queueing (memory) and transmission (bandwidth) costs should
 // not be managed directly.
-func (p *Peer) sendPooledTransactionHashes(hashes []common.Hash) error {
-	// Mark all the transactions as known, but ensure we don't overflow our limits
-	p.knownTxs.Add(hashes...)
-	return p2p.Send(p.rw, NewPooledTransactionHashesMsg, NewPooledTransactionHashesPacket(hashes))
+func (p *Peer) sendPooledTransactionHashes(hashes []common.Hash, types []byte, sizes []uint32) error {
+	// Use version-aware method: eth/68 includes type+size; eth/66 sends hashes only.
+	return p.sendPooledTransactionHashesVersioned(hashes, types, sizes)
 }
 
 // AsyncSendPooledTransactionHashes queues a list of transactions hashes to eventually
@@ -240,28 +243,15 @@ func (p *Peer) AsyncSendPooledTransactionHashes(hashes []common.Hash) {
 	}
 }
 
-// SendPooledTransactionsRLP sends requested transactions to the peer and adds the
-// hashes in its transaction hash set for future reference.
-//
-// Note, the method assumes the hashes are correct and correspond to the list of
-// transactions being sent.
-func (p *Peer) SendPooledTransactionsRLP(hashes []common.Hash, txs []rlp.RawValue) error {
-	// Mark all the transactions as known, but ensure we don't overflow our limits
-	for _, hash := range hashes {
-		p.knownTxs.Add(hash)
-	}
-	return p2p.Send(p.rw, PooledTransactionsMsg, txs) // Not packed into PooledTransactionsPacket to avoid RLP decoding
-}
-
-// ReplyPooledTransactionsRLP is the eth/66 version of SendPooledTransactionsRLP.
+// ReplyPooledTransactionsRLP is the response to RequestTxs.
 func (p *Peer) ReplyPooledTransactionsRLP(id uint64, hashes []common.Hash, txs []rlp.RawValue) error {
 	// Mark all the transactions as known, but ensure we don't overflow our limits
 	p.knownTxs.Add(hashes...)
 
-	// Not packed into PooledTransactionsPacket to avoid RLP decoding
-	return p2p.Send(p.rw, PooledTransactionsMsg, &PooledTransactionsRLPPacket66{
-		RequestId:                   id,
-		PooledTransactionsRLPPacket: txs,
+	// Not packed into PooledTransactionsResponse to avoid RLP decoding
+	return p2p.Send(p.rw, PooledTransactionsMsg, &PooledTransactionsRLPPacket{
+		RequestId:                     id,
+		PooledTransactionsRLPResponse: txs,
 	})
 }
 
@@ -314,93 +304,28 @@ func (p *Peer) AsyncSendNewBlock(block *types.Block, td *big.Int) {
 	}
 }
 
-// SendBlockHeaders sends a batch of block headers to the remote peer.
-func (p *Peer) SendBlockHeaders(headers []*types.Header) error {
-	return p2p.Send(p.rw, BlockHeadersMsg, BlockHeadersPacket(headers))
-}
-
-// ReplyBlockHeaders is the eth/66 version of SendBlockHeaders.
-func (p *Peer) ReplyBlockHeaders(id uint64, headers []*types.Header) error {
-	return p2p.Send(p.rw, BlockHeadersMsg, BlockHeadersPacket66{
-		RequestId:          id,
-		BlockHeadersPacket: headers,
-	})
-}
-
-// ReplyBlockHeadersRLP is the eth/66 response to GetBlockHeaders.
+// ReplyBlockHeadersRLP is the response to GetBlockHeaders.
 func (p *Peer) ReplyBlockHeadersRLP(id uint64, headers []rlp.RawValue) error {
-	return p2p.Send(p.rw, BlockHeadersMsg, &BlockHeadersRLPPacket66{
-		RequestId:             id,
-		BlockHeadersRLPPacket: headers,
+	return p2p.Send(p.rw, BlockHeadersMsg, &BlockHeadersRLPPacket{
+		RequestId:               id,
+		BlockHeadersRLPResponse: headers,
 	})
 }
 
-// SendBlockBodiesRLP sends a batch of block contents to the remote peer from
-// an already RLP encoded format.
-func (p *Peer) SendBlockBodiesRLP(bodies []rlp.RawValue) error {
-	return p2p.Send(p.rw, BlockBodiesMsg, bodies) // Not packed into BlockBodiesPacket to avoid RLP decoding
-}
-
-// ReplyBlockBodiesRLP is the eth/66 response to GetBlockBodies.
+// ReplyBlockBodiesRLP is the response to GetBlockBodies.
 func (p *Peer) ReplyBlockBodiesRLP(id uint64, bodies []rlp.RawValue) error {
-	// Not packed into BlockBodiesPacket to avoid RLP decoding
-	return p2p.Send(p.rw, BlockBodiesMsg, &BlockBodiesRLPPacket66{
-		RequestId:            id,
-		BlockBodiesRLPPacket: bodies,
+	// Not packed into BlockBodiesResponse to avoid RLP decoding
+	return p2p.Send(p.rw, BlockBodiesMsg, &BlockBodiesRLPPacket{
+		RequestId:              id,
+		BlockBodiesRLPResponse: bodies,
 	})
 }
 
-// SendNodeDataRLP sends a batch of arbitrary internal data, corresponding to the
-// hashes requested.
-func (p *Peer) SendNodeData(data [][]byte) error {
-	return p2p.Send(p.rw, NodeDataMsg, NodeDataPacket(data))
-}
-
-// ReplyNodeData is the eth/66 response to GetNodeData.
-func (p *Peer) ReplyNodeData(id uint64, data [][]byte) error {
-	return p2p.Send(p.rw, NodeDataMsg, &NodeDataPacket66{
-		RequestId:      id,
-		NodeDataPacket: data,
-	})
-}
-
-// SendReceiptsRLP sends a batch of transaction receipts, corresponding to the
-// ones requested from an already RLP encoded format.
-func (p *Peer) SendReceiptsRLP(receipts []rlp.RawValue) error {
-	return p2p.Send(p.rw, ReceiptsMsg, receipts) // Not packed into ReceiptsPacket to avoid RLP decoding
-}
-
-// ReplyReceiptsRLP is the eth/66 response to GetReceipts.
+// ReplyReceiptsRLP is the response to GetReceipts.
 func (p *Peer) ReplyReceiptsRLP(id uint64, receipts []rlp.RawValue) error {
-	return p2p.Send(p.rw, ReceiptsMsg, &ReceiptsRLPPacket66{
-		RequestId:         id,
-		ReceiptsRLPPacket: receipts,
-	})
-}
-
-// SendStatusEx sends this node's miner status
-func (p *Peer) SendStatusEx(status *metaapi.MetadiumMinerStatus) error {
-	return p2p.Send(p.rw, StatusExMsg, status)
-}
-
-// ReplyStatusEx is the eth/66 response to GetStatusEx
-func (p *Peer) ReplyStatusEx(id uint64, status *metaapi.MetadiumMinerStatus) error {
-	return p2p.Send(p.rw, StatusExMsg, StatusExPacket66{
-		RequestId:      id,
-		StatusExPacket: StatusExPacket(*status),
-	})
-}
-
-// SendEtcdCluster sends this node's etcd cluster
-func (p *Peer) SendEtcdCluster(cluster string) error {
-	return p2p.Send(p.rw, EtcdClusterMsg, cluster)
-}
-
-// ReplyEtcdCluster is the eth/66 response to EtcdAddMember
-func (p *Peer) ReplyEtcdCluster(id uint64, cluster string) error {
-	return p2p.Send(p.rw, EtcdClusterMsg, EtcdClusterPacket66{
-		RequestId:         id,
-		EtcdClusterPacket: EtcdClusterPacket(cluster),
+	return p2p.Send(p.rw, ReceiptsMsg, &ReceiptsRLPPacket{
+		RequestId:           id,
+		ReceiptsRLPResponse: receipts,
 	})
 }
 
@@ -415,19 +340,15 @@ func (p *Peer) RequestOneHeader(hash common.Hash, sink chan *Response) (*Request
 		sink: sink,
 		code: GetBlockHeadersMsg,
 		want: BlockHeadersMsg,
-		data: &GetBlockHeadersPacket66{
+		data: &GetBlockHeadersPacket{
 			RequestId: id,
-			GetBlockHeadersPacket: &GetBlockHeadersPacket{
+			GetBlockHeadersRequest: &GetBlockHeadersRequest{
 				Origin:  HashOrNumber{Hash: hash},
 				Amount:  uint64(1),
 				Skip:    uint64(0),
 				Reverse: false,
 			},
 		},
-	}
-	if p.Version() <= ETH65 {
-		req.id = p.genRequestId(BlockHeadersMsg)
-		req.data65 = req.data.(*GetBlockHeadersPacket66).GetBlockHeadersPacket
 	}
 	if err := p.dispatchRequest(req); err != nil {
 		return nil, err
@@ -446,19 +367,15 @@ func (p *Peer) RequestHeadersByHash(origin common.Hash, amount int, skip int, re
 		sink: sink,
 		code: GetBlockHeadersMsg,
 		want: BlockHeadersMsg,
-		data: &GetBlockHeadersPacket66{
+		data: &GetBlockHeadersPacket{
 			RequestId: id,
-			GetBlockHeadersPacket: &GetBlockHeadersPacket{
+			GetBlockHeadersRequest: &GetBlockHeadersRequest{
 				Origin:  HashOrNumber{Hash: origin},
 				Amount:  uint64(amount),
 				Skip:    uint64(skip),
 				Reverse: reverse,
 			},
 		},
-	}
-	if p.Version() <= ETH65 {
-		req.id = p.genRequestId(BlockHeadersMsg)
-		req.data65 = req.data.(*GetBlockHeadersPacket66).GetBlockHeadersPacket
 	}
 	if err := p.dispatchRequest(req); err != nil {
 		return nil, err
@@ -477,19 +394,15 @@ func (p *Peer) RequestHeadersByNumber(origin uint64, amount int, skip int, rever
 		sink: sink,
 		code: GetBlockHeadersMsg,
 		want: BlockHeadersMsg,
-		data: &GetBlockHeadersPacket66{
+		data: &GetBlockHeadersPacket{
 			RequestId: id,
-			GetBlockHeadersPacket: &GetBlockHeadersPacket{
+			GetBlockHeadersRequest: &GetBlockHeadersRequest{
 				Origin:  HashOrNumber{Number: origin},
 				Amount:  uint64(amount),
 				Skip:    uint64(skip),
 				Reverse: reverse,
 			},
 		},
-	}
-	if p.Version() <= ETH65 {
-		req.id = p.genRequestId(BlockHeadersMsg)
-		req.data65 = req.data.(*GetBlockHeadersPacket66).GetBlockHeadersPacket
 	}
 	if err := p.dispatchRequest(req); err != nil {
 		return nil, err
@@ -508,40 +421,10 @@ func (p *Peer) RequestBodies(hashes []common.Hash, sink chan *Response) (*Reques
 		sink: sink,
 		code: GetBlockBodiesMsg,
 		want: BlockBodiesMsg,
-		data: &GetBlockBodiesPacket66{
-			RequestId:            id,
-			GetBlockBodiesPacket: hashes,
+		data: &GetBlockBodiesPacket{
+			RequestId:             id,
+			GetBlockBodiesRequest: hashes,
 		},
-	}
-	if p.Version() <= ETH65 {
-		req.id = p.genRequestId(BlockBodiesMsg)
-		req.data65 = req.data.(*GetBlockBodiesPacket66).GetBlockBodiesPacket
-	}
-	if err := p.dispatchRequest(req); err != nil {
-		return nil, err
-	}
-	return req, nil
-}
-
-// RequestNodeData fetches a batch of arbitrary data from a node's known state
-// data, corresponding to the specified hashes.
-func (p *Peer) RequestNodeData(hashes []common.Hash, sink chan *Response) (*Request, error) {
-	p.Log().Debug("Fetching batch of state data", "count", len(hashes))
-	id := rand.Uint64()
-
-	req := &Request{
-		id:   id,
-		sink: sink,
-		code: GetNodeDataMsg,
-		want: NodeDataMsg,
-		data: &GetNodeDataPacket66{
-			RequestId:         id,
-			GetNodeDataPacket: hashes,
-		},
-	}
-	if p.Version() <= ETH65 {
-		req.id = p.genRequestId(NodeDataMsg)
-		req.data65 = req.data.(*GetNodeDataPacket66).GetNodeDataPacket
 	}
 	if err := p.dispatchRequest(req); err != nil {
 		return nil, err
@@ -559,14 +442,10 @@ func (p *Peer) RequestReceipts(hashes []common.Hash, sink chan *Response) (*Requ
 		sink: sink,
 		code: GetReceiptsMsg,
 		want: ReceiptsMsg,
-		data: &GetReceiptsPacket66{
-			RequestId:         id,
-			GetReceiptsPacket: hashes,
+		data: &GetReceiptsPacket{
+			RequestId:          id,
+			GetReceiptsRequest: hashes,
 		},
-	}
-	if p.Version() <= ETH65 {
-		req.id = p.genRequestId(ReceiptsMsg)
-		req.data65 = req.data.(*GetReceiptsPacket66).GetReceiptsPacket
 	}
 	if err := p.dispatchRequest(req); err != nil {
 		return nil, err
@@ -577,22 +456,18 @@ func (p *Peer) RequestReceipts(hashes []common.Hash, sink chan *Response) (*Requ
 // RequestTxs fetches a batch of transactions from a remote node.
 func (p *Peer) RequestTxs(hashes []common.Hash) error {
 	p.Log().Debug("Fetching batch of transactions", "count", len(hashes))
-	if p.Version() <= ETH65 {
-		return p2p.Send(p.rw, GetPooledTransactionsMsg, GetPooledTransactionsPacket(hashes))
-	}
-
 	id := rand.Uint64()
 
 	requestTracker.Track(p.id, p.version, GetPooledTransactionsMsg, PooledTransactionsMsg, id)
-	return p2p.Send(p.rw, GetPooledTransactionsMsg, &GetPooledTransactionsPacket66{
-		RequestId:                   id,
-		GetPooledTransactionsPacket: hashes,
+	return p2p.Send(p.rw, GetPooledTransactionsMsg, &GetPooledTransactionsPacket{
+		RequestId:                    id,
+		GetPooledTransactionsRequest: hashes,
 	})
 }
 
 // knownCache is a cache for known hashes.
 type knownCache struct {
-	hashes mapset.Set
+	hashes mapset.Set[common.Hash]
 	max    int
 }
 
@@ -600,7 +475,7 @@ type knownCache struct {
 func newKnownCache(max int) *knownCache {
 	return &knownCache{
 		max:    max,
-		hashes: mapset.NewSet(),
+		hashes: mapset.NewSet[common.Hash](),
 	}
 }
 
@@ -622,27 +497,4 @@ func (k *knownCache) Contains(hash common.Hash) bool {
 // Cardinality returns the number of elements in the set.
 func (k *knownCache) Cardinality() int {
 	return k.hashes.Cardinality()
-}
-
-// RequestStatusEx fetches extended status of the peer
-func (p *Peer) RequestStatusEx() error {
-	p.Log().Debug("Fetching extended status")
-	id := rand.Uint64()
-
-	requestTracker.Track(p.id, p.version, GetStatusExMsg, StatusExMsg, id)
-	return p2p.Send(p.rw, GetStatusExMsg, common.Big1)
-}
-
-// RequestEtcdAddMember requests the peer to add this node to the cluster
-func (p *Peer) RequestEtcdAddMember() error {
-	p.Log().Debug("Trying to join etcd network")
-	id := rand.Uint64()
-
-	requestTracker.Track(p.id, p.version, EtcdAddMemberMsg, EtcdClusterMsg, id)
-	return p2p.Send(p.rw, EtcdAddMemberMsg, common.Big1)
-}
-
-// request id for ETH/65
-func (p *Peer) genRequestId(code uint64) uint64 {
-	return crypto.Keccak256Hash([]byte(p.id), []byte(fmt.Sprintf("%d", code))).Big().Uint64()
 }

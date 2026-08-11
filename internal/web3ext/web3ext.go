@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-// package web3ext contains geth specific web3.js extensions.
+// Package web3ext contains geth specific web3.js extensions.
 package web3ext
 
 var Modules = map[string]string{
@@ -30,6 +30,7 @@ var Modules = map[string]string{
 	"txpool":   TxpoolJs,
 	"les":      LESJs,
 	"vflux":    VfluxJs,
+	"dev":      DevJs,
 }
 
 const CliqueJs = `
@@ -190,9 +191,41 @@ web3._extend({
 			call: 'admin_stopWS'
 		}),
 		new web3._extend.Method({
-			name: 'syncWith',
-			call: 'admin_synchroniseWith',
+			name: 'metadiumNodes',
+			call: 'admin_metadiumNodes',
+			params: 2
+		}),
+		new web3._extend.Method({
+			name: 'etcdInit',
+			call: 'admin_etcdInit',
+		}),
+		new web3._extend.Method({
+			name: 'etcdAddMember',
+			call: 'admin_etcdAddMember',
 			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'etcdRemoveMember',
+			call: 'admin_etcdRemoveMember',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'etcdJoin',
+			call: 'admin_etcdJoin',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'etcdMoveLeader',
+			call: 'admin_etcdMoveLeader',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'etcdGetWork',
+			call: 'admin_etcdGetWork',
+		}),
+		new web3._extend.Method({
+			name: 'etcdDeleteWork',
+			call: 'admin_etcdDeleteWork',
 		}),
 		new web3._extend.Method({
 			name: 'requestMinerStatus',
@@ -200,60 +233,14 @@ web3._extend({
 			params: 1
 		}),
 		new web3._extend.Method({
-			name: 'metadiumNodes',
-			call: 'admin_metadiumNodes',
-			params: 2,
-			inputFormatter: [null, null]
-		}),
-		new web3._extend.Method({
 			name: 'requestEtcdAddMember',
 			call: 'admin_requestEtcdAddMember',
 			params: 1
 		}),
 		new web3._extend.Method({
-			name: 'etcdInit',
-			call: 'admin_etcdInit',
-			params: 0,
-		}),
-		new web3._extend.Method({
-			name: 'etcdAddMember',
-			call: 'admin_etcdAddMember',
-			params: 1,
-			inputFormatter: [null]
-		}),
-		new web3._extend.Method({
-			name: 'etcdRemoveMember',
-			call: 'admin_etcdRemoveMember',
-			params: 1,
-			inputFormatter: [null]
-		}),
-		new web3._extend.Method({
-			name: 'etcdJoin',
-			call: 'admin_etcdJoin',
-			params: 1,
-			inputFormatter: [null]
-		}),
-		new web3._extend.Method({
-			name: 'etcdMoveLeader',
-			call: 'admin_etcdMoveLeader',
-			params: 1,
-			inputFormatter: [null]
-		}),
-		new web3._extend.Method({
-			name: 'etcdGetWork',
-			call: 'admin_etcdGetWork',
-			params: 0
-		}),
-		new web3._extend.Method({
-			name: 'etcdDeleteWork',
-			call: 'admin_etcdDeleteWork',
-			params: 0
-		}),
-		new web3._extend.Method({
 			name: 'trsInfo',
 			call: 'admin_trsInfo',
-			params: 1,
-			inputFormatter: [web3._extend.formatters.inputBlockNumberFormatter]
+			params: 1
 		}),
 	],
 	properties: [
@@ -294,18 +281,23 @@ web3._extend({
 			outputFormatter: console.log
 		}),
 		new web3._extend.Method({
-			name: 'getHeaderRlp',
-			call: 'debug_getHeaderRlp',
+			name: 'getRawHeader',
+			call: 'debug_getRawHeader',
 			params: 1
 		}),
 		new web3._extend.Method({
-			name: 'getBlockRlp',
-			call: 'debug_getBlockRlp',
+			name: 'getRawBlock',
+			call: 'debug_getRawBlock',
 			params: 1
 		}),
 		new web3._extend.Method({
 			name: 'getRawReceipts',
 			call: 'debug_getRawReceipts',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'getRawTransaction',
+			call: 'debug_getRawTransaction',
 			params: 1
 		}),
 		new web3._extend.Method({
@@ -541,31 +533,6 @@ web3._extend({
 			inputFormatter:[web3._extend.formatters.inputBlockNumberFormatter, web3._extend.formatters.inputBlockNumberFormatter],
 		}),
 		new web3._extend.Method({
-			name: 'dbStats',
-			call: 'debug_dbStats',
-			params: 2,
-		}),
-		new web3._extend.Method({
-			name: 'verifyBlockRewards',
-			call: 'debug_verifyBlockRewards',
-			params: 1,
-		}),
-		new web3._extend.Method({
-			name: 'etcdGet',
-			call: 'debug_etcdGet',
-			params: 1,
-		}),
-		new web3._extend.Method({
-			name: 'etcdPut',
-			call: 'debug_etcdPut',
-			params: 2,
-		}),
-		new web3._extend.Method({
-			name: 'etcdDelete',
-			call: 'debug_etcdDelete',
-			params: 1,
-		}),
-		new web3._extend.Method({
 			name: 'dbGet',
 			call: 'debug_dbGet',
 			params: 1
@@ -579,6 +546,31 @@ web3._extend({
 			name: 'dbAncients',
 			call: 'debug_dbAncients',
 			params: 0
+		}),
+		new web3._extend.Method({
+			name: 'setTrieFlushInterval',
+			call: 'debug_setTrieFlushInterval',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'getTrieFlushInterval',
+			call: 'debug_getTrieFlushInterval',
+			params: 0
+		}),
+		new web3._extend.Method({
+			name: 'etcdPut',
+			call: 'debug_etcdPut',
+			params: 2
+		}),
+		new web3._extend.Method({
+			name: 'etcdGet',
+			call: 'debug_etcdGet',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'etcdDelete',
+			call: 'debug_etcdDelete',
+			params: 1
 		}),
 	],
 	properties: []
@@ -615,8 +607,8 @@ web3._extend({
 		new web3._extend.Method({
 			name: 'estimateGas',
 			call: 'eth_estimateGas',
-			params: 2,
-			inputFormatter: [web3._extend.formatters.inputCallFormatter, web3._extend.formatters.inputBlockNumberFormatter],
+			params: 3,
+			inputFormatter: [web3._extend.formatters.inputCallFormatter, web3._extend.formatters.inputBlockNumberFormatter, null],
 			outputFormatter: web3._extend.utils.toDecimal
 		}),
 		new web3._extend.Method({
@@ -630,18 +622,6 @@ web3._extend({
 			call: 'eth_fillTransaction',
 			params: 1,
 			inputFormatter: [web3._extend.formatters.inputTransactionFormatter]
-		}),
-		new web3._extend.Method({
-			name: 'getReceiptsByHash',
-			call: 'eth_getReceiptsByHash',
-			params: 1,
-			outputFormatter: function(receipts) {
-				var formatted = [];
-				for (var i = 0; i < receipts.length; i++) {
-					formatted.push(web3._extend.formatters.outputTransactionReceiptFormatter(receipts[i]));
-				}
-				return formatted;
-			}
 		}),
 		new web3._extend.Method({
 			name: 'getHeaderByNumber',
@@ -702,11 +682,33 @@ web3._extend({
 			call: 'eth_getLogs',
 			params: 1,
 		}),
-        // fee delegation
+		new web3._extend.Method({
+			name: 'call',
+			call: 'eth_call',
+			params: 4,
+			inputFormatter: [web3._extend.formatters.inputCallFormatter, web3._extend.formatters.inputDefaultBlockNumberFormatter, null, null],
+		}),
+		new web3._extend.Method({
+			name: 'getBlockReceipts',
+			call: 'eth_getBlockReceipts',
+			params: 1,
+		}),
 		new web3._extend.Method({
 			name: 'signRawFeeDelegateTransaction',
 			call: 'eth_signRawFeeDelegateTransaction',
-			params: 2,
+			params: 3,
+			inputFormatter: [web3._extend.formatters.inputTransactionFormatter, null, null]
+		}),
+		new web3._extend.Method({
+			name: 'getBlobSidecar',
+			call: 'eth_getBlobSidecar',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'getBlobSidecars',
+			call: 'eth_getBlobSidecars',
+			params: 1,
+			inputFormatter: [web3._extend.formatters.inputBlockNumberFormatter]
 		}),
 	],
 	properties: [
@@ -738,8 +740,6 @@ web3._extend({
 		new web3._extend.Method({
 			name: 'start',
 			call: 'miner_start',
-			params: 1,
-			inputFormatter: [null]
 		}),
 		new web3._extend.Method({
 			name: 'stop',
@@ -776,15 +776,6 @@ web3._extend({
 		new web3._extend.Method({
 			name: 'getHashrate',
 			call: 'miner_getHashrate'
-		}),
-		new web3._extend.Method({
-			name: 'getPrefetchCount',
-			call: 'miner_getPrefetchCount'
-		}),
-		new web3._extend.Method({
-			name: 'setPrefetchCount',
-			call: 'miner_setPrefetchCount',
-			params: 1,
 		}),
 	],
 	properties: []
@@ -851,25 +842,10 @@ web3._extend({
 			params: 1
 		}),
 		new web3._extend.Method({
-			name: 'edPubKey',
-			call: 'personal_edPubKey',
-			params: 2
-		}),
-		new web3._extend.Method({
-			name: 'prove',
-			call: 'personal_prove',
-			params: 3
-		}),
-		new web3._extend.Method({
-			name: 'verify',
-			call: 'personal_verify',
-			params: 3
-		}),
-		// fee delegation
-		new web3._extend.Method({
 			name: 'signRawFeeDelegateTransaction',
 			call: 'personal_signRawFeeDelegateTransaction',
 			params: 3,
+			inputFormatter: [web3._extend.formatters.inputTransactionFormatter, null, null]
 		}),
 	],
 	properties: [
@@ -1008,5 +984,24 @@ web3._extend({
 			getter: 'vflux_requestStats'
 		}),
 	]
+});
+`
+
+const DevJs = `
+web3._extend({
+	property: 'dev',
+	methods:
+	[
+		new web3._extend.Method({
+			name: 'addWithdrawal',
+			call: 'dev_addWithdrawal',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'setFeeRecipient',
+			call: 'dev_setFeeRecipient',
+			params: 1
+		}),
+	],
 });
 `

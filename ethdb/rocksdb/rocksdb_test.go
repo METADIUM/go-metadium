@@ -117,3 +117,99 @@ func TestRocksDB(t *testing.T) {
 		})
 	})
 }
+
+// TestSnapshotHasMissingKey verifies that snapshot.Has() returns (false, nil)
+// for a key that does not exist, not (false, error).
+func TestSnapshotHasMissingKey(t *testing.T) {
+	dir := t.TempDir()
+	db, err := New(dir, 16, 16, "test", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := db.Put([]byte("exists"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := db.NewSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snap.Release()
+
+	// Key that exists: must return (true, nil)
+	has, err := snap.Has([]byte("exists"))
+	if err != nil {
+		t.Fatalf("Has(existing key) returned error: %v", err)
+	}
+	if !has {
+		t.Fatal("Has(existing key) returned false")
+	}
+
+	// Key that does NOT exist: must return (false, nil), not (false, error)
+	has, err = snap.Has([]byte("missing"))
+	if err != nil {
+		t.Fatalf("Has(missing key) returned non-nil error: %v (want nil)", err)
+	}
+	if has {
+		t.Fatal("Has(missing key) returned true")
+	}
+}
+
+// TestSnapshotDoubleRelease verifies that calling Release() twice does not panic.
+func TestSnapshotDoubleRelease(t *testing.T) {
+	dir := t.TempDir()
+	db, err := New(dir, 16, 16, "test", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	snap, err := db.NewSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.Release()
+	snap.Release() // must not panic
+}
+
+// TestStatKnownProperty verifies that Stat() returns a non-empty result for a
+// well-known RocksDB property.
+func TestStatKnownProperty(t *testing.T) {
+	dir := t.TempDir()
+	db, err := New(dir, 16, 16, "test", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	val, err := db.Stat("rocksdb.stats")
+	if err != nil {
+		t.Fatalf("Stat(rocksdb.stats) returned error: %v", err)
+	}
+	if len(val) == 0 {
+		t.Fatal("Stat(rocksdb.stats) returned empty string")
+	}
+
+	// Unknown property must return an error
+	_, err = db.Stat("rocksdb.unknown-property-xyz")
+	if err == nil {
+		t.Fatal("Stat(unknown property) should return error")
+	}
+}
+
+// TestCloseIdempotent verifies that the database pointers are nil after Close.
+func TestCloseNilAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	db, err := New(dir, 16, 16, "test", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if db.db != nil || db.opts != nil || db.wopts != nil || db.ropts != nil {
+		t.Fatal("Close() did not nil out internal pointers")
+	}
+}
