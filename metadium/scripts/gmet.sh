@@ -59,13 +59,7 @@ function init ()
     [ $? = 0 ] || return $?
 
     echo "PORT=8588
-DISCOVER=0" > $d/.rc
-    # Metadium testnet (chain id 12) must run with --metadium-testnet for
-    # compiled-in config updates (fork blocks) to reach the node on upgrades;
-    # record the knob at init time so it cannot be silently forgotten.
-    if grep -qE '"chainId"[[:space:]]*:[[:space:]]*12\b' "$d/genesis.json"; then
-	echo "TESTNET=1" >> $d/.rc
-    fi
+DISCOVER=0" > "$d/.rc"
     ${GMET} --datadir $d init $d/genesis.json
     # echo "Generating dags for epoch 0 and 1..."
     # ${GMET} makedag 0     $d/.ethash &
@@ -167,7 +161,13 @@ function start ()
     [ "$PORT" = "" ] || RPCOPT="${RPCOPT} --ws.port $((${PORT}+10))"
     [ "$NONCE_LIMIT" = "" ] || NONCE_LIMIT="--noncelimit $NONCE_LIMIT"
     [ "$BOOT_NODES" = "" ] || BOOT_NODES="--bootnodes $BOOT_NODES"
-    [ "$TESTNET" = "1" ] && TESTNET=--metadium-testnet
+    # Clear any non-"1" value: passing a raw TESTNET=0 through OPTS would
+    # inject a stray positional argument and gmet fatals on it.
+    if [ "$TESTNET" = "1" ]; then
+	TESTNET=--metadium-testnet
+    else
+	TESTNET=
+    fi
     if [ "$DISCOVER" = "0" ]; then
 	DISCOVER=--nodiscover
     else
