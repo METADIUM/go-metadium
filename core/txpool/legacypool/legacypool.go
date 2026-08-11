@@ -1350,17 +1350,18 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 	// would freeze admission, the miner and this reorg loop for as long as an
 	// archive-mode triedb commit holds the write lock.
 	var (
-		trsMap map[common.Address]bool
-		trsSub bool
-		trsErr error
+		trsMap  map[common.Address]bool
+		trsSub  bool
+		trsErr  error
+		trsHead *types.Header
 	)
 	if reset != nil && !metaminer.IsPoW() {
-		head := reset.newHead
-		if head == nil {
-			head = pool.chain.CurrentBlock() // Special case during testing
+		trsHead = reset.newHead
+		if trsHead == nil {
+			trsHead = pool.chain.CurrentBlock() // Special case during testing
 		}
-		if head != nil {
-			trsMap, trsSub, trsErr = metaminer.GetTRSListMap(head.Number)
+		if trsHead != nil {
+			trsMap, trsSub, trsErr = metaminer.GetTRSListMap(trsHead.Number)
 		}
 	}
 	pool.mu.Lock()
@@ -1368,13 +1369,18 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 		// Reset from the old head to the new, rescheduling any reorged transactions
 		pool.reset(reset.oldHead, reset.newHead)
 
-		// Metadium: assign the prefetched TRS list. On a failed read keep the
-		// previous list rather than failing open with no enforcement at all.
-		if !metaminer.IsPoW() {
-			if trsErr == nil {
-				pool.trsListMap, pool.trsSubscribe = trsMap, trsSub
-			} else if trsErr != metaminer.ErrNotInitialized {
-				log.Warn("TRS list refresh failed; keeping previous list", "err", trsErr)
+		// Metadium: assign the prefetched TRS list -- but only if reset
+		// actually adopted the head it was fetched for (reset bails early on
+		// e.g. a StateAt failure, and the pool then still enforces against
+		// its old head). On a failed read keep the previous list rather than
+		// failing open with no enforcement at all.
+		if !metaminer.IsPoW() && trsHead != nil {
+			if cur := pool.currentHead.Load(); cur != nil && cur.Hash() == trsHead.Hash() {
+				if trsErr == nil {
+					pool.trsListMap, pool.trsSubscribe = trsMap, trsSub
+				} else if trsErr != metaminer.ErrNotInitialized {
+					log.Warn("TRS list refresh failed; keeping previous list", "err", trsErr)
+				}
 			}
 		}
 
@@ -1568,13 +1574,16 @@ func (pool *LegacyPool) trsAndFeePayerSweep(addr common.Address, list *list, pen
 	if !pool.feedelegation && !doTrs {
 		return nil, nil
 	}
-	// Collect matches directly off the nonce map: no sort, no copy, and no
-	// invalidation of the sorted cache the miner is about to use.
+	// Collect matches directly off the nonce map: no sort, no copy, and --
+	// on the common no-match path -- no invalidation of the sorted cache the
+	// miner is about to use (list.Remove below invalidates it regardless once
+	// anything actually matches).
 	var matched types.Transactions
 	for _, tx := range list.txs.items {
 		if pool.feedelegation && tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
 			feePayer := *tx.FeePayer()
-			if cost, _ := uint256.FromBig(tx.FeePayerCost()); pool.currentState.GetBalance(feePayer).Cmp(cost) < 0 {
+			// A cost too large for uint256 reads as unpayable, not solvent.
+			if cost, overflow := uint256.FromBig(tx.FeePayerCost()); overflow || pool.currentState.GetBalance(feePayer).Cmp(cost) < 0 {
 				matched = append(matched, tx)
 				continue
 			}

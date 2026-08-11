@@ -789,14 +789,21 @@ func (p *BlobPool) offload(addr common.Address, nonce uint64, id uint64, inclusi
 func (p *BlobPool) Reset(oldHead, newHead *types.Header) {
 	// Metadium: prefetch the TRS restriction list BEFORE taking the pool lock
 	// -- the governance read can block on TrieAccessMu (see the matching
-	// prefetch in legacypool.runReorg).
+	// prefetch in legacypool.runReorg). Gated on the pool being able to hold
+	// anything at all: before Cancun/Camellia activates, type-3 transactions
+	// fail validation, the index is necessarily empty, and an unconditional
+	// per-head read here would only duplicate legacypool's for zero benefit.
 	var (
-		trsMap map[common.Address]bool
-		trsSub bool
-		trsErr error
+		trsMap  map[common.Address]bool
+		trsSub  bool
+		trsErr  error
+		trsRead bool
 	)
-	if !metaminer.IsPoW() {
-		trsMap, trsSub, trsErr = metaminer.GetTRSListMap(newHead.Number)
+	if !metaminer.IsPoW() && newHead != nil {
+		if cfg := p.chain.Config(); cfg.IsCancun(newHead.Number, newHead.Time) || cfg.IsCamellia(newHead.Number) {
+			trsMap, trsSub, trsErr = metaminer.GetTRSListMap(newHead.Number)
+			trsRead = true
+		}
 	}
 
 	waitStart := time.Now()
@@ -809,7 +816,7 @@ func (p *BlobPool) Reset(oldHead, newHead *types.Header) {
 	// transactions -- admission (validateTx) rejects new ones, and the miner
 	// filter keeps them out of blocks either way, but they must not linger in
 	// the store and keep being gossiped.
-	if !metaminer.IsPoW() {
+	if trsRead {
 		if trsErr == nil {
 			p.trsListMap, p.trsSubscribe = trsMap, trsSub
 		} else if trsErr != metaminer.ErrNotInitialized {
@@ -1131,13 +1138,15 @@ func (p *BlobPool) dropRestricted() {
 			ids    []uint64
 			nonces []uint64
 		)
-		for _, tx := range txs[match:] {
+		for i := match; i < len(txs); i++ {
+			tx := txs[i]
 			ids = append(ids, tx.id)
 			nonces = append(nonces, tx.nonce)
 
 			p.spent[addr] = new(uint256.Int).Sub(p.spent[addr], tx.costCap)
 			p.stored -= uint64(tx.size)
 			delete(p.lookup, tx.hash)
+			txs[i] = nil // release the meta through the retained backing array
 		}
 		if match > 0 {
 			p.index[addr] = txs[:match]
@@ -1156,6 +1165,7 @@ func (p *BlobPool) dropRestricted() {
 			}
 		}
 	}
+	p.updateStorageMetrics()
 }
 
 // validateTx checks whether a transaction is valid according to the consensus
