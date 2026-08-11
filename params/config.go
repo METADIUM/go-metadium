@@ -174,11 +174,13 @@ var (
 	MetadiumTestnetChainConfig = &ChainConfig{
 		ChainID:        big.NewInt(12),
 		HomesteadBlock: big.NewInt(0),
-		// DAO fields intentionally differ from mainnet (0/true): re-arming
-		// DAOForkSupport would make VerifyDAOHeaderExtraData require the DAO
-		// extra-data marker over blocks 0-9, which testnet genesis does not
-		// carry -- that would break a from-genesis resync. nil/false is the
-		// correct form here; mainnet keeps 0/true for stored-config parity.
+		// DAO fields intentionally differ from mainnet (0/true). Both forms are
+		// inert on Metadium: the extra-data enforcement in
+		// VerifyDAOHeaderExtraData sits behind metaminer.IsPoW(), and a
+		// stored-config mismatch here cannot rewind -- the compat error's
+		// rewind target is genesis, which core/genesis.go suppresses and simply
+		// rewrites the stored config. nil/false is kept as the tidier form;
+		// mainnet keeps 0/true for parity with its 0.10.x stored configs.
 		DAOForkBlock:        nil,
 		DAOForkSupport:      false,
 		EIP150Block:         big.NewInt(5623000),
