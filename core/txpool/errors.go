@@ -34,6 +34,10 @@ var (
 	// with a different one without the required price bump.
 	ErrReplaceUnderpriced = errors.New("replacement transaction underpriced")
 
+	// ErrIncludedTRSList is returned if the address included in the TRSList.
+	// (Metadium TRS -- Transaction Restriction Service, 0.10.x parity)
+	ErrIncludedTRSList = errors.New("included in the TRSList")
+
 	// ErrAccountLimitExceeded is returned if a transaction would exceed the number
 	// allowed by a pool for a single account.
 	ErrAccountLimitExceeded = errors.New("account limit exceeded")

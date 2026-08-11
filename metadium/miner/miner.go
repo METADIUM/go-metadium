@@ -212,4 +212,15 @@ func GetTRSListMap(height *big.Int) (trsListMap map[common.Address]bool, trsSubs
 	return
 }
 
+// TRSRestricted reports whether a transaction between from and to touches the
+// TRS restriction list. to is nil for contract creations. This is the single
+// definition of the restriction predicate -- the tx pools and the miner all
+// call it, so admission, sweeping and block building cannot drift apart.
+func TRSRestricted(trsListMap map[common.Address]bool, from common.Address, to *common.Address) bool {
+	if len(trsListMap) == 0 {
+		return false
+	}
+	return trsListMap[from] || (to != nil && trsListMap[*to])
+}
+
 // EOF

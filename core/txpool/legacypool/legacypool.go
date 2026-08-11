@@ -35,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
@@ -70,6 +71,7 @@ var (
 var (
 	evictionInterval    = time.Minute     // Time interval to check for evictable transactions
 	statsReportInterval = 8 * time.Second // Time interval to report transaction pool stats
+	trsTickerInterval   = 3 * time.Hour   // Metadium: time interval to purge TRS-restricted transactions
 )
 
 var (
@@ -361,10 +363,12 @@ func (pool *LegacyPool) loop() {
 		report  = time.NewTicker(statsReportInterval)
 		evict   = time.NewTicker(evictionInterval)
 		journal = time.NewTicker(pool.config.Rejournal)
+		trs     = time.NewTicker(trsTickerInterval)
 	)
 	defer report.Stop()
 	defer evict.Stop()
 	defer journal.Stop()
+	defer trs.Stop()
 
 	// Notify tests that the init phase is done
 	close(pool.initDoneCh)
@@ -411,6 +415,30 @@ func (pool *LegacyPool) loop() {
 				pool.mu.Lock()
 				if err := pool.journal.rotate(pool.local()); err != nil {
 					log.Warn("Failed to rotate local tx journal", "err", err)
+				}
+				pool.mu.Unlock()
+			}
+
+		// Metadium: periodically remove pending transactions on the TRS
+		// restriction list (0.10.x parity). Deliberate asymmetries, inherited
+		// from 0.10.x -- do not "fix" in either direction: this ticker
+		// ignores pool.trsSubscribe while admission and the demote sweep
+		// require it (a non-subscribed node admits restricted txs and only
+		// purges them here, up to 3h later), and the queue is intentionally
+		// not swept (queued restricted txs surface in pending first).
+		case <-trs.C:
+			if !metaminer.IsPoW() {
+				pool.mu.Lock()
+				if len(pool.trsListMap) > 0 {
+					for addr := range pool.pending {
+						for _, tx := range pool.pending[addr].Flatten() {
+							if metaminer.TRSRestricted(pool.trsListMap, addr, tx.To()) {
+								log.Debug("Discard pending transaction included in trsList", "hash", tx.Hash(), "addr", addr)
+								pool.removeTx(tx.Hash(), true, true)
+								pendingDiscardMeter.Mark(1)
+							}
+						}
+					}
 				}
 				pool.mu.Unlock()
 			}
@@ -694,6 +722,14 @@ func (pool *LegacyPool) validateTx(tx *types.Transaction, local bool) error {
 	}
 	if err := txpool.ValidateTransactionWithState(tx, pool.signer, opts); err != nil {
 		return err
+	}
+	// Metadium: nodes subscribing to TRS reject transactions whose sender or
+	// recipient is on the restriction list (0.10.x parity).
+	if pool.trsEnforced() {
+		from, _ := types.Sender(pool.signer, tx) // validated above
+		if metaminer.TRSRestricted(pool.trsListMap, from, tx.To()) {
+			return txpool.ErrIncludedTRSList
+		}
 	}
 	return nil
 }
@@ -1308,10 +1344,45 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 		// the flatten operation can be avoided.
 		promoteAddrs = dirtyAccounts.flatten()
 	}
+	// Metadium: prefetch the TRS restriction list for the new head BEFORE
+	// taking pool.mu. The governance read goes through callContractSerialized,
+	// whose TrieAccessMu wait is unbounded -- fetched under the pool lock it
+	// would freeze admission, the miner and this reorg loop for as long as an
+	// archive-mode triedb commit holds the write lock.
+	var (
+		trsMap  map[common.Address]bool
+		trsSub  bool
+		trsErr  error
+		trsHead *types.Header
+	)
+	if reset != nil && !metaminer.IsPoW() {
+		trsHead = reset.newHead
+		if trsHead == nil {
+			trsHead = pool.chain.CurrentBlock() // Special case during testing
+		}
+		if trsHead != nil {
+			trsMap, trsSub, trsErr = metaminer.GetTRSListMap(trsHead.Number)
+		}
+	}
 	pool.mu.Lock()
 	if reset != nil {
 		// Reset from the old head to the new, rescheduling any reorged transactions
 		pool.reset(reset.oldHead, reset.newHead)
+
+		// Metadium: assign the prefetched TRS list -- but only if reset
+		// actually adopted the head it was fetched for (reset bails early on
+		// e.g. a StateAt failure, and the pool then still enforces against
+		// its old head). On a failed read keep the previous list rather than
+		// failing open with no enforcement at all.
+		if !metaminer.IsPoW() && trsHead != nil {
+			if cur := pool.currentHead.Load(); cur != nil && cur.Hash() == trsHead.Hash() {
+				if trsErr == nil {
+					pool.trsListMap, pool.trsSubscribe = trsMap, trsSub
+				} else if trsErr != metaminer.ErrNotInitialized {
+					log.Warn("TRS list refresh failed; keeping previous list", "err", trsErr)
+				}
+			}
+		}
 
 		// Nonces were reset, discard any events that became stale
 		for addr := range events {
@@ -1467,11 +1538,91 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	pool.currentHead.Store(newHead)
 	pool.currentState = statedb
 	pool.pendingNonces = newNoncer(statedb)
+	// Metadium: the TRS restriction list for this head was prefetched by
+	// runReorg before pool.mu was taken (the governance read can block on
+	// TrieAccessMu, and a synchronous fetch here would freeze the whole pool
+	// through the held lock) and is assigned there right after this returns.
 
 	// Inject any transactions discarded due to reorgs
 	log.Debug("Reinjecting stale transactions", "count", len(reinject))
 	core.SenderCacher.Recover(pool.signer, reinject)
 	pool.addTxsLocked(reinject, false)
+}
+
+// trsEnforced reports whether this node enforces TRS at admission and in the
+// promote/demote sweeps: PoA consensus and an active TRS subscription. The
+// 3-hour purge ticker deliberately does NOT use this -- it ignores the
+// subscription, matching 0.10.x semantics.
+func (pool *LegacyPool) trsEnforced() bool {
+	return !metaminer.IsPoW() && pool.trsSubscribe
+}
+
+// trsAndFeePayerSweep removes from list any transaction whose sender or
+// recipient is TRS-restricted (when this node subscribes to TRS) and any
+// fee-delegated transaction whose fee payer can no longer cover its cost.
+// It restores the 0.10.x pool behaviour that the v1.13.14 rebase dropped.
+//
+// It returns the dropped transactions plus any higher-nonce transactions a
+// strict (pending) list cascaded out with them. The caller holds pool.mu and
+// must account for drops like balance-filter drops (lookup + priced) and
+// re-enqueue cascaded like balance-filter invalids -- dropping the cascade on
+// the floor leaks them: still in pool.all (blocking resubmission with
+// ErrAlreadyKnown), in no list any sweep or ticker reaches, and pinning the
+// address reservation state out of sync.
+func (pool *LegacyPool) trsAndFeePayerSweep(addr common.Address, list *list, pending bool) (drops, cascaded types.Transactions) {
+	doTrs := pool.trsEnforced()
+	if !pool.feedelegation && !doTrs {
+		return nil, nil
+	}
+	// Collect matches directly off the nonce map: no sort, no copy, and --
+	// on the common no-match path -- no invalidation of the sorted cache the
+	// miner is about to use (list.Remove below invalidates it regardless once
+	// anything actually matches).
+	var matched types.Transactions
+	for _, tx := range list.txs.items {
+		if pool.feedelegation && tx.Type() == types.FeeDelegateDynamicFeeTxType && tx.FeePayer() != nil {
+			feePayer := *tx.FeePayer()
+			// A cost too large for uint256 reads as unpayable, not solvent.
+			if cost, overflow := uint256.FromBig(tx.FeePayerCost()); overflow || pool.currentState.GetBalance(feePayer).Cmp(cost) < 0 {
+				matched = append(matched, tx)
+				continue
+			}
+		}
+		if doTrs && metaminer.TRSRestricted(pool.trsListMap, addr, tx.To()) {
+			matched = append(matched, tx)
+		}
+	}
+	if len(matched) == 0 {
+		return nil, nil
+	}
+	matchSet := make(map[common.Hash]struct{}, len(matched))
+	for _, tx := range matched {
+		matchSet[tx.Hash()] = struct{}{}
+	}
+	for _, tx := range matched {
+		removed, invalids := list.Remove(tx)
+		if !removed {
+			// Already cascaded out by an earlier removal; it is accounted for
+			// below when its cascade batch is partitioned.
+			continue
+		}
+		log.Trace("Removed restricted or unpayable transaction", "hash", tx.Hash(), "addr", addr)
+		drops = append(drops, tx)
+		if pending {
+			pool.pendingNonces.setIfLower(addr, tx.Nonce())
+		}
+		// A strict list cascades every higher-nonce tx out with the match.
+		// Cascade victims that themselves match are drops; the innocent rest
+		// must be handed back for re-enqueueing.
+		for _, itx := range invalids {
+			if _, ok := matchSet[itx.Hash()]; ok {
+				drops = append(drops, itx)
+			} else {
+				cascaded = append(cascaded, itx)
+			}
+		}
+	}
+	return drops, cascaded
 }
 
 // promoteExecutables moves transactions that have become processable from the
@@ -1497,6 +1648,10 @@ func (pool *LegacyPool) promoteExecutables(accounts []common.Address) []*types.T
 		log.Trace("Removed old queued transactions", "count", len(forwards))
 		// Drop all transactions that are too costly (low balance or out of gas)
 		drops, _ := list.Filter(pool.currentState.GetBalance(addr), gasLimit)
+		// Metadium: drop TRS-restricted and drained-fee-payer transactions
+		// too (queue lists are non-strict, so there is no cascade here)
+		trsDrops, _ := pool.trsAndFeePayerSweep(addr, list, false)
+		drops = append(drops, trsDrops...)
 		for _, tx := range drops {
 			hash := tx.Hash()
 			pool.all.Remove(hash)
@@ -1698,6 +1853,15 @@ func (pool *LegacyPool) demoteUnexecutables() {
 		}
 		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
 		drops, invalids := list.Filter(pool.currentState.GetBalance(addr), gasLimit)
+		// Metadium: drop TRS-restricted and drained-fee-payer transactions
+		// too. Pending lists are strict, so a removal cascades every
+		// higher-nonce tx out with it -- innocent cascade victims are routed
+		// through the invalids path below, exactly like balance-filter
+		// invalids, so they get re-enqueued instead of leaking out of every
+		// list while still occupying pool.all.
+		trsDrops, trsCascaded := pool.trsAndFeePayerSweep(addr, list, true)
+		drops = append(drops, trsDrops...)
+		invalids = append(invalids, trsCascaded...)
 		for _, tx := range drops {
 			hash := tx.Hash()
 			log.Trace("Removed unpayable pending transaction", "hash", hash)
