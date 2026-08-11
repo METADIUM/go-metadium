@@ -120,30 +120,49 @@ before — but review the following **before** restarting on the new binary.
 
    Without these, the upgraded node silently stops serving external clients
    while looking healthy in every other way.
-4. **`gmet.sh stop` semantics changed.** It now exits non-zero when the node
+4. **★ The `personal` RPC namespace is disabled by default.** Upstream
+   deprecated it: the node only registers `personal_*` (including
+   `personal_unlockAccount` and `personal_sendTransaction`, common in
+   exchange wallet backends) when started with
+   `--rpc.enabledeprecatedpersonal`. `gmet.sh` does not pass it. Same failure
+   shape as the bind change: the node comes up healthy and the backend stops
+   working. If your tooling uses `personal_*`, add the flag (via
+   `GMET_OPTS="--rpc.enabledeprecatedpersonal"` in `.rc`) — and plan a
+   migration off the namespace, since upstream has removed it entirely in
+   later releases.
+5. **★ `--syncmode light` no longer starts.** 0.10.x shipped a light-client
+   implementation (`les/`); v1.1.x does not — the flag still parses, but the
+   node refuses to start with "light mode has been deprecated". If any
+   launcher or unit file passes `--syncmode light`, change it to `full` (or
+   `snap`) before restarting.
+6. **`gmet.sh stop` semantics changed.** It now exits non-zero when the node
    did not actually stop (previously it could report success without stopping
    anything), and gained `.rc` tunables: `STOP_TIMEOUT` (seconds to wait for
-   graceful shutdown before escalating), `STOP_FORCE` (`0` = never SIGKILL,
-   exit non-zero instead), `LOCK_TIMEOUT`. Automation that wraps `stop` must
-   check the exit code rather than assume success. Never `kill -9` a node —
-   RocksDB especially.
-5. **Testnet operators: skip 1.1.0, go straight to 1.1.1.** The 1.1.0 testnet
+   graceful shutdown before escalating, default `200`), `STOP_FORCE` (`0` =
+   never SIGKILL, exit non-zero instead), `LOCK_TIMEOUT` (default `200`).
+   Automation that wraps `stop` must check the exit code rather than assume
+   success, and size its own timeout above `STOP_TIMEOUT`. Never `kill -9` a
+   node — RocksDB especially.
+7. **Testnet operators: skip 1.1.0, go straight to 1.1.1.** The 1.1.0 testnet
    build carries a chain-config regression that rewinds a 0.10.x node to
    block 5,622,999 (~80M-block resync) on first start. 1.1.1 is safe from
    both 0.10.x and 1.1.0 starting states. Run testnet nodes with
    `--metadium-testnet` (or `TESTNET=1` in `.rc` when using `gmet.sh`).
-6. **RPC fee cap**: `gmet.sh` now passes `--rpc.txfeecap 0`, preserving the
+8. **RPC fee cap**: `gmet.sh` now passes `--rpc.txfeecap 0`, preserving the
    0.10.x behaviour of no cap on `eth_sendTransaction` fees. Operators who
    launch `gmet` directly without this flag get upstream's default 1-ether
    cap — set it explicitly if your tooling sends high-fee transactions.
-7. **Direct-CLI launchers**: the flag surface is upstream go-ethereum
+9. **Direct-CLI launchers**: the flag surface is upstream go-ethereum
    v1.13.14. If you maintain a custom launch script or systemd unit instead
    of `gmet.sh`, dry-run it against the new binary (`gmet --help`); valid
-   `--syncmode` values are `full`, `snap` and `light`. systemd unit templates
-   are provided at `metadium/scripts/gmet.service` (plus a sealer override).
-8. **`metadium/metclient` library users**: `SendValue` and `Deploy` signatures
-   changed (`amount`/`gas` are no longer platform-sized ints). External tools
-   linking the package fail loudly at compile time; update the call sites.
+   `--syncmode` values are `full` and `snap` (`light` refuses to start, see
+   item 5). systemd unit templates are provided at
+   `metadium/scripts/gmet.service` (plus a sealer override).
+10. **`metadium/metclient` library users**: compile-time signature changes —
+    `SendValue`'s `amount` went `int` → `*big.Int`, and `_gasPrice` went
+    `int` → `int64` in both `SendValue` and `Deploy` (`gas` is unchanged).
+    External tools linking the package fail loudly at compile time; update
+    the call sites.
 
 Transaction-behaviour note: the pool again admits transactions up to 256KB
 (0.10.x parity; the intermediate 1.1.0 line rejected above 128KB). Until the
