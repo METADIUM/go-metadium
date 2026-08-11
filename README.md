@@ -130,11 +130,14 @@ before — but review the following **before** restarting on the new binary.
    `GMET_OPTS="--rpc.enabledeprecatedpersonal"` in `.rc`) — and plan a
    migration off the namespace, since upstream has removed it entirely in
    later releases.
-5. **★ `--syncmode light` no longer starts.** 0.10.x shipped a light-client
-   implementation (`les/`); v1.1.x does not — the flag still parses, but the
-   node refuses to start with "light mode has been deprecated". If any
-   launcher or unit file passes `--syncmode light`, change it to `full` (or
-   `snap`) before restarting.
+5. **★ Metadium networks run full sync only — every other `--syncmode`
+   refuses to start.** `light` is gone from the tree (0.10.x shipped `les/`;
+   v1.1.x does not), and `snap`/`fast` are deliberately rejected on Metadium
+   mainnet/testnet because the snap state-healing fixes are not backported to
+   this base (state-corruption risk). If any launcher or unit file passes a
+   `--syncmode` other than `full`, change it before restarting. For fast
+   new-node bring-up, bootstrap from a published chain snapshot instead
+   (`docs/sync-policy-and-snapshot-bootstrap.md`).
 6. **`gmet.sh stop` semantics changed.** It now exits non-zero when the node
    did not actually stop (previously it could report success without stopping
    anything), and gained `.rc` tunables: `STOP_TIMEOUT` (seconds to wait for
@@ -154,10 +157,10 @@ before — but review the following **before** restarting on the new binary.
    cap — set it explicitly if your tooling sends high-fee transactions.
 9. **Direct-CLI launchers**: the flag surface is upstream go-ethereum
    v1.13.14. If you maintain a custom launch script or systemd unit instead
-   of `gmet.sh`, dry-run it against the new binary (`gmet --help`); valid
-   `--syncmode` values are `full` and `snap` (`light` refuses to start, see
-   item 5). systemd unit templates are provided at
-   `metadium/scripts/gmet.service` (plus a sealer override).
+   of `gmet.sh`, dry-run it against the new binary (`gmet --help`); the only
+   `--syncmode` that starts on Metadium networks is `full` (item 5). systemd
+   unit templates are provided at `metadium/scripts/gmet.service` (plus a
+   sealer override).
 10. **`metadium/metclient` library users**: compile-time signature changes —
     `SendValue`'s `amount` went `int` → `*big.Int`, and `_gasPrice` went
     `int` → `int64` in both `SendValue` and `Deploy` (`gas` is unchanged).
@@ -182,7 +185,7 @@ stock layout). Every knob, with its default:
 | `HTTP_ADDR` / `WS_ADDR` | `127.0.0.1` | RPC / WS bind address. Set `0.0.0.0` (or a specific interface) only on nodes that must serve other machines. |
 | `TESTNET` | unset | `1` → `--metadium-testnet`. Anything else is ignored. |
 | `DISCOVER` | unset (on) | `0` → `--nodiscover`. Leave discovery on for ordinary full nodes; mainnet/testnet bootnodes are compiled into the binary, so no `BOOT_NODES` is needed. |
-| `SYNC_MODE` | unset (**archive**) | `full` → pruned full node (recommended for exchange/API nodes, ~600GB-class). **Unset means `--syncmode full --gcmode archive`** — a multi-TB archive node; only choose that if you need historical `debug_traceTransaction`. |
+| `SYNC_MODE` | unset (**archive**) | `full` → pruned full node (recommended for exchange/API nodes, ~600GB-class). **Unset means `--syncmode full --gcmode archive`** — a multi-TB archive node; only choose that if you need historical `debug_traceTransaction`. Any other value refuses to start on Metadium networks (full sync only, see the upgrade checklist). |
 | `BOOT_NODES` | unset | Extra `--bootnodes` enodes (rarely needed, see above). |
 | `GMET_OPTS` | unset | Extra flags appended verbatim to the command line. |
 | `STOP_TIMEOUT` | `200` | Seconds `gmet.sh stop` waits for graceful shutdown before escalating. |
