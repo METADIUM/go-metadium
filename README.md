@@ -151,6 +151,61 @@ whole network is upgraded, nodes still on old binaries do not propagate
 128–256KB transactions, so propagation of large contract deployments is
 path-dependent during a rolling upgrade.
 
+## Node Configuration Reference (`gmet.sh` / `.rc`)
+
+The standard deployment runs `gmet` through `bin/gmet.sh`, which reads the
+node's configuration from a `.rc` file in the datadir (`/opt/meta/.rc` in the
+stock layout). Every knob, with its default:
+
+| `.rc` variable | Default | Meaning |
+|---|---|---|
+| `PORT` | `8588` | HTTP-RPC port. WS is `PORT+10`, p2p is `PORT+1`. |
+| `HTTP_ADDR` / `WS_ADDR` | `127.0.0.1` | RPC / WS bind address. Set `0.0.0.0` (or a specific interface) only on nodes that must serve other machines. |
+| `TESTNET` | unset | `1` → `--metadium-testnet`. Anything else is ignored. |
+| `DISCOVER` | unset (on) | `0` → `--nodiscover`. Leave discovery on for ordinary full nodes; mainnet/testnet bootnodes are compiled into the binary, so no `BOOT_NODES` is needed. |
+| `SYNC_MODE` | unset (**archive**) | `full` → pruned full node (recommended for exchange/API nodes, ~600GB-class). **Unset means `--syncmode full --gcmode archive`** — a multi-TB archive node; only choose that if you need historical `debug_traceTransaction`. |
+| `BOOT_NODES` | unset | Extra `--bootnodes` enodes (rarely needed, see above). |
+| `GMET_OPTS` | unset | Extra flags appended verbatim to the command line. |
+| `STOP_TIMEOUT` | `200` | Seconds `gmet.sh stop` waits for graceful shutdown before escalating. |
+| `STOP_FORCE` | `1` | `0` = never SIGKILL; `stop` exits non-zero instead (recommended for RocksDB nodes and anything driven by automation). |
+| `LOCK_TIMEOUT` | `200` | Seconds to wait for the chaindata lock to be released after exit. |
+| `COINBASE`, `HUB`, `MAX_TXS_PER_BLOCK`, `NONCE_LIMIT` | unset | Special-purpose (sealer / relay setups); ordinary full nodes leave these alone. |
+
+The stop knobs also take one-shot environment overrides
+(`STOP_TIMEOUT=1800 gmet.sh stop`) without editing the `.rc`.
+
+### Example: exchange / API full node
+
+```bash
+# /opt/meta/.rc -- pruned mainnet full node serving RPC to internal backends
+PORT=8588
+SYNC_MODE=full          # pruned; omit this line only if you need an archive node
+HTTP_ADDR=0.0.0.0       # internal backends connect over the network
+WS_ADDR=0.0.0.0         # (firewall the ports -- these binds are not auth)
+STOP_TIMEOUT=1800
+STOP_FORCE=0            # never SIGKILL; fail loudly and retry instead
+```
+
+Equivalent direct invocation without `gmet.sh`:
+
+```bash
+gmet --datadir /opt/meta --syncmode full \
+  --http --http.addr 0.0.0.0 --http.port 8588 --http.api eth,net,web3 \
+  --ws --ws.addr 0.0.0.0 --ws.port 8598 \
+  --port 8589 --rpc.txfeecap 0 --metrics
+```
+
+Deploy/upgrade cycle (datadir, `geth/nodekey` and `.rc` live outside the
+tarball and survive):
+
+```bash
+cd /opt/meta
+bin/gmet.sh stop        # graceful; check the exit code -- never kill -9
+tar xzvf metadium-<version>-linux-<leveldb|rocksdb>.tar.gz
+bin/gmet.sh start
+bin/gmet version        # verify version and fork banner
+```
+
 ## Testing
 
 ```bash
