@@ -130,17 +130,27 @@ before — but review the following **before** restarting on the new binary.
    exchange wallet backends) when started with
    `--rpc.enabledeprecatedpersonal`. `gmet.sh` does not pass it. Same failure
    shape as the bind change: the node comes up healthy and the backend stops
-   working. If your tooling uses `personal_*`, add the flag (via
-   `GMET_OPTS="--rpc.enabledeprecatedpersonal"` in `.rc`) — and plan a
-   migration off the namespace, since upstream has removed it entirely in
+   working. If your tooling uses `personal_*`, **two** things are required:
+   the enable flag *and* `personal` in the HTTP module list (the default is
+   `net,web3` only) — e.g. in `.rc`:
+
+   ```bash
+   GMET_OPTS="--rpc.enabledeprecatedpersonal --http.api eth,net,web3,personal"
+   ```
+
+   (`gmet.sh` passes no `--http.api` of its own, so anyone using the
+   namespace over HTTP is already supplying a module list — extend it.) And
+   plan a migration off the namespace: upstream has removed it entirely in
    later releases.
 5. **★ Metadium networks run full sync only — every other `--syncmode`
    refuses to start.** `light` is gone from the tree (0.10.x shipped `les/`;
    v1.1.x does not), and `snap`/`fast` are deliberately rejected on Metadium
    mainnet/testnet because the snap state-healing fixes are not backported to
    this base (state-corruption risk). If any launcher or unit file passes a
-   `--syncmode` other than `full`, change it before restarting. For fast
-   new-node bring-up, bootstrap from a published chain snapshot instead
+   `--syncmode` other than `full`, change it before restarting. (The guard
+   exempts only the upstream test networks and `--dev` — private chains run
+   off this binary are under it too.) For fast new-node bring-up, bootstrap
+   from a published chain snapshot instead
    (`docs/sync-policy-and-snapshot-bootstrap.md`).
 6. **`gmet.sh stop` semantics changed.** It now exits non-zero when the node
    did not actually stop (previously it could report success without stopping
@@ -158,8 +168,10 @@ before — but review the following **before** restarting on the new binary.
    rewinds a 0.10.x node to block 5,622,999 (~80M-block resync) on first
    start. The fix landed *after* the version string moved to 1.1.1, so
    "reports 1.1.1-stable" does not prove a build is safe — use the official
-   m1.1.1 release asset, or verify `gmet version`'s `Git Commit` is at or
-   after `e2c0d7413`. Order matters on the remediation too: run testnet
+   m1.1.1 release asset (its exact commit hash is published in the release
+   notes). Self-builders can check their commit contains the fix with
+   `git merge-base --is-ancestor e2c0d7413 <your-commit>` (exit 0 = fixed).
+   Order matters on the remediation too: run testnet
    nodes with `--metadium-testnet` (or `TESTNET=1` in `.rc`) **only once on
    a fixed build** — adding the flag while still on a pre-fix binary is
    exactly what arms the rewind.
