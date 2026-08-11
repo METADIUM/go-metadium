@@ -989,12 +989,10 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 		from, _ := types.Sender(env.signer, tx)
 
 		// Metadium: TRS (Transaction Restriction Service) filtering
-		if env.trsListMap != nil && len(env.trsListMap) > 0 && env.trsSubscribe {
-			if env.trsListMap[from] || (tx.To() != nil && env.trsListMap[*tx.To()]) {
-				log.Debug("included in trsList", "hash", tx.Hash(), "from", from)
-				txs.Pop()
-				continue
-			}
+		if env.trsSubscribe && metaminer.TRSRestricted(env.trsListMap, from, tx.To()) {
+			log.Debug("included in trsList", "hash", tx.Hash(), "from", from)
+			txs.Pop()
+			continue
 		}
 
 		// Check whether the tx is replay protected. If we're not in the EIP155 hf

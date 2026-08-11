@@ -38,6 +38,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -92,6 +93,8 @@ type blobTxMeta struct {
 	id   uint64      // Storage ID in the pool's persistent store
 	size uint32      // Byte size in the pool's persistent store
 
+	to *common.Address // Recipient, needed for the Metadium TRS purge (blob txs always have one)
+
 	nonce      uint64       // Needed to prioritize inclusion order within an account
 	costCap    *uint256.Int // Needed to validate cumulative balance sufficiency
 	execTipCap *uint256.Int // Needed to prioritize inclusion order across accounts and validate replacement price bump
@@ -115,6 +118,7 @@ func newBlobTxMeta(id uint64, size uint32, tx *types.Transaction) *blobTxMeta {
 		hash:       tx.Hash(),
 		id:         id,
 		size:       size,
+		to:         tx.To(),
 		nonce:      tx.Nonce(),
 		costCap:    uint256.MustFromBig(tx.Cost()),
 		execTipCap: uint256.MustFromBig(tx.GasTipCap()),
@@ -315,6 +319,9 @@ type BlobPool struct {
 	insertFeed   event.Feed // Event feed to send out new tx events on pool inclusion (reorg included)
 
 	lock sync.RWMutex // Mutex protecting the pool during reorg handling
+
+	trsListMap   map[common.Address]bool // Metadium TRS restriction list at the current head
+	trsSubscribe bool                    // Whether this node subscribes to TRS enforcement
 }
 
 // New creates a new blob transaction pool to gather, sort and filter inbound
@@ -780,10 +787,38 @@ func (p *BlobPool) offload(addr common.Address, nonce uint64, id uint64, inclusi
 // Reset implements txpool.SubPool, allowing the blob pool's internal state to be
 // kept in sync with the main transaction pool's internal state.
 func (p *BlobPool) Reset(oldHead, newHead *types.Header) {
+	// Metadium: prefetch the TRS restriction list BEFORE taking the pool lock
+	// -- the governance read can block on TrieAccessMu (see the matching
+	// prefetch in legacypool.runReorg).
+	var (
+		trsMap map[common.Address]bool
+		trsSub bool
+		trsErr error
+	)
+	if !metaminer.IsPoW() {
+		trsMap, trsSub, trsErr = metaminer.GetTRSListMap(newHead.Number)
+	}
+
 	waitStart := time.Now()
 	p.lock.Lock()
 	resetwaitHist.Update(time.Since(waitStart).Nanoseconds())
 	defer p.lock.Unlock()
+
+	// Metadium: assign the prefetched TRS list; on a failed read keep the
+	// previous list rather than failing open. Purge any stored restricted
+	// transactions -- admission (validateTx) rejects new ones, and the miner
+	// filter keeps them out of blocks either way, but they must not linger in
+	// the store and keep being gossiped.
+	if !metaminer.IsPoW() {
+		if trsErr == nil {
+			p.trsListMap, p.trsSubscribe = trsMap, trsSub
+		} else if trsErr != metaminer.ErrNotInitialized {
+			log.Warn("TRS list refresh failed; keeping previous list", "err", trsErr)
+		}
+		if p.trsSubscribe && len(p.trsListMap) > 0 {
+			p.dropRestricted()
+		}
+	}
 
 	defer func(start time.Time) {
 		resettimeHist.Update(time.Since(start).Nanoseconds())
@@ -1076,6 +1111,53 @@ func (p *BlobPool) SetGasTip(tip *big.Int) {
 	p.updateStorageMetrics()
 }
 
+// dropRestricted evicts every stored transaction whose sender or recipient is
+// on the Metadium TRS restriction list. Blob nonces must stay gapless, so the
+// first restricted transaction in an account takes everything after it down
+// too, mirroring the SetGasTip eviction shape. The caller holds p.lock.
+func (p *BlobPool) dropRestricted() {
+	for addr, txs := range p.index {
+		match := -1
+		for i, tx := range txs {
+			if metaminer.TRSRestricted(p.trsListMap, addr, tx.to) {
+				match = i
+				break
+			}
+		}
+		if match < 0 {
+			continue
+		}
+		var (
+			ids    []uint64
+			nonces []uint64
+		)
+		for _, tx := range txs[match:] {
+			ids = append(ids, tx.id)
+			nonces = append(nonces, tx.nonce)
+
+			p.spent[addr] = new(uint256.Int).Sub(p.spent[addr], tx.costCap)
+			p.stored -= uint64(tx.size)
+			delete(p.lookup, tx.hash)
+		}
+		if match > 0 {
+			p.index[addr] = txs[:match]
+			heap.Fix(p.evict, p.evict.index[addr])
+		} else {
+			delete(p.index, addr)
+			delete(p.spent, addr)
+
+			heap.Remove(p.evict, p.evict.index[addr])
+			p.reserve(addr, false)
+		}
+		log.Warn("Dropping TRS-restricted blob transactions", "from", addr, "drop", nonces, "ids", ids)
+		for _, id := range ids {
+			if err := p.store.Delete(id); err != nil {
+				log.Error("Failed to delete dropped transaction", "id", id, "err", err)
+			}
+		}
+	}
+}
+
 // validateTx checks whether a transaction is valid according to the consensus
 // rules and adheres to some heuristic limits of the local node (price and size).
 func (p *BlobPool) validateTx(tx *types.Transaction) error {
@@ -1089,6 +1171,14 @@ func (p *BlobPool) validateTx(tx *types.Transaction) error {
 	}
 	if err := txpool.ValidateTransaction(tx, p.head, p.signer, baseOpts); err != nil {
 		return err
+	}
+	// Metadium: nodes subscribing to TRS reject transactions whose sender or
+	// recipient is on the restriction list (parity with legacypool admission).
+	if !metaminer.IsPoW() && p.trsSubscribe {
+		from, _ := types.Sender(p.signer, tx)
+		if metaminer.TRSRestricted(p.trsListMap, from, tx.To()) {
+			return txpool.ErrIncludedTRSList
+		}
 	}
 	// Ensure the transaction adheres to the stateful pool filters (nonce, balance)
 	stateOpts := &txpool.ValidationOptionsWithState{
