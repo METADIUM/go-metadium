@@ -336,7 +336,15 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedbpkg.Database
 	// chain config as that would be AllProtocolChanges (applying any new fork
 	// on top of an existing private network genesis block). In that case, only
 	// apply the overrides.
-	if genesis == nil && stored != params.MainnetGenesisHash && stored != params.MetadiumMainnetGenesisHash {
+	//
+	// Metadium: the testnet hash is excluded alongside mainnet -- a Metadium
+	// testnet node started without --metadium-testnet used to take this
+	// stored-config branch and never receive compiled-in fork updates
+	// (including the Camellia block), regardless of how it was launched. The
+	// stored-vs-compiled compatibility check below still guards the switch;
+	// with the testnet DAO/Petersburg fields restored to 0.10.x parity there
+	// is no first-check mismatch left to mask later forks' checks.
+	if genesis == nil && stored != params.MainnetGenesisHash && stored != params.MetadiumMainnetGenesisHash && stored != params.MetadiumTestnetGenesisHash {
 		newcfg = storedcfg
 		applyOverrides(newcfg)
 	}
