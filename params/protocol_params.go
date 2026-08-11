@@ -149,6 +149,10 @@ const (
 	// the upstream default, and the regression only surfaced at release time. A
 	// bare 8*txSlotSize would be invisible to the next rebase; this name (and
 	// TestTxMaxSizeCoversMaxCode) is what makes it fail loudly.
+	//
+	// Not consensus-critical -- local pool admission policy only. It sits next
+	// to MaxCodeSize for the arithmetic relationship, but changing it needs no
+	// hard fork.
 	MaxTransactionSize = 262144 // 256KB
 
 	// Precompiled contract gas prices

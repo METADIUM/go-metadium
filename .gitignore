@@ -71,5 +71,9 @@ tests/spec-tests/
 /core/txpool/blobpool/blobpool/
 
 # Operator-local files (never commit: addresses, accounts, keys, schedules)
-# Any *.local.* suffix, not just .md -- covers ad-hoc .sh/.html scratch too.
+# Any *.local.* suffix, not just .md -- covers ad-hoc .sh/.html scratch too,
+# plus extensionless foo.local. Note both globs also match intentionally
+# committed names like config.local.json -- none exist today; use
+# `git add -f` if one ever should.
 *.local.*
+*.local

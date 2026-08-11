@@ -13,15 +13,23 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
+// minCreationOverhead is the headroom the pool ceiling must leave above the
+// raw code size: constructor bytecode, ABI-encoded arguments, RLP envelope
+// and signature. 8KB matches the historical MaxTransactionSize-MaxCodeSize gap.
+const minCreationOverhead = 8192
+
 func TestTxMaxSizeCoversMaxCode(t *testing.T) {
 	// A creation tx carries initcode (up to MaxCodeSize) plus constructor
 	// arguments, signature and RLP envelope. The pool admission ceiling must
-	// leave room for that overhead above the raw code size.
-	if txMaxSize < params.MaxCodeSize {
-		t.Fatalf("txMaxSize (%d) < params.MaxCodeSize (%d): max-size contract "+
-			"deployments will be rejected by the pool before EIP-3860. A rebase "+
-			"likely reverted the Metadium ceiling to the upstream default.",
-			txMaxSize, params.MaxCodeSize)
+	// leave room for that overhead above the raw code size -- zero headroom
+	// would pass a bare ">= MaxCodeSize" check while still rejecting every
+	// real max-size deployment.
+	if txMaxSize < params.MaxCodeSize+minCreationOverhead {
+		t.Fatalf("txMaxSize (%d) < params.MaxCodeSize+minCreationOverhead (%d): "+
+			"max-size contract deployments will be rejected by the pool before "+
+			"EIP-3860. A rebase likely reverted the Metadium ceiling to the "+
+			"upstream default.",
+			txMaxSize, params.MaxCodeSize+minCreationOverhead)
 	}
 	if txMaxSize != params.MaxTransactionSize {
 		t.Fatalf("txMaxSize (%d) != params.MaxTransactionSize (%d): the pool "+

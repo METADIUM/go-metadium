@@ -172,8 +172,13 @@ var (
 
 	// MetadiumTestnetChainConfig contains the chain parameters to run a node on the Metadium test network.
 	MetadiumTestnetChainConfig = &ChainConfig{
-		ChainID:             big.NewInt(12),
-		HomesteadBlock:      big.NewInt(0),
+		ChainID:        big.NewInt(12),
+		HomesteadBlock: big.NewInt(0),
+		// DAO fields intentionally differ from mainnet (0/true): re-arming
+		// DAOForkSupport would make VerifyDAOHeaderExtraData require the DAO
+		// extra-data marker over blocks 0-9, which testnet genesis does not
+		// carry -- that would break a from-genesis resync. nil/false is the
+		// correct form here; mainnet keeps 0/true for stored-config parity.
 		DAOForkBlock:        nil,
 		DAOForkSupport:      false,
 		EIP150Block:         big.NewInt(5623000),
@@ -181,17 +186,22 @@ var (
 		EIP158Block:         big.NewInt(0),
 		ByzantiumBlock:      big.NewInt(0),
 		ConstantinopleBlock: big.NewInt(5623000),
-		PetersburgBlock:     nil,
-		IstanbulBlock:       big.NewInt(5623000),
-		MuirGlacierBlock:    big.NewInt(5623000),
-		BerlinBlock:         big.NewInt(38067000),
-		LondonBlock:         big.NewInt(38067000),
-		AvocadoBlock:        big.NewInt(40_759_810),
-		PangyoBlock:         big.NewInt(44_671_396),
-		ApplepieBlock:       big.NewInt(44_671_396),
-		BokbunjaBlock:       big.NewInt(44_671_396),
-		CamelliaBlock:       big.NewInt(86_449_000), // 2026-05-20 12:00 KST testnet activation
-		Ethash:              new(EthashConfig),
+		// Must stay non-nil (0.10.x parity): nodes that last ran 0.10.x store
+		// petersburgBlock=5623000 in chaindata, and a nil here fails the
+		// stored-config compatibility check on startup, silently rewinding the
+		// chain to 5,622,999. IsPetersburg() is unaffected either way since
+		// Constantinople is also 5623000.
+		PetersburgBlock:  big.NewInt(5623000),
+		IstanbulBlock:    big.NewInt(5623000),
+		MuirGlacierBlock: big.NewInt(5623000),
+		BerlinBlock:      big.NewInt(38067000),
+		LondonBlock:      big.NewInt(38067000),
+		AvocadoBlock:     big.NewInt(40_759_810),
+		PangyoBlock:      big.NewInt(44_671_396),
+		ApplepieBlock:    big.NewInt(44_671_396),
+		BokbunjaBlock:    big.NewInt(44_671_396),
+		CamelliaBlock:    big.NewInt(86_449_000), // 2026-05-20 12:00 KST testnet activation
+		Ethash:           new(EthashConfig),
 	}
 
 	// AllEthashProtocolChanges contains every protocol change (EIPs) introduced
