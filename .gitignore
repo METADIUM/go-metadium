@@ -59,7 +59,7 @@ tests/spec-tests/
 /mixed-tx-e2e
 /tests/private-net-poa/geth
 
-# Claude / AI tools
+# local tool directories
 /.claude/
 /.gstack/
 /.mcp.json
