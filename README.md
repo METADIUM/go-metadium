@@ -92,6 +92,65 @@ cd tests/private-net-poa
 ./stop.sh     # Stop (data preserved)
 ```
 
+## Upgrading from 0.10.x
+
+v1.1.x rebases the tree onto go-ethereum v1.13.14 and changes several
+operational defaults. An in-place upgrade (`gmet.sh stop` → extract tarball →
+`gmet.sh start`) preserves the datadir, `geth/nodekey` and `.rc` exactly as
+before — but review the following **before** restarting on the new binary.
+
+### Upgrade checklist
+
+1. **Upgrade before the activation block** — mainnet 117,764,000. The block
+   height is authoritative; wall-clock estimates are approximate. Nodes on
+   older binaries follow a diverging chain from that block on.
+2. **Use the engine-matched tarball.** The DB engine is decided at build time.
+   Check the node's chaindata before extracting: `.sst` files → rocksdb
+   tarball, `.ldb` files → leveldb tarball. A mismatched binary cannot open
+   the database.
+3. **★ RPC/WS bind default changed** (`gmet.sh`): `--http.addr`/`--ws.addr`
+   now default to **`127.0.0.1`** (was `0.0.0.0`). A node that serves RPC/WS
+   to other machines — exchange wallet backends included — must add to its
+   per-node `.rc` **before** restarting:
+
+   ```bash
+   HTTP_ADDR=0.0.0.0    # or a specific interface address
+   WS_ADDR=0.0.0.0
+   ```
+
+   Without these, the upgraded node silently stops serving external clients
+   while looking healthy in every other way.
+4. **`gmet.sh stop` semantics changed.** It now exits non-zero when the node
+   did not actually stop (previously it could report success without stopping
+   anything), and gained `.rc` tunables: `STOP_TIMEOUT` (seconds to wait for
+   graceful shutdown before escalating), `STOP_FORCE` (`0` = never SIGKILL,
+   exit non-zero instead), `LOCK_TIMEOUT`. Automation that wraps `stop` must
+   check the exit code rather than assume success. Never `kill -9` a node —
+   RocksDB especially.
+5. **Testnet operators: skip 1.1.0, go straight to 1.1.1.** The 1.1.0 testnet
+   build carries a chain-config regression that rewinds a 0.10.x node to
+   block 5,622,999 (~80M-block resync) on first start. 1.1.1 is safe from
+   both 0.10.x and 1.1.0 starting states. Run testnet nodes with
+   `--metadium-testnet` (or `TESTNET=1` in `.rc` when using `gmet.sh`).
+6. **RPC fee cap**: `gmet.sh` now passes `--rpc.txfeecap 0`, preserving the
+   0.10.x behaviour of no cap on `eth_sendTransaction` fees. Operators who
+   launch `gmet` directly without this flag get upstream's default 1-ether
+   cap — set it explicitly if your tooling sends high-fee transactions.
+7. **Direct-CLI launchers**: the flag surface is upstream go-ethereum
+   v1.13.14. If you maintain a custom launch script or systemd unit instead
+   of `gmet.sh`, dry-run it against the new binary (`gmet --help`); valid
+   `--syncmode` values are `full`, `snap` and `light`. systemd unit templates
+   are provided at `metadium/scripts/gmet.service` (plus a sealer override).
+8. **`metadium/metclient` library users**: `SendValue` and `Deploy` signatures
+   changed (`amount`/`gas` are no longer platform-sized ints). External tools
+   linking the package fail loudly at compile time; update the call sites.
+
+Transaction-behaviour note: the pool again admits transactions up to 256KB
+(0.10.x parity; the intermediate 1.1.0 line rejected above 128KB). Until the
+whole network is upgraded, nodes still on old binaries do not propagate
+128–256KB transactions, so propagation of large contract deployments is
+path-dependent during a rolling upgrade.
+
 ## Testing
 
 ```bash
