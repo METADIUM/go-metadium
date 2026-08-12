@@ -45,7 +45,7 @@ ifeq ($(USE_ROCKSDB), NO)
 	$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/gmet
 else
 	CGO_CFLAGS=-I$(ROCKSDB_DIR)/include \
-		CGO_LDFLAGS="-L$(ROCKSDB_DIR) -lrocksdb -lm -lstdc++ $(shell awk '/PLATFORM_LDFLAGS/ {sub("PLATFORM_LDFLAGS=", ""); print} /JEMALLOC=1/ {print "-ljemalloc"}' < $(ROCKSDB_DIR)/make_config.mk)" \
+		CGO_LDFLAGS="-L$(ROCKSDB_DIR) -lrocksdb -lm -l:libstdc++.a -static-libgcc $(shell awk '/PLATFORM_LDFLAGS/ {sub("PLATFORM_LDFLAGS=", ""); print} /JEMALLOC=1/ {print "-ljemalloc"}' < $(ROCKSDB_DIR)/make_config.mk)" \
 		$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/gmet
 endif
 	@echo "Done building."
@@ -64,7 +64,7 @@ ifeq ($(USE_ROCKSDB), NO)
 	$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/dbbench
 else
 	CGO_CFLAGS=-I$(ROCKSDB_DIR)/include \
-		CGO_LDFLAGS="-L$(ROCKSDB_DIR) -lrocksdb -lm -lstdc++ $(shell awk '/PLATFORM_LDFLAGS/ {sub("PLATFORM_LDFLAGS=", ""); print} /JEMALLOC=1/ {print "-ljemalloc"}' < $(ROCKSDB_DIR)/make_config.mk)" \
+		CGO_LDFLAGS="-L$(ROCKSDB_DIR) -lrocksdb -lm -l:libstdc++.a -static-libgcc $(shell awk '/PLATFORM_LDFLAGS/ {sub("PLATFORM_LDFLAGS=", ""); print} /JEMALLOC=1/ {print "-ljemalloc"}' < $(ROCKSDB_DIR)/make_config.mk)" \
 		$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/dbbench
 endif
 

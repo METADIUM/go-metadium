@@ -54,6 +54,34 @@ make gmet                    # gmet binary (RocksDB; USE_ROCKSDB=NO for LevelDB)
 make metadium                # full deploy bundle: build/metadium.tar.gz (bin/ + conf/)
 ```
 
+### Release artifacts
+
+Artifacts that are published or deployed to nodes **must** be built through the
+container target, never on the build host directly:
+
+```bash
+make gmet-linux                     # RocksDB
+make gmet-linux USE_ROCKSDB=NO      # LevelDB
+```
+
+`make gmet-linux` builds `Dockerfile.metadium` and compiles inside it. That
+image pins the oldest glibc the artifacts have to run against (Ubuntu 20.04);
+building on the host instead bakes in the host's glibc, and the result will not
+start on any older distribution:
+
+```
+gmet: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found
+```
+
+Check an artifact before publishing it — neither command should print a version
+newer than the oldest distribution you support, and the second should print
+nothing at all:
+
+```bash
+objdump -T build/bin/gmet | grep -oE 'GLIBC_[0-9.]+'                 | sort -Vu | tail -1
+objdump -T build/bin/gmet | grep -oE 'GLIBCXX_[0-9.]+|CXXABI_[0-9.]+' | sort -Vu | tail -1
+```
+
 Direct `go build` works for development (`./cmd/gmet` and `./cmd/geth` are
 the same entrypoint; the Makefile uses `./cmd/gmet`):
 
