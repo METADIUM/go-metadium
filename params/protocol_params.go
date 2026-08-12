@@ -265,5 +265,5 @@ var (
 	BlockMinBuildTime    int64  = 300     // Minimum block generation time in ms
 	BlockMinBuildTxs     int64  = 2500    // Minimum txs in a block with pending txs
 	BlockTrailTime       int64  = 300     // Time to leave for block data transfer transfer in ms
-	BlobRetentionBlocks  uint64 = 1572480 // Number of blocks to keep blob sidecars (~18.2 days at 1s blocks; 0 = forever)
+	BlobRetentionBlocks  uint64 = 1572480 // Number of blocks to keep blob sidecars (~36.4 days at Metadium's 2s block interval; 0 = forever)
 )
