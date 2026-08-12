@@ -860,7 +860,7 @@ func (p *BlobPool) Reset(oldHead, newHead *types.Header) {
 	}
 	// Flush out any blobs from limbo that are older than the latest finality
 	if p.chain.Config().IsCancun(p.head.Number, p.head.Time) || p.chain.Config().IsCamellia(p.head.Number) {
-		p.limbo.finalize(p.chain.CurrentFinalBlock())
+		p.limbo.finalize(limboFinal(p.chain.CurrentFinalBlock(), p.head))
 	}
 	// Reset the price heap for the new set of basefee/blobfee pairs
 	var (
