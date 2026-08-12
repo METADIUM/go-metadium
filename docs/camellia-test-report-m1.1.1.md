@@ -1,7 +1,7 @@
 # Camellia Fork Test Report — m1.1.1 Release Verification
 
 **Date:** 2026-08-11 ~ 2026-08-12
-**Binary under test:** `a91d1b323` (master tip, m1.1.1) and `21c1997e6` (PR #77 candidate = `a91d1b323` + blobpool PoA finality fix)
+**Binary under test:** `a91d1b323` (master tip, m1.1.1), `21c1997e6` (PR #77 candidate), and `a8d626726` (final release tree = dev tip after the #77 merge; see §5)
 **Author:** Jeffrey Song
 
 This report re-validates every functional axis of the original Camellia test
@@ -17,7 +17,7 @@ divergence, and the blobpool PoA finality fix (#76/#77).
 |---|---|
 | 3-node PoA private net (Docker, chainId 1337, Camellia @ block 100, genesis gasLimit pinned to the production 105,000,000) | All functional suites |
 | 2-node mixed-version net (release binary + production `0.10.2-stable/ce4a95e93`) | Fork-boundary divergence |
-| Production followers (46/47/mykeepin, 5 services) + official testnet 5 nodes | Live deployment, soak, lockstep |
+| Production followers (46/47/183, 5 services) + official testnet 5 nodes | Live deployment, soak, lockstep |
 | Fresh full syncs: testnet (embedded genesis) and mainnet (embedded genesis) | #68 embedded-genesis validation, in progress at time of writing |
 
 ## 2. Regression Suites (all on the #77 candidate binary)
@@ -89,7 +89,7 @@ unaffected, and 64-plus blocks of post-eviction silence.
 
 | Fleet | Result |
 |---|---|
-| Followers: 46 (LevelDB), 47 (RocksDB), mykeepin (archive) — 5 services | Graceful swaps 0–7s, fork banners correct, lockstep with official networks, zero errors over soak |
+| Followers: 46 (LevelDB), 47 (RocksDB), 183 (archive) — 5 services | Graceful swaps 0–7s, fork banners correct, lockstep with official networks, zero errors over soak |
 | Official testnet: bp1/bp2/bp3/api01/exp01 | Rolling deploy, one node at a time; etcd leader handoff observed (`moving leader to meta1`); sealer rotation intact; block production uninterrupted |
 
 Fresh full syncs from embedded genesis (the #68 path) reproduce the official
@@ -97,10 +97,56 @@ genesis hashes on both networks (testnet `0x10c1b0a5…`, mainnet
 `0xf1b2a543…`) and are progressing past the historical trouble spots at the
 time of writing.
 
-## 5. Verdict
+The fleet moves to the final tree (§5) with the m1.1.1 asset rebuild that
+follows the dev→master promotion.
+
+## 5. Final-tree re-verification (`a8d626726`)
+
+After #77 merged, the entire private-net verification was repeated **from a
+full reset** on a binary built at `a8d626726` — the dev tip whose tree is
+bit-identical to the dev→master promotion (#80). Every axis reproduced the
+candidate-binary results:
+
+| Axis | Result |
+|---|---|
+| `camellia-test.sh` | PASS 14 / FAIL 0 / SKIP 3 (identical to §2) |
+| `camellia-contract-e2e`, `blob-tx-e2e`, `mixed-tx-e2e` | ALL PASS |
+| `bigtx-e2e` | 4/4 — 253,952-byte code deposit, gasUsed 52,045,896 under the production 105,000,000 limit |
+| `rpc-test-full.sh` | Final: PASS — no FAILs |
+| `feepayer-evict-e2e` | 3/3 PASS |
+| Blobpool finality (#77 acceptance) | `Nil finalized` **0** and eviction failures **0** on all three nodes, measured over 70-plus-block windows both **before and after** governance activation |
+| Governance Phase 2 | Registry discovered, `metadiumInfo` self/nodes populated, etcd up, all three sealers rotating (24-block sample: 18/3/3) |
+| TRS live cycle | subscribe → `addToTRSList` → admission rejected with `included in the TRSList` on the subscribed node; the same signed tx accepted by an unsubscribed node (opt-in confirmed); `removeFromTRSList` → admission accepted and mined |
+| Mixed-version divergence | Re-run with the final binary: identical halt at block 99 + peer drop; the release node continued past 345 |
+| Protocol negotiation | Observed via `admin.peers` caps: 0.10.2 advertises `meta/65, meta/66`; the release binary advertises `meta/66, meta/68, meta/69`; the session settles on the shared `meta/66` |
+
+Note that the governance-less phase of this harness is itself the #77 target
+case: chain-level finality never resolves there (permanent fallback window),
+so the zero-error result directly exercises the surrogate path, while the
+fleet measurement recorded on #77 covers the steady-state path
+(`finalized`/`safe` returning real blocks).
+
+Two harness constraints were root-caused during this run and are recorded
+for future re-runs (they are measurement artifacts, not binary defects):
+
+1. **Suite ordering.** Registry discovery scans the genesis coinbase's
+   CREATE addresses at nonces 0–9 (§3.3). The regression suites spend that
+   account's nonces, so on any chain that will host governance, `deploy.sh`
+   must run before the suites; conversely the two measurements below must
+   run before governance activates.
+2. **Single-sealer assumptions.** The `camellia-test.sh` Warm-COINBASE probe
+   calls with a fixed `from` that equals another sealer's coinbase, so under
+   rotation EIP-2929 pre-warming can make blocks 99 and 100 measure equal;
+   and the `mixed-tx-e2e` fee-payer check assumes the fee payer is not also
+   a block-reward recipient. Both self-invalidate under active rotation and
+   pass in the pre-governance phase, which is how §2 and this section ran
+   them.
+
+## 6. Verdict
 
 Every axis of the April report passes on the release binary, and the new
 axes (256KB ceiling, TRS enforcement, fee-payer eviction, governance
 rotation, mixed-version divergence, blobpool finality) pass as well. The one
-code change this round of testing produced is PR #77; everything else
-verified clean.
+code change this round of testing produced is PR #77 — and §5 re-verifies
+the complete matrix on the exact tree being promoted to master. Everything
+else verified clean.
