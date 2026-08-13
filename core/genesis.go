@@ -344,6 +344,14 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedbpkg.Database
 	// stored-vs-compiled compatibility check below still guards the switch;
 	// with the testnet DAO/Petersburg fields restored to 0.10.x parity there
 	// is no first-check mismatch left to mask later forks' checks.
+	//
+	// The consequence, recorded so it is discoverable rather than surprising
+	// (issue #72): a datadir initialized from a *modified* canonical genesis
+	// file — same genesis block, deliberately divergent stored config — loses
+	// those overrides here, because the compiled config wins for canonical
+	// hashes. Passing the genesis file explicitly is the escape. No internal
+	// rig depends on the old behaviour; this was verified when the exclusion
+	// was introduced.
 	if genesis == nil && stored != params.MainnetGenesisHash && stored != params.MetadiumMainnetGenesisHash && stored != params.MetadiumTestnetGenesisHash {
 		newcfg = storedcfg
 		applyOverrides(newcfg)

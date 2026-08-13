@@ -11,6 +11,7 @@ package params
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 )
 
@@ -107,5 +108,81 @@ func TestMetadiumChainConfigsPinned(t *testing.T) {
 				"checkCompatible returns on the first failing check)",
 				network.name, c.DAOForkSupport, network.daoFork)
 		}
+	}
+}
+
+// TestMetadiumConfigForkOrder records what the built-in configs do when measured
+// against upstream's fork ordering rules — and they do not satisfy them. On both
+// networks EIP-150 is scheduled long after EIP-155 and EIP-158, which upstream
+// treats as an ordering violation.
+//
+// That is deployed history: mainnet has been running since block 0 with this
+// schedule, and it cannot be reordered. It is also the concrete reason
+// CheckConfigForkOrder must keep enforcing nothing at runtime — turning it on
+// would refuse to start on our own mainnet (issue #72).
+//
+// Pinning the exact deviation is what makes the check useful here: a schedule
+// that grows a second, unintended violation changes this string, and so does
+// fixing this one.
+func TestMetadiumConfigForkOrder(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		config *ChainConfig
+		want   string
+	}{
+		{"mainnet", MetadiumMainnetChainConfig, "eip150Block enabled at block 11441000, but eip155Block enabled at block 0"},
+		{"testnet", MetadiumTestnetChainConfig, "eip150Block enabled at block 5623000, but eip155Block enabled at block 0"},
+	} {
+		err := tt.config.checkForkOrder()
+		if err == nil {
+			t.Errorf("%s: the known ordering deviation is gone; if that was intended, update this test", tt.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: fork ordering changed\n have: %v\n want it to contain: %s", tt.name, err, tt.want)
+		}
+		// The runtime entry point stays inert regardless.
+		if err := tt.config.CheckConfigForkOrder(); err != nil {
+			t.Errorf("%s: CheckConfigForkOrder started enforcing, which would refuse this config at startup: %v", tt.name, err)
+		}
+	}
+}
+
+// TestForkOrderCatchesAGap guards the extracted check itself: a test that only
+// ever sees the same input cannot tell a working check from one that returns
+// nil. The gap it catches here — Istanbul scheduled with Petersburg unset — is
+// the shape that survived two release lines in the testnet config.
+func TestForkOrderCatchesAGap(t *testing.T) {
+	ordered := &ChainConfig{
+		ChainID:             big.NewInt(1),
+		HomesteadBlock:      big.NewInt(0),
+		EIP150Block:         big.NewInt(0),
+		EIP155Block:         big.NewInt(0),
+		EIP158Block:         big.NewInt(0),
+		ByzantiumBlock:      big.NewInt(0),
+		ConstantinopleBlock: big.NewInt(0),
+		PetersburgBlock:     big.NewInt(0),
+		IstanbulBlock:       big.NewInt(0),
+	}
+	if err := ordered.checkForkOrder(); err != nil {
+		t.Fatalf("a well-ordered config was rejected: %v", err)
+	}
+
+	gapped := *ordered
+	gapped.PetersburgBlock = nil
+	err := gapped.checkForkOrder()
+	if err == nil {
+		t.Fatal("a config with Istanbul set and Petersburg unset was accepted")
+	}
+	if !strings.Contains(err.Error(), "petersburgBlock") {
+		t.Fatalf("the error does not name the missing fork: %v", err)
+	}
+
+	// And one scheduled out of sequence.
+	backwards := *ordered
+	backwards.IstanbulBlock = big.NewInt(0)
+	backwards.PetersburgBlock = big.NewInt(100)
+	if err := backwards.checkForkOrder(); err == nil {
+		t.Fatal("a fork scheduled before its predecessor was accepted")
 	}
 }
