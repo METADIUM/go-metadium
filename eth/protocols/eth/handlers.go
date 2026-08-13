@@ -314,9 +314,18 @@ func handleNewBlock(backend Backend, msg Decoder, peer *Peer) error {
 }
 
 func handleBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {
-	// A batch of headers arrived to one of our previous requests
-	res := new(BlockHeadersPacket)
-	if err := msg.Decode(res); err != nil {
+	// A batch of headers arrived to one of our previous requests. Confirm it was
+	// one of ours before decoding the payload — see response_gate.go.
+	env := new(responseEnvelope)
+	if err := msg.Decode(env); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	if !peer.solicited(env.RequestId) {
+		peer.dropUnsolicited(BlockHeadersMsg, env.RequestId)
+		return nil
+	}
+	res := &BlockHeadersPacket{RequestId: env.RequestId}
+	if err := rlp.DecodeBytes(env.Payload, &res.BlockHeadersRequest); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
 	metadata := func() interface{} {
@@ -334,9 +343,18 @@ func handleBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {
 }
 
 func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
-	// A batch of block bodies arrived to one of our previous requests
-	res := new(BlockBodiesPacket)
-	if err := msg.Decode(res); err != nil {
+	// A batch of block bodies arrived to one of our previous requests. Confirm it
+	// was one of ours before decoding the payload — see response_gate.go.
+	env := new(responseEnvelope)
+	if err := msg.Decode(env); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	if !peer.solicited(env.RequestId) {
+		peer.dropUnsolicited(BlockBodiesMsg, env.RequestId)
+		return nil
+	}
+	res := &BlockBodiesPacket{RequestId: env.RequestId}
+	if err := rlp.DecodeBytes(env.Payload, &res.BlockBodiesResponse); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
 	metadata := func() interface{} {
@@ -363,9 +381,18 @@ func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 }
 
 func handleReceipts(backend Backend, msg Decoder, peer *Peer) error {
-	// A batch of receipts arrived to one of our previous requests
-	res := new(ReceiptsPacket)
-	if err := msg.Decode(res); err != nil {
+	// A batch of receipts arrived to one of our previous requests. Confirm it was
+	// one of ours before decoding the payload — see response_gate.go.
+	env := new(responseEnvelope)
+	if err := msg.Decode(env); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	if !peer.solicited(env.RequestId) {
+		peer.dropUnsolicited(ReceiptsMsg, env.RequestId)
+		return nil
+	}
+	res := &ReceiptsPacket{RequestId: env.RequestId}
+	if err := rlp.DecodeBytes(env.Payload, &res.ReceiptsResponse); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
 	metadata := func() interface{} {
@@ -466,9 +493,23 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	if !backend.AcceptTxs() {
 		return nil
 	}
+	// Confirm the reply belongs to a retrieval we asked this peer for before
+	// decoding the transactions — see response_gate.go. Pooled transactions do
+	// not go through the dispatcher, so RequestTxs registers the id itself and
+	// this is where it is retired.
+	env := new(responseEnvelope)
+	if err := msg.Decode(env); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	if !peer.solicited(env.RequestId) {
+		peer.dropUnsolicited(PooledTransactionsMsg, env.RequestId)
+		return nil
+	}
+	peer.untrackPending(env.RequestId)
+
 	// Transactions can be processed, parse all of them and deliver to the pool
-	var txs PooledTransactionsPacket
-	if err := msg.Decode(&txs); err != nil {
+	txs := PooledTransactionsPacket{RequestId: env.RequestId}
+	if err := rlp.DecodeBytes(env.Payload, &txs.PooledTransactionsResponse); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
 	for i, tx := range txs.PooledTransactionsResponse {

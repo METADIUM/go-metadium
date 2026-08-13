@@ -71,6 +71,12 @@ func (p *Peer) SendNodeData(data [][]byte) error {
 func (p *Peer) RequestBlobSidecars(id uint64, hashes []common.Hash) error {
 	p.Log().Debug("Fetching blob sidecars", "count", len(hashes))
 	requestTracker.Track(p.id, p.version, GetBlobSidecarsMsg, BlobSidecarsMsg, id)
+
+	// Blob sidecars are the largest payload this protocol carries, and this
+	// request also bypasses the dispatcher, so register the id for the response
+	// gate here; handleBlobSidecars69 retires it. See response_gate.go.
+	p.trackPending(id)
+
 	return p2p.Send(p.rw, GetBlobSidecarsMsg, &GetBlobSidecarsPacket{
 		RequestId: id,
 		Hashes:    hashes,

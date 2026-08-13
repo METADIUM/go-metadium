@@ -196,11 +196,19 @@ func (p *Peer) dispatcher() {
 			req.Sent = time.Now()
 
 			requestTracker.Track(p.id, p.version, req.code, req.want, req.id)
+
+			// Make the id visible to the response gate before the request goes
+			// out, so a peer that answers instantly cannot be gated out by an
+			// index that has not caught up. See response_gate.go.
+			p.trackPending(req.id)
+
 			err := p2p.Send(p.rw, req.code, req.data)
 			reqOp.fail <- err
 
 			if err == nil {
 				pending[req.id] = req
+			} else {
+				p.untrackPending(req.id)
 			}
 
 		case cancelOp := <-p.reqCancel:
@@ -213,6 +221,7 @@ func (p *Peer) dispatcher() {
 			}
 			// Stop tracking the request
 			delete(pending, cancelOp.id)
+			p.untrackPending(cancelOp.id)
 			cancelOp.fail <- nil
 
 		case resOp := <-p.resDispatch:
@@ -245,6 +254,7 @@ func (p *Peer) dispatcher() {
 
 				// Stop tracking the request, the response dispatcher will deliver
 				delete(pending, res.id)
+				p.untrackPending(res.id)
 			}
 
 		case <-p.term:
