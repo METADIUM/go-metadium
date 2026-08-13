@@ -7,7 +7,7 @@ Metadium blockchain node implementation (go-ethereum v1.13.14 fork). Camellia fo
 - Backend: Go 1.21+
 - DB: LevelDB (default) / RocksDB (`-tags rocksdb`)
 - Consensus: Metadium PoA (ethash placeholder, custom sealing)
-- Version: 1.1.1-stable
+- Version: 1.1.2-stable
 
 ## Directory Structure
 - `cmd/geth/` -- main binary entrypoint
@@ -24,6 +24,10 @@ Metadium blockchain node implementation (go-ethereum v1.13.14 fork). Camellia fo
 - `docs/` -- Camellia fork documentation and test reports
 
 ## Build
+Development only -- these link against the host and produce **non-portable**
+binaries. Anything published or deployed goes through `make gmet-linux`, which
+builds in the release container and runs `make release-check`. See README
+"Release artifacts".
 - LevelDB: `CGO_ENABLED=0 go build -o gmet ./cmd/geth`
 - RocksDB: `CGO_ENABLED=1 CGO_LDFLAGS="-lrocksdb -lstdc++ -lm -lz -lbz2 -lsnappy -llz4 -lzstd" go build -tags rocksdb -o gmet ./cmd/geth`
 

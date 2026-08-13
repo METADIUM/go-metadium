@@ -1,15 +1,29 @@
 # builder image
+#
+# The base image fixes the oldest glibc/libstdc++ the release binaries can run
+# against: a binary built here runs on that release and every newer one, but not
+# the other way round. Ubuntu 20.04 (focal) is the oldest distribution still in
+# the deployment fleet, so release artifacts must be produced from this image
+# rather than from whatever the build host happens to run.
+#
+# focal ships gcc 9 and carries gcc 10 in its archive; neither can build the
+# vendored RocksDB, which uses `using enum` (C++20, implemented from GCC 11).
+# The toolchain PPA provides gcc 11 while keeping focal's glibc 2.31.
 
-FROM ubuntu:noble as base
+FROM ubuntu:focal as base
 
 SHELL ["/bin/bash", "-c"]
 
 RUN apt-get update -q -y && apt-get upgrade -q -y
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y tzdata
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential ca-certificates curl libjemalloc-dev liblz4-dev libsnappy-dev libzstd-dev libudev-dev git
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y tzdata software-properties-common
+RUN add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update -q -y
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential gcc-11 g++-11 ca-certificates curl libjemalloc-dev liblz4-dev libsnappy-dev libzstd-dev libudev-dev git
+
+ENV CC=gcc-11
+ENV CXX=g++-11
 
 # golang
-ARG GO_VERSION=1.22.4
+ARG GO_VERSION=1.22.5
 
 RUN curl -sL -o /tmp/go.tar.gz https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz && \
     rm -rf /usr/local/go && \

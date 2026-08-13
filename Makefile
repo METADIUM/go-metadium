@@ -3,7 +3,7 @@
 # don't need to bother with make.
 
 .PHONY: geth evm all test test-short lint fmt clean devtools help rocksdb
-.PHONY: gmet gmet-linux metadium logrot dbbench
+.PHONY: gmet gmet-linux metadium logrot dbbench release-check
 
 GOBIN = ./build/bin
 GO ?= latest
@@ -24,9 +24,40 @@ ifneq ($(shell uname), Linux)
   USE_ROCKSDB = NO
 endif
 
+# STATIC_STDCPP
+# - "YES": link libstdc++ from its archive and libgcc statically, so the binary
+#   carries no GLIBCXX/CXXABI requirement and does not inherit the build host's
+#   floor. Release artifacts need this; gmet-linux sets it. Requires the static
+#   libstdc++ (libstdc++-N-dev on Debian/Ubuntu, libstdc++-static on RHEL).
+# - undefined | anything else: link the shared libstdc++, which is what a plain
+#   development box has. -static-libgcc is paired with the static libstdc++ so
+#   the unwinder matches; do not drop one without the other.
+ifeq ($(STATIC_STDCPP), YES)
+STDCPP_LDFLAGS = -l:libstdc++.a -static-libgcc
+else
+STDCPP_LDFLAGS = -lstdc++
+endif
+
+# gmet-linux always compiles inside a Linux container, so the host's uname must
+# not pick the engine for it. Default to RocksDB there and honour USE_ROCKSDB
+# only when it was given explicitly on the command line.
+ifeq ($(origin USE_ROCKSDB), command line)
+GMET_LINUX_USE_ROCKSDB = $(USE_ROCKSDB)
+else
+GMET_LINUX_USE_ROCKSDB = YES
+endif
+
+# Highest glibc symbol version release artifacts may reference. Set by the
+# oldest distribution in the deployment fleet (Ubuntu 20.04 = 2.31).
+MAX_GLIBC ?= 2.31
+
 ifneq ($(USE_ROCKSDB), NO)
 ROCKSDB_DIR=$(shell pwd)/rocksdb
 ROCKSDB_TAG=-tags rocksdb
+# Recursively expanded on purpose: make_config.mk only exists once the rocksdb
+# target has run.
+ROCKSDB_CGO_CFLAGS = -I$(ROCKSDB_DIR)/include
+ROCKSDB_CGO_LDFLAGS = -L$(ROCKSDB_DIR) -lrocksdb -lm $(STDCPP_LDFLAGS) $(shell awk '/PLATFORM_LDFLAGS/ {sub("PLATFORM_LDFLAGS=", ""); print} /JEMALLOC=1/ {print "-ljemalloc"}' < $(ROCKSDB_DIR)/make_config.mk)
 endif
 
 metadium: gmet logrot
@@ -44,8 +75,8 @@ gmet: rocksdb metadium/governance_abi.go metadium/governance_legacy_abi.go
 ifeq ($(USE_ROCKSDB), NO)
 	$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/gmet
 else
-	CGO_CFLAGS=-I$(ROCKSDB_DIR)/include \
-		CGO_LDFLAGS="-L$(ROCKSDB_DIR) -lrocksdb -lm -lstdc++ $(shell awk '/PLATFORM_LDFLAGS/ {sub("PLATFORM_LDFLAGS=", ""); print} /JEMALLOC=1/ {print "-ljemalloc"}' < $(ROCKSDB_DIR)/make_config.mk)" \
+	CGO_CFLAGS="$(ROCKSDB_CGO_CFLAGS)" \
+		CGO_LDFLAGS="$(ROCKSDB_CGO_LDFLAGS)" \
 		$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/gmet
 endif
 	@echo "Done building."
@@ -63,8 +94,8 @@ dbbench: rocksdb
 ifeq ($(USE_ROCKSDB), NO)
 	$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/dbbench
 else
-	CGO_CFLAGS=-I$(ROCKSDB_DIR)/include \
-		CGO_LDFLAGS="-L$(ROCKSDB_DIR) -lrocksdb -lm -lstdc++ $(shell awk '/PLATFORM_LDFLAGS/ {sub("PLATFORM_LDFLAGS=", ""); print} /JEMALLOC=1/ {print "-ljemalloc"}' < $(ROCKSDB_DIR)/make_config.mk)" \
+	CGO_CFLAGS="$(ROCKSDB_CGO_CFLAGS)" \
+		CGO_LDFLAGS="$(ROCKSDB_CGO_LDFLAGS)" \
 		$(GORUN) build/ci.go install $(ROCKSDB_TAG) ./cmd/dbbench
 endif
 
@@ -116,18 +147,46 @@ devtools:
 	@type "protoc" 2> /dev/null || echo 'Please install protoc'
 
 gmet-linux:
-	@docker --version > /dev/null 2>&1;				\
-	if [ ! $$? = 0 ]; then						\
-		echo "Docker not found.";				\
-	else								\
-		docker build -t meta/builder:local			\
-			-f Dockerfile.metadium . &&			\
-		docker run -e HOME=/tmp --rm -v $(shell pwd):/data	\
-			-u $(shell id -u):$(shell id -g)                \
-			-w /data meta/builder:local			\
-			"git config --global --add safe.directory /data;\
-			 make USE_ROCKSDB=$(USE_ROCKSDB)";		\
+	@if ! docker --version > /dev/null 2>&1; then			\
+		echo "Docker not found. gmet-linux is the only supported"	\
+		     "way to build release artifacts; see README." >&2;	\
+		exit 1;							\
 	fi
+	docker build -t meta/builder:local -f Dockerfile.metadium .
+	docker run -e HOME=/tmp --rm -v $(shell pwd):/data		\
+		-u $(shell id -u):$(shell id -g)			\
+		-w /data meta/builder:local				\
+		"git config --global --add safe.directory /data;	\
+		 make USE_ROCKSDB=$(GMET_LINUX_USE_ROCKSDB) STATIC_STDCPP=YES"
+	@$(MAKE) --no-print-directory release-check
+
+# Refuse artifacts that cannot run on the oldest distribution in the fleet.
+# Checks every ELF in $(GOBIN), not just gmet: the bundle also ships logrot,
+# which is built with cgo and carries a glibc floor of its own.
+release-check:
+	@command -v objdump > /dev/null 2>&1 || { echo "release-check: objdump not found" >&2; exit 1; }
+	@fail=0;							\
+	for f in $(GOBIN)/*; do						\
+		[ -f "$$f" ] || continue;				\
+		head -c 4 "$$f" | grep -q 'ELF' || continue;		\
+		glibc=`objdump -T "$$f" 2>/dev/null | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -V | tail -1`; \
+		gxx=`objdump -T "$$f" 2>/dev/null | grep -oE 'GLIBCXX_[0-9.]+' | sort -V | tail -1`; \
+		cxxabi=`objdump -T "$$f" 2>/dev/null | grep -oE 'CXXABI_[0-9.]+' | sort -V | tail -1`; \
+		echo "  $$f: GLIBC=$${glibc:-none} GLIBCXX=$${gxx:-none} CXXABI=$${cxxabi:-none}"; \
+		if [ -n "$$glibc" ] && [ "`printf '%s\n%s\n' "$$glibc" "$(MAX_GLIBC)" | sort -V | tail -1`" != "$(MAX_GLIBC)" ]; then \
+			echo "    FAIL: needs GLIBC_$$glibc > $(MAX_GLIBC)" >&2; fail=1; \
+		fi;							\
+		if [ -n "$$gxx" ] || [ -n "$$cxxabi" ]; then		\
+			echo "    FAIL: links libstdc++ dynamically (build with STATIC_STDCPP=YES)" >&2; fail=1; \
+		fi;							\
+		objdump -p "$$f" 2>/dev/null | awk '/NEEDED/ {printf "    NEEDED %s\n", $$2}'; \
+	done;								\
+	if [ $$fail != 0 ]; then					\
+		echo "release-check: FAILED — do not publish these artifacts" >&2; \
+		exit 1;							\
+	fi;								\
+	echo "release-check: OK (ceiling GLIBC_$(MAX_GLIBC))"
+	@echo "  NEEDED entries above must be present on target hosts (snappy, lz4, zstd, jemalloc)."
 
 ifneq ($(USE_ROCKSDB), YES)
 rocksdb:
