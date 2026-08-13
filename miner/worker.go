@@ -936,6 +936,17 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 			log.Trace("Transaction count limit reached", "have", env.tcount, "max", params.MaxTxsPerBlock)
 			break
 		}
+		// Metadium: stop filling once this block's slot has elapsed, as long as
+		// it already carries enough transactions to be worth sealing. Without
+		// this the deadline is only consulted between whole Pending() batches
+		// (commitTransactionsEx), so a burst can push a single batch past the
+		// slot -- and --miner.blockminbuildtxs, which exists to tune exactly
+		// this, has no effect at all. Restores old master's per-tx guard,
+		// which the v1.13.14 rebase dropped (issue #65).
+		if env.till != nil && int64(env.tcount) >= params.BlockMinBuildTxs && time.Now().After(*env.till) {
+			log.Trace("Block build deadline passed", "txs", env.tcount, "min", params.BlockMinBuildTxs)
+			break
+		}
 		// If we don't have enough blob space for any further blob transactions,
 		// skip that list altogether
 		if !blobTxs.Empty() && env.blobs*params.BlobTxBlobGasPerBlob >= params.MaxBlobGasPerBlock {
@@ -1676,6 +1687,14 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 	}
 
 	if !metaminer.IsPoW() { // Metadium
+		// This path never swaps the environment into w.current, so nothing
+		// downstream stops the prefetcher that makeEnv started -- and every
+		// round that commits a transaction leaked its subfetcher goroutines.
+		// commitEx works on a copy for assembly and updateSnapshot copies the
+		// state, so discarding here releases only this round's prefetcher
+		// (issue #65).
+		defer work.discard()
+
 		if !w.commitTransactionsEx(work, interrupt, start) {
 			w.commitEx(work, w.fullTaskHook, true, start)
 		}
