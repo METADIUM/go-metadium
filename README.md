@@ -200,7 +200,7 @@ before — but review the following **before** restarting on the new binary.
    a graceful shutdown when `STOP_FORCE=0` is set. Automation must check the
    exit code *and* set `STOP_FORCE=0`, sizing its own timeout above
    `STOP_TIMEOUT`. Never `kill -9` a node — RocksDB especially.
-7. **Testnet operators: skip 1.1.0, go straight to the m1.1.1 release
+7. **Testnet operators: skip 1.1.0, go straight to the m1.1.2 release
    build.** The 1.1.0 testnet build carries a chain-config regression that
    rewinds a 0.10.x node to block 5,622,999 (~80M-block resync) on first
    start. The fix landed *after* the version string moved to 1.1.1, so
