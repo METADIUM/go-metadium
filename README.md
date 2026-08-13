@@ -71,7 +71,7 @@ the host's `uname` must not pick the engine for a Linux container. `USE_ROCKSDB`
 is honoured when you set it explicitly, either on the command line or in the
 environment.
 
-`make gmet-linux` builds `Dockerfile.metadium` and compiles inside it. Two
+`make gmet-linux` builds `Dockerfile.metadium` and compiles inside it. Three
 properties come from that image and nothing else guarantees them:
 
 - its base pins the oldest glibc the artifacts have to run against (Ubuntu
@@ -81,6 +81,10 @@ properties come from that image and nothing else guarantees them:
 - it sets `STATIC_STDCPP=YES`, which links libstdc++ from its archive so the
   binary carries no `GLIBCXX`/`CXXABI` requirement either. Host builds keep the
   shared libstdc++ so a plain development box still links.
+- its toolchain is pinned: the base image by digest, gcc/g++ by package version,
+  and the Go tarball by checksum. The Go version itself lives in `.go-version`,
+  which CI reads too, so release binaries are built with the toolchain CI ran.
+  `make gmet-linux` refuses to build if that file and the Dockerfile disagree.
 
 `gmet-linux` runs `make release-check` on the result and fails the build if an
 artifact would not run on the fleet. Run it standalone against anything you are

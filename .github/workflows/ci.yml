@@ -5,8 +5,9 @@ name: ci
 # per file and why drift had already appeared: one build job was still named
 # "Go-MetadiumX", and go.yml pins a different Go patch release (issue #65).
 #
-# Callers differ in exactly three things, which are the inputs below: which ref
-# to check out, which make target runs the tests, and the Go version.
+# Callers differ in exactly two things, which are the inputs below: which ref to
+# check out and which make target runs the tests. The toolchain is not an input:
+# it comes from .go-version, shared with the release image.
 #
 # Note for whoever compares check names across runs: jobs called through
 # workflow_call appear as "<caller job>/<job>", so these are reported as
@@ -26,11 +27,6 @@ on:
         required: false
         type: string
         default: test-short
-      go-version:
-        description: 'Go toolchain for every job here.'
-        required: false
-        type: string
-        default: '1.21'
 
 jobs:
   build_test:
@@ -43,7 +39,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ inputs.go-version }}
+          # .go-version is the single source: the release image builds with the
+          # same value (Makefile passes it as a build-arg), so CI exercises the
+          # toolchain that ships (issue #84).
+          go-version-file: .go-version
 
       - name: Build Go-Metadium
         env:
@@ -64,7 +63,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ inputs.go-version }}
+          # .go-version is the single source: the release image builds with the
+          # same value (Makefile passes it as a build-arg), so CI exercises the
+          # toolchain that ships (issue #84).
+          go-version-file: .go-version
 
       - name: Check Lint
         run: make lint
@@ -79,7 +81,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ inputs.go-version }}
+          # .go-version is the single source: the release image builds with the
+          # same value (Makefile passes it as a build-arg), so CI exercises the
+          # toolchain that ships (issue #84).
+          go-version-file: .go-version
 
       - name: Check golang Test Cases
         run: |

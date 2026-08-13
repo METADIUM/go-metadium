@@ -10,22 +10,48 @@
 # vendored RocksDB, which uses `using enum` (C++20, implemented from GCC 11).
 # The toolchain PPA provides gcc 11 while keeping focal's glibc 2.31.
 
-FROM ubuntu:focal as base
+# The base is pinned by digest, not by tag: focal is past standard support, so
+# the tag can be repointed or pruned under us, and a release build that silently
+# changes its glibc floor is the one thing this image exists to prevent. Package
+# updates still arrive through the apt-get upgrade below, which a digest pin does
+# not freeze. To move it: docker buildx imagetools inspect ubuntu:focal.
+FROM ubuntu:focal@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214 AS base
 
 SHELL ["/bin/bash", "-c"]
 
 RUN apt-get update -q -y && apt-get upgrade -q -y
 RUN DEBIAN_FRONTEND=noninteractive apt-get install -y tzdata software-properties-common
 RUN add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update -q -y
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential gcc-11 g++-11 ca-certificates curl libjemalloc-dev liblz4-dev libsnappy-dev libzstd-dev libudev-dev git
+# The compiler is pinned too. It comes from a community PPA that keeps only its
+# newest build, so an unpinned install means release binaries can come from a
+# compiler revision nobody tested, with nothing to detect it. The tradeoff is
+# that this fails loudly the day the PPA moves; that is the intended direction.
+# To bump: apt-cache madison gcc-11 inside this image, then update both versions
+# here and rebuild.
+ARG GCC_VERSION=11.5.0-10ubuntu1~20~ppa3
+
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential gcc-11=${GCC_VERSION} g++-11=${GCC_VERSION} \
+        ca-certificates curl libjemalloc-dev liblz4-dev libsnappy-dev libzstd-dev libudev-dev git
 
 ENV CC=gcc-11
 ENV CXX=g++-11
 
 # golang
+#
+# GO_VERSION must equal .go-version, which is what CI's setup-go reads: release
+# binaries used to ship on a toolchain CI never exercised. `make gmet-linux`
+# passes the file's value in and refuses to build if the two disagree, so this
+# default only applies to a bare `docker build`.
+#
+# GO_SHA256 belongs to GO_VERSION and both change together. Without it the
+# tarball was piped straight into tar with nothing verifying what arrived.
+# Checksums: https://go.dev/dl/
 ARG GO_VERSION=1.22.5
+ARG GO_SHA256=904b924d435eaea086515bc63235b192ea441bd8c9b198c507e85009e6e4c7f0
 
 RUN curl -sL -o /tmp/go.tar.gz https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz && \
+    echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c - && \
     rm -rf /usr/local/go && \
     tar -C /usr/local -xzf /tmp/go.tar.gz && \
     ln -sf /usr/local/go/bin/* /usr/local/bin/ && \
