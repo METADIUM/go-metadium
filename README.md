@@ -206,8 +206,8 @@ before — but review the following **before** restarting on the new binary.
    start. The fix landed *after* the version string moved to 1.1.1, so
    "reports 1.1.1-stable" does not prove a build is safe — use the official
    m1.1.2 release asset (its exact commit hash is published in the release
-   notes). **Do not use the m1.1.1 assets**: they were built on Ubuntu 24.04
-   and require `GLIBC_2.38`, so they do not start on 20.04 or 22.04 at all.
+   notes). **Do not use the m1.1.1 assets**: they were built against glibc
+   2.39 and require `GLIBC_2.38`, so they do not start on 20.04 or 22.04.
    Self-builders can check their commit contains the fix with
    `git merge-base --is-ancestor e2c0d7413 <your-commit>` (exit 0 = fixed).
    Order matters on the remediation too: run testnet
@@ -234,7 +234,7 @@ before — but review the following **before** restarting on the new binary.
 
 Transaction-behaviour note: the pool admits transactions of code plus
 constructor data up to 256KB total, restoring 0.10.x parity — 0.10.x has
-carried the same 256KB ceiling since 2018, so a mixed 0.10.x + 1.1.1 fleet
+carried the same 256KB ceiling since 2018, so a mixed 0.10.x + 1.1.x fleet
 behaves uniformly. Only the intermediate **1.1.0** line rejected above
 128KB: propagation of 128–256KB transactions is path-dependent only while
 1.1.0 nodes are present (relevant on testnet; the mainnet fleet upgrades
