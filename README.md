@@ -105,6 +105,13 @@ libraries (snappy, lz4, zstd, jemalloc) must exist on the target host; the
 symbol-version checks passing does not by itself make an artifact runnable on a
 freshly installed machine.
 
+Two consequences of building this way are standing rules rather than build steps,
+and they live in
+[docs/release-build-toolchain.md](docs/release-build-toolchain.md): a toolchain
+CVE means a rebuild and a re-release, because the statically linked libstdc++ is
+no longer reachable by a distro update, and the move off the 20.04 base is gated
+on the fleet, with `MAX_GLIBC` as the last step rather than the first.
+
 Direct `go build` works for development — **these produce non-portable binaries
 and must not be published** (`./cmd/gmet` and `./cmd/geth` are the same
 entrypoint; the Makefile uses `./cmd/gmet`):
