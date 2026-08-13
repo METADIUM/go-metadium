@@ -169,6 +169,16 @@ func UnmarshalPubkey(pub []byte) (*ecdsa.PublicKey, error) {
 	if x == nil {
 		return nil, errInvalidPubkey
 	}
+	// elliptic.Unmarshal validates the point itself only for curves that do not
+	// implement its unmarshaler interface, and neither curve this tree resolves
+	// S256() to implements it, so the decode above does check. This makes the
+	// check explicit rather than inherited from that property: a curve type that
+	// grew an UnmarshalCompressed method would otherwise silently stop being
+	// validated here. Upstream go-ethereum added it in "crypto: add IsOnCurve
+	// check" (159fb1a1d, CVE-2025-24883).
+	if !S256().IsOnCurve(x, y) {
+		return nil, errInvalidPubkey
+	}
 	return &ecdsa.PublicKey{Curve: S256(), X: x, Y: y}, nil
 }
 

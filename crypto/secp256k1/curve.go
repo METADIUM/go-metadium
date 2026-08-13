@@ -95,9 +95,21 @@ func (BitCurve *BitCurve) IsOnCurve(x, y *big.Int) bool {
 	// Reject coordinates that are negative or not fully reduced modulo P.
 	// Without this bound, a malformed point supplied by a remote peer during
 	// the RLPx handshake can satisfy the curve equation modulo P yet feed an
-	// out-of-range value into the scalar-multiplication path. This is the
-	// chokepoint elliptic.Unmarshal uses to validate decoded points, so it
-	// guards both the Go and CGo ScalarMult paths. (CVE-2026-26313/26314/26315)
+	// out-of-range value into the scalar-multiplication path.
+	// (CVE-2026-26314/26315, upstream 895a8597c)
+	//
+	// This is the chokepoint elliptic.Unmarshal uses to validate decoded points,
+	// so it guards both the Go and CGo ScalarMult paths. That holds because
+	// BitCurve does not implement crypto/elliptic's unmarshaler interface, which
+	// requires both Unmarshal and UnmarshalCompressed: elliptic.Unmarshal only
+	// delegates to a curve that implements both, and otherwise runs its own
+	// decoder, which range-checks and then calls IsOnCurve. BitCurve.Unmarshal
+	// alone does neither check, so adding UnmarshalCompressed here would silently
+	// route decoding around this guard. Keep them together or not at all.
+	//
+	// CVE-2026-26313 was listed here in an earlier version of this comment and
+	// does not belong: it is a memory-exhaustion issue in p2p message decoding,
+	// handled in eth/protocols/eth/response_gate.go.
 	if x.Sign() < 0 || y.Sign() < 0 || x.Cmp(BitCurve.P) >= 0 || y.Cmp(BitCurve.P) >= 0 {
 		return false
 	}
