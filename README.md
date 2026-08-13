@@ -63,7 +63,13 @@ container target, never on the build host directly:
 ```bash
 make gmet-linux                     # RocksDB
 make gmet-linux USE_ROCKSDB=NO      # LevelDB
+USE_ROCKSDB=NO make gmet-linux      # LevelDB, from the environment
 ```
+
+The container build defaults to RocksDB regardless of the build host, because
+the host's `uname` must not pick the engine for a Linux container. `USE_ROCKSDB`
+is honoured when you set it explicitly, either on the command line or in the
+environment.
 
 `make gmet-linux` builds `Dockerfile.metadium` and compiles inside it. Two
 properties come from that image and nothing else guarantees them:
@@ -85,7 +91,12 @@ make release-check                  # ceiling from MAX_GLIBC (default 2.31)
 ```
 
 It covers every ELF in `build/bin` — `logrot` ships in the same bundle and has
-its own glibc floor — and prints each artifact's `NEEDED` list. Those shared
+its own glibc floor — and prints each artifact's `NEEDED` list. It refuses to
+report success without having checked something: a file `objdump` cannot read,
+an `objdump` that is not GNU binutils, and an empty `build/bin` are all
+failures rather than quiet passes. A statically linked artifact is reported as
+having no dynamic symbol table, which is a different line from a clean dynamic
+one. Those shared
 libraries (snappy, lz4, zstd, jemalloc) must exist on the target host; the
 symbol-version checks passing does not by itself make an artifact runnable on a
 freshly installed machine.
