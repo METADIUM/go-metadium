@@ -19,9 +19,11 @@ FROM ubuntu:focal@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2faf
 
 SHELL ["/bin/bash", "-c"]
 
-RUN apt-get update -q -y && apt-get upgrade -q -y
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y tzdata software-properties-common
-RUN add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update -q -y
+RUN apt-get update -q -y && apt-get upgrade -q -y && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -q -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y tzdata software-properties-common && \
+    rm -rf /var/lib/apt/lists/*
+RUN add-apt-repository -y ppa:ubuntu-toolchain-r/test
 # The compiler is pinned too. It comes from a community PPA that keeps only its
 # newest build, so an unpinned install means release binaries can come from a
 # compiler revision nobody tested, with nothing to detect it. The tradeoff is
@@ -30,9 +32,17 @@ RUN add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update -q -y
 # here and rebuild.
 ARG GCC_VERSION=11.5.0-10ubuntu1~20~ppa3
 
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        build-essential gcc-11=${GCC_VERSION} g++-11=${GCC_VERSION} \
-        ca-certificates curl libjemalloc-dev liblz4-dev libsnappy-dev libzstd-dev libudev-dev git
+# Deliberately not build-essential: it pulls in focal's gcc 9 next to the gcc 11
+# this image is for -- 150-200MB of dead weight, and it leaves the compiler that
+# *cannot* build the vendored RocksDB (no C++20 `using enum`) as the default cc
+# for anything that ignores $CC. make and libc6-dev are what the build actually
+# needs from it; g++-11 brings libstdc++-11-dev, which carries the static
+# archive STATIC_STDCPP links against.
+RUN apt-get update -q -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        make libc6-dev gcc-11=${GCC_VERSION} g++-11=${GCC_VERSION} \
+        ca-certificates curl libjemalloc-dev liblz4-dev libsnappy-dev libzstd-dev libudev-dev git && \
+    rm -rf /var/lib/apt/lists/*
 
 ENV CC=gcc-11
 ENV CXX=g++-11
@@ -57,7 +67,10 @@ RUN curl -sL -o /tmp/go.tar.gz https://dl.google.com/go/go${GO_VERSION}.linux-am
     ln -sf /usr/local/go/bin/* /usr/local/bin/ && \
     rm /tmp/go.tar.gz
 
-RUN apt autoremove && apt autoclean
+# No autoremove/autoclean layer here: it cannot shrink the image (earlier layers
+# are immutable) and, without -y, it would abort the build the first time it
+# found something to remove. The apt lists are dropped in the layers that
+# populate them instead.
 
 ENTRYPOINT ["/bin/bash", "-c"]
 

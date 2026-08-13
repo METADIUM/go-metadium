@@ -181,8 +181,13 @@ gmet-linux:
 		     "update both, with the matching GO_SHA256" >&2;	\
 		exit 1;							\
 	fi
-	docker build -t meta/builder:local -f Dockerfile.metadium		\
-		--build-arg GO_VERSION=$(GO_VERSION) .
+	@# Built from stdin, with no build context at all. The Dockerfile has no
+	@# COPY, so every build used to stream the whole working tree -- .git alone
+	@# is ~260MB, and rocksdb after a submodule checkout is larger. Doing it
+	@# here rather than in .dockerignore keeps the context rules for the other
+	@# images (which do COPY the tree) untouched.
+	docker build -t meta/builder:local					\
+		--build-arg GO_VERSION=$(GO_VERSION) - < Dockerfile.metadium
 	docker run -e HOME=/tmp --rm -v $(shell pwd):/data		\
 		-u $(shell id -u):$(shell id -g)			\
 		-w /data meta/builder:local				\
@@ -250,9 +255,16 @@ release-check:
 ifneq ($(USE_ROCKSDB), YES)
 rocksdb:
 else
+# -j comes from the host rather than a fixed 8: a fixed 8 under-uses a large
+# build host and oversubscribes a small one. getconf rather than nproc so this
+# still works on a developer's macOS box.
+#
+# Keep this comment out of the recipe: the first recipe line ends in a
+# continuation, so a `@#` line placed after it lands inside that same shell
+# command and the shell tries to execute `@#` (exit 127).
 rocksdb:
 	@[ ! -e rocksdb/.git ] && git submodule update --init rocksdb;	\
-	cd $(ROCKSDB_DIR) && PORTABLE=1 make -j8 static_lib;
+	cd $(ROCKSDB_DIR) && PORTABLE=1 make -j$$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8) static_lib;
 endif
 
 AWK_CODE='								     \
