@@ -59,6 +59,8 @@ if [[ $USE_ROCKSDB -eq 1 ]]; then
   done
   [[ -n "$ROCKSDB_LIB" ]] || err "librocksdb not found. Run apt install librocksdb-dev and retry."
 
+  # Host build: links this machine's libstdc++/glibc, so the binary is only
+  # guaranteed to run here. Release artifacts come from `make gmet-linux`.
   CGO_CFLAGS="-I/usr/include" \
   CGO_LDFLAGS="-L$ROCKSDB_LIB -lrocksdb -lsnappy -llz4 -lzstd -lm -lstdc++ -ldl" \
   go build -tags rocksdb -o "$BINARY_NAME" ./cmd/gmet
