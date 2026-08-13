@@ -109,26 +109,44 @@ walking adjacent release tags, and the state of this tree:
 | CVE | Severity | Upstream fix | State here |
 |---|---|---|---|
 | 2024-32972 | high | (≥ 1.13.15) | Applied |
-| 2025-24883 | high | `159fb1a1d crypto: add IsOnCurve check` | Not at the upstream site (`crypto.UnmarshalPubkey`); covered at the sink by our `BitCurve.IsOnCurve` bound check plus the cgo `ScalarMult` guard |
+| 2025-24883 | high | `159fb1a1d crypto: add IsOnCurve check` | Covered: `elliptic.Unmarshal` validates the point for both curves this tree resolves `S256()` to (see below), so `UnmarshalPubkey` does not return an off-curve point. The explicit check has been ported anyway |
 | 2026-22862 / 22868 | high / medium | `638741b08 crypto/ecies: use aes blocksize`, `fdfd1235a core/txpool: drop peers on invalid KZG proofs` | Covered by different means: length guard at `symDecrypt`, and peer drop on `ErrInvalidBlob` in `eth/fetcher/tx_fetcher.go` |
-| 2026-26314 | high | `895a8597c crypto/secp256k1: fix coordinate check` | Coordinate bound check present in `crypto/secp256k1/curve.go`; the non-cgo curve override and the `ext.h` overflow check are not ported (defence in depth) |
-| 2026-26315 | medium | `46bee92f9 crypto/ecies: fix ECIES invalid-curve handling` | No on-curve check in `GenerateShared`; the cgo `ScalarMult` guard blocks the sink |
-| **2026-26313** | medium | **`0cba803fb eth/protocols/eth, eth/protocols/snap: delayed p2p message decoding`** (v1.17.0) | **Not applied — the one real gap** |
+| 2026-26314 | high | `895a8597c crypto/secp256k1: fix coordinate check` | Coordinate bound check present in `crypto/secp256k1/curve.go`. The `ext.h` half has now been ported; the non-cgo curve override has not, and does not apply (see below) |
+| 2026-26315 | medium | `46bee92f9 crypto/ecies: fix ECIES invalid-curve handling` | Covered: an off-curve point is refused when `Decrypt` decodes it, before ECDH. The `GenerateShared` check has been ported as insurance |
+| **2026-26313** | medium | **`0cba803fb eth/protocols/eth, eth/protocols/snap: delayed p2p message decoding`** (v1.17.0) | **The one real gap.** Nothing in the existing hardening covers it; a scoped mitigation is described below |
 
 Three notes:
 
 - CVE-2026-26313 is a memory-exhaustion issue fixed by deferring message
   decoding. It is unrelated to the secp256k1/ECIES hardening in this tree, so
   the existing coordinate guard does not cover it. The comment in
-  `crypto/secp256k1/curve.go` that lists 26313 alongside 26314/26315 should be
+  `crypto/secp256k1/curve.go` listed 26313 alongside 26314/26315 and has been
   corrected.
-- The remaining defence-in-depth items are three to seven lines each and belong
-  in one change.
-- **Build mode matters.** The sink guards live on the cgo path. Release
-  artifacts are built with `CGO_ENABLED=1` (see `Dockerfile.build`), so they are
-  covered. The `CGO_ENABLED=0` build documented for development resolves
-  `S256()` to `btcec.S256()` (`crypto/signature_nocgo.go`) and does not carry
-  those guards; it is for development and testing only.
+- **Why the invalid-curve advisories are already covered here, in both build
+  modes.** A point arriving over the wire is decoded by `elliptic.Unmarshal`,
+  which range-checks it and calls `IsOnCurve` — but only for curves that do not
+  implement its unmarshaler interface, which requires both `Unmarshal` and
+  `UnmarshalCompressed`. `secp256k1.BitCurve` implements only `Unmarshal`, and
+  btcec's `KoblitzCurve` (what `S256()` resolves to without cgo) implements
+  neither, so both builds get the validating path. Upstream needed the explicit
+  checks because their curve types do implement the interface and thereby skip
+  it. Traced, not assumed: a handshake packet carrying an off-curve point is
+  refused at that decode with or without the `GenerateShared` guard.
+- That coverage is a property of the curve types, not of the protocol code, and
+  adding an `UnmarshalCompressed` method to either curve would silently remove
+  it. The ported checks make the guarantee local, which is the reason to carry
+  them even though they close nothing today.
+
+For CVE-2026-26313 the upstream commit does not transplant: it defers decoding
+across the eth/69-72 protocol layout and turns `p2p/tracker` into a per-peer
+instance, 26 files against code this tree does not have. The part that closes
+the unsolicited path does transplant, and is scoped as its own change: decode
+only the request id of a response, confirm it belongs to an in-flight request,
+and decode the payload after that. The rest — deferring until the response is
+checked against the request's limits, and the same treatment for
+`eth/protocols/snap` — belongs with the base jump in Track B. The snap response
+path is in any case unreachable here while `--syncmode snap` is rejected
+outright.
 
 ## 5. Constraints
 
