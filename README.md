@@ -6,7 +6,7 @@ Metadium blockchain node implementation, forked from [go-ethereum](https://githu
 
 Metadium is a Proof-of-Authority (PoA) blockchain with on-chain governance. It uses a custom consensus layer built on top of go-ethereum's ethash engine, with block signing via node keys and reward distribution through governance smart contracts.
 
-**Current version:** 1.1.1-stable (Camellia fork)
+**Current version:** 1.1.2-stable (Camellia fork)
 
 ## Camellia Fork
 
@@ -46,16 +46,53 @@ See [docs/camellia-test-report.md](docs/camellia-test-report.md) for full test r
 
 Prerequisites: Go 1.21+, C compiler (for RocksDB builds).
 
-The canonical builds are the Makefile targets — they are what CI validates
-and what the release tarballs ship:
+These are the Makefile targets CI validates. They build against whatever the
+host provides, which is what you want for development — but **not** for
+anything you publish or deploy; see [Release artifacts](#release-artifacts).
 
 ```bash
 make gmet                    # gmet binary (RocksDB; USE_ROCKSDB=NO for LevelDB)
 make metadium                # full deploy bundle: build/metadium.tar.gz (bin/ + conf/)
 ```
 
-Direct `go build` works for development (`./cmd/gmet` and `./cmd/geth` are
-the same entrypoint; the Makefile uses `./cmd/gmet`):
+### Release artifacts
+
+Artifacts that are published or deployed to nodes **must** be built through the
+container target, never on the build host directly:
+
+```bash
+make gmet-linux                     # RocksDB
+make gmet-linux USE_ROCKSDB=NO      # LevelDB
+```
+
+`make gmet-linux` builds `Dockerfile.metadium` and compiles inside it. Two
+properties come from that image and nothing else guarantees them:
+
+- its base pins the oldest glibc the artifacts have to run against (Ubuntu
+  20.04). Building on the host bakes in the host's glibc instead, and the
+  result does not start anywhere older:
+  `gmet: /lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_2.38' not found`
+- it sets `STATIC_STDCPP=YES`, which links libstdc++ from its archive so the
+  binary carries no `GLIBCXX`/`CXXABI` requirement either. Host builds keep the
+  shared libstdc++ so a plain development box still links.
+
+`gmet-linux` runs `make release-check` on the result and fails the build if an
+artifact would not run on the fleet. Run it standalone against anything you are
+about to publish:
+
+```bash
+make release-check                  # ceiling from MAX_GLIBC (default 2.31)
+```
+
+It covers every ELF in `build/bin` — `logrot` ships in the same bundle and has
+its own glibc floor — and prints each artifact's `NEEDED` list. Those shared
+libraries (snappy, lz4, zstd, jemalloc) must exist on the target host; the
+symbol-version checks passing does not by itself make an artifact runnable on a
+freshly installed machine.
+
+Direct `go build` works for development — **these produce non-portable binaries
+and must not be published** (`./cmd/gmet` and `./cmd/geth` are the same
+entrypoint; the Makefile uses `./cmd/gmet`):
 
 ```bash
 CGO_ENABLED=0 go build -o gmet ./cmd/gmet                    # LevelDB
@@ -163,13 +200,15 @@ before — but review the following **before** restarting on the new binary.
    a graceful shutdown when `STOP_FORCE=0` is set. Automation must check the
    exit code *and* set `STOP_FORCE=0`, sizing its own timeout above
    `STOP_TIMEOUT`. Never `kill -9` a node — RocksDB especially.
-7. **Testnet operators: skip 1.1.0, go straight to the m1.1.1 release
+7. **Testnet operators: skip 1.1.0, go straight to the m1.1.2 release
    build.** The 1.1.0 testnet build carries a chain-config regression that
    rewinds a 0.10.x node to block 5,622,999 (~80M-block resync) on first
    start. The fix landed *after* the version string moved to 1.1.1, so
    "reports 1.1.1-stable" does not prove a build is safe — use the official
-   m1.1.1 release asset (its exact commit hash is published in the release
-   notes). Self-builders can check their commit contains the fix with
+   m1.1.2 release asset (its exact commit hash is published in the release
+   notes). **Do not use the m1.1.1 assets**: they were built on Ubuntu 24.04
+   and require `GLIBC_2.38`, so they do not start on 20.04 or 22.04 at all.
+   Self-builders can check their commit contains the fix with
    `git merge-base --is-ancestor e2c0d7413 <your-commit>` (exit 0 = fixed).
    Order matters on the remediation too: run testnet
    nodes with `--metadium-testnet` (or `TESTNET=1` in `.rc`) **only once on

@@ -1,4 +1,11 @@
 # Dockerfile.build - Build Linux binaries (rocksdb + leveldb variants)
+#
+# ⚠ DEVELOPMENT ONLY — NOT FOR RELEASE ARTIFACTS.
+# This image is noble (glibc 2.39) and links the shared libstdc++, so what it
+# produces requires GLIBC_2.38 and does not start on the 20.04/22.04 nodes in
+# the fleet. That is the exact defect that made the m1.1.1 assets unusable.
+# Release artifacts are built with `make gmet-linux` (Dockerfile.metadium),
+# which pins the fleet's oldest glibc and is gated by `make release-check`.
 # Usage (local ARM64 Mac → arm64 image):
 #   docker build -f Dockerfile.build --output dist .
 #
