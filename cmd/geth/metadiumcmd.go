@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -640,9 +641,14 @@ func logrota(ctx *cli.Context) error {
 		logCount = 1
 	}
 	if len(logOpts) >= 3 {
-		if logCount, err = logrot.ParseSize(logOpts[2]); err != nil {
-			return err
+		// A count, not a size: "5g" here would quietly ask for five billion
+		// generations, so no suffixes.
+		if logCount, err = strconv.Atoi(strings.TrimSpace(logOpts[2])); err != nil {
+			return fmt.Errorf("invalid log count %q: %v", logOpts[2], err)
 		}
+	}
+	if logSize <= 0 || logCount <= 0 {
+		return fmt.Errorf("log size and count must be positive, got %d and %d", logSize, logCount)
 	}
 
 	if dir := filepath.Dir(logFile); dir != "" && dir != "." {
