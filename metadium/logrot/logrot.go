@@ -10,11 +10,19 @@
 // happens to the file. A write or rename failure degrades logging, reports
 // itself, and is retried; it never stops the reader and so never takes the
 // writer down with it.
+//
+// The repo already vendors lumberjack for --log.rotate, but it cannot be used
+// here: it has no drain invariant (a write error propagates to the caller,
+// which on this path is the node's own log writer), it truncates rather than
+// retries on failure, and its backup naming (timestamped) breaks operators'
+// shippers that follow the numbered `.1`…`.N` scheme this replaces.
 package logrot
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -32,9 +40,11 @@ const readChunk = 64 * 1024
 // deleted directory) to one report per interval instead of one per record.
 const retryInterval = 30 * time.Second
 
-// ParseSize parses a byte count with an optional k/m/g suffix.
-func ParseSize(size string) (int, error) {
-	m := 1
+// ParseSize parses a positive byte count with an optional k/m/g suffix. The
+// result is an int64 whatever the platform: "2g" is a valid rotation size on a
+// 386 build, where int arithmetic would wrap it negative.
+func ParseSize(size string) (int64, error) {
+	var m int64 = 1
 	size = strings.TrimSpace(size)
 	if size == "" {
 		return 0, fmt.Errorf("empty size")
@@ -52,38 +62,49 @@ func ParseSize(size string) (int, error) {
 		size = strings.TrimSpace(size[:len(size)-1])
 	}
 
-	i, err := strconv.Atoi(size)
+	i, err := strconv.ParseInt(size, 10, 64)
 	if err != nil {
 		return 0, err
+	}
+	if i <= 0 || i > math.MaxInt64/m {
+		return 0, fmt.Errorf("size out of range: %q", size)
 	}
 	return i * m, nil
 }
 
 // rotate renames filename to filename.1, shifting the existing generations up
 // and dropping filename.count. It is a no-op while the file is below size.
-func rotate(filename string, size, count int) error {
+func rotate(filename string, size int64, count int) error {
 	fi, err := os.Stat(filename)
 	if err != nil {
 		// Nothing to rotate yet, or the file is unreadable; the writer will
 		// report the problem when it next opens it.
 		return nil
 	}
-	if fi.Size() < int64(size) {
+	if fi.Size() < size {
 		return nil
 	}
 
-	for i := count; i >= 0; i-- {
-		if i == count {
-			os.Remove(fmt.Sprintf("%s.%d", filename, i))
-			continue
+	// Find the highest existing generation walking up from 1, so the work
+	// scales with the files that exist rather than with count, which is
+	// configuration and can be absurd. Generations above a gap are stale
+	// (a previous shift did not reach them) and age out as later shifts
+	// rename over them.
+	top := 0
+	for i := 1; i <= count; i++ {
+		if _, err := os.Stat(fmt.Sprintf("%s.%d", filename, i)); err != nil {
+			break
 		}
-
+		top = i
+	}
+	if top == count {
+		os.Remove(fmt.Sprintf("%s.%d", filename, count))
+		top--
+	}
+	for i := top; i >= 0; i-- {
 		src := filename
 		if i != 0 {
 			src = fmt.Sprintf("%s.%d", filename, i)
-		}
-		if _, err := os.Stat(src); err != nil && os.IsNotExist(err) {
-			continue
 		}
 		if err := os.Rename(src, fmt.Sprintf("%s.%d", filename, i+1)); err != nil {
 			return err
@@ -96,16 +117,15 @@ func rotate(filename string, size, count int) error {
 // itself.
 type writer struct {
 	filename string
-	size     int
+	size     int64
 	count    int
 	diag     io.Writer
 
 	out      *os.File
-	off      int  // bytes in the current file
-	rotateAt int  // offset at which to attempt the next rotation
-	broken   bool // the file is unusable; output is being dropped
+	off      int64 // bytes in the current file
+	rotateAt int64 // offset at which to attempt the next rotation
+	broken   bool  // the file is unusable; output is being dropped
 	retry    time.Time
-	atBOL    bool // the last byte written was a newline
 }
 
 func (w *writer) reportf(format string, args ...interface{}) {
@@ -141,8 +161,10 @@ func (w *writer) open() bool {
 	if w.broken {
 		w.reportf("resumed writing to %s", w.filename)
 	}
-	w.out, w.off, w.broken = out, int(off), false
-	w.atBOL = true
+	w.out, w.off, w.broken = out, off, false
+	if w.rotateAt < w.size {
+		w.rotateAt = w.size
+	}
 	return true
 }
 
@@ -155,34 +177,60 @@ func (w *writer) fail(format string, args ...interface{}) {
 	w.retry = time.Now().Add(retryInterval)
 }
 
-// write appends p, rotating once the file is over size. Output is dropped
-// while the file is unusable so that the reader can keep draining.
-func (w *writer) write(p []byte) {
-	if !w.open() {
-		return
+// emit appends p to the file as it is. Output is dropped while the file is
+// unusable so that the reader can keep draining.
+func (w *writer) emit(p []byte) bool {
+	if len(p) == 0 {
+		return true
 	}
-
+	if !w.open() {
+		return false
+	}
 	n, err := w.out.Write(p)
 	if err != nil {
 		w.out.Close()
 		w.out = nil
 		w.fail("cannot write %s: %v", w.filename, err)
+		return false
+	}
+	w.off += int64(n)
+	return true
+}
+
+// write appends p, rotating once the file passes size.
+//
+// A chunk is not a record: under load the pipe coalesces many records into one
+// read. When a chunk would carry the file past the rotation point it is split
+// at its last newline — the head completes the current file on a record
+// boundary, the tail opens the next one — so the overshoot is bounded by one
+// read (readChunk) rather than by how long the reader stays saturated. A
+// stream with no record boundaries at all is cut mid-record once the overshoot
+// reaches a full extra size: an imprecise boundary beats an unbounded file.
+func (w *writer) write(p []byte) {
+	if w.off+int64(len(p)) >= w.rotateAt {
+		if ix := bytes.LastIndexByte(p, '\n'); ix >= 0 {
+			if !w.emit(p[:ix+1]) {
+				return
+			}
+			if w.off >= w.rotateAt {
+				w.rotate()
+			}
+			p = p[ix+1:]
+		}
+	}
+	if !w.emit(p) {
 		return
 	}
-	w.off += n
-	w.atBOL = p[len(p)-1] == '\n'
-
-	// Rotate on a record boundary only, so a record is never split across two
-	// files. A record longer than the rotation size therefore overshoots it,
-	// which is the same behaviour as before.
-	if w.off >= w.rotateAt && w.atBOL {
+	if w.off >= w.rotateAt+w.size {
 		w.rotate()
 	}
 }
 
 func (w *writer) rotate() {
-	w.out.Close()
-	w.out = nil
+	if w.out != nil {
+		w.out.Close()
+		w.out = nil
+	}
 
 	if err := rotate(w.filename, w.size, w.count); err != nil {
 		// Keep appending to the current file: an oversized log is better than
@@ -193,7 +241,8 @@ func (w *writer) rotate() {
 		w.rotateAt = w.off + w.size
 		return
 	}
-	w.rotateAt = w.size
+	// The current file was renamed away; the next emit starts a fresh one.
+	w.off, w.rotateAt = 0, w.size
 }
 
 func (w *writer) close() {
@@ -208,13 +257,14 @@ func (w *writer) close() {
 //
 // Run returns only when r ends: while r is open it always keeps reading, so the
 // process writing into r never blocks on a full pipe and never sees it close.
-// An error is returned only for invalid parameters or a failed read.
-func Run(r io.Reader, filename string, size, count int, diag io.Writer) error {
+// An error is returned only for invalid parameters or a persistent read
+// failure — a transient one is reported and retried.
+func Run(r io.Reader, filename string, size int64, count int, diag io.Writer) error {
 	if size <= 0 || count <= 0 {
 		return fmt.Errorf("invalid parameters: size=%d count=%d", size, count)
 	}
 
-	w := &writer{filename: filename, size: size, count: count, diag: diag}
+	w := &writer{filename: filename, size: size, count: count, diag: diag, rotateAt: size}
 	defer w.close()
 
 	// Rotate once up front so a restart does not append to an already
@@ -224,16 +274,24 @@ func Run(r io.Reader, filename string, size, count int, diag io.Writer) error {
 	}
 
 	buf := make([]byte, readChunk)
+	fails := 0
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
+			fails = 0
 			w.write(buf[:n])
 		}
 		if err != nil {
 			if err == io.EOF {
 				return nil
 			}
-			return err
+			// A read error on the pipe is close to impossible; retry rather
+			// than abandoning the drain over a transient one.
+			if fails++; fails >= 10 {
+				return err
+			}
+			w.reportf("cannot read input: %v (retrying)", err)
+			time.Sleep(time.Second)
 		}
 	}
 }
