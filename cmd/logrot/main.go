@@ -15,15 +15,18 @@ func usage() {
 }
 
 func main() {
+	// Misuse must not exit 0: a supervisor that drops an argument would see
+	// success with no drainer running, and the node writing into the pipe
+	// would be discarding output from then on.
 	if len(os.Args) != 4 {
 		usage()
-		os.Exit(0)
+		os.Exit(1)
 	}
 
 	filename := os.Args[1]
 	size, err1 := logrot.ParseSize(os.Args[2])
 	count, err2 := strconv.Atoi(os.Args[3])
-	if err1 != nil || err2 != nil || size <= 0 || count <= 0 {
+	if err1 != nil || err2 != nil {
 		usage()
 		os.Exit(1)
 	}

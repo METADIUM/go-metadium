@@ -280,14 +280,6 @@ func init() {
 	flags.AutoEnvVars(app.Flags, "GETH")
 
 	app.Before = func(ctx *cli.Context) error {
-		// Keep a broken log pipe from killing the node. gmet.sh runs us as
-		// `gmet 2>&1 | logrot ...`, and Go handles SIGPIPE on fd 1 and 2 with
-		// the default disposition: if the reader ever goes away, the process
-		// dies on its next log write, silently. Asking for the signal instead
-		// turns those writes into ordinary EPIPE errors, which the logger
-		// discards, so the node keeps producing blocks while blind.
-		ignoreSIGPIPE()
-
 		// setup rotating log if specified
 		if err := logrota(ctx); err != nil {
 			return err
@@ -381,6 +373,13 @@ func geth(ctx *cli.Context) error {
 	if args := ctx.Args().Slice(); len(args) > 0 {
 		return fmt.Errorf("invalid command: %q", args[0])
 	}
+
+	// Keep a broken log pipe from killing the node. gmet.sh runs us as
+	// `gmet 2>&1 | logrot ...`, and Go handles SIGPIPE on fd 1 and 2 with the
+	// default disposition: if the reader ever goes away, the process dies on
+	// its next log write, silently. Only the node ignores the signal —
+	// one-shot commands keep the default so their pipelines terminate.
+	ignoreSIGPIPE()
 
 	prepare(ctx)
 	stack, backend := makeFullNode(ctx)

@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -602,15 +603,16 @@ func downloadGenesis(ctx *cli.Context) error {
 //
 // Go gives SIGPIPE on fd 1 and 2 the default disposition, so a node whose
 // stdout is a pipe dies the moment the reader exits — no panic, no log line,
-// nothing to find afterwards. Once the signal is delivered to a channel
-// instead, those writes fail with EPIPE and the node stays up.
+// nothing to find afterwards. Ignoring the signal turns those writes into
+// ordinary EPIPE errors, which the logger discards, so the node keeps
+// producing blocks while blind.
+//
+// It is installed only where the descriptors are expected to be pipes for the
+// life of the process: the node action itself (gmet.sh pipes it into logrot)
+// and the in-process --log path. One-shot commands keep the default so that
+// `gmet dump ... | head` still terminates when its reader does.
 func ignoreSIGPIPE() {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, unix.SIGPIPE)
-	go func() {
-		for range c {
-		}
-	}()
+	signal.Ignore(unix.SIGPIPE)
 }
 
 // logrot frontend
@@ -624,7 +626,7 @@ func logrota(ctx *cli.Context) error {
 	}
 
 	var err error
-	logSize := 10 * 1024 * 1024
+	logSize := int64(10 * 1024 * 1024)
 	logCount := 5
 	logOpts := strings.Split(logflag, ",")
 	logFile := ""
@@ -659,32 +661,35 @@ func logrota(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	unix.Close(1) // stdout
-	unix.Close(2) // stderr
+	// Dup2 closes its target atomically; closing 1/2 first would open a
+	// window in which any concurrent open() could claim the descriptor.
 	unix.Dup2(int(w.Fd()), 1)
 	unix.Dup2(int(w.Fd()), 2)
+
+	// From here on the process's own stdout/stderr are backed by this pipe,
+	// so a dead drainer must cost EPIPE, not the process.
+	ignoreSIGPIPE()
 
 	// Diagnostics cannot go to stderr here: stderr is the pipe this goroutine
 	// is draining, so a broken log file would feed its own error reports back
 	// into itself. They go beside the log instead.
-	diag, err := os.OpenFile(logFile+".err", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
-	if err != nil {
-		diag = nil
+	var diagw io.Writer = io.Discard
+	if diag, derr := os.OpenFile(logFile+".err", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600); derr == nil {
+		diagw = diag
 	}
 
 	go func() {
-		if diag != nil {
-			defer diag.Close()
+		// Run returns only once the pipe is closed or its parameters were
+		// rejected — the latter cannot reach here, logSize/logCount are
+		// validated above before the descriptors were touched. Whatever the
+		// reason, leave it in the diagnostics rather than in the pipe.
+		if err := logrot.Run(r, logFile, logSize, logCount, diagw); err != nil {
+			fmt.Fprintf(diagw, "logrot: %s: rotation ended: %v (log output is being discarded)\n",
+				time.Now().Format("2006-01-02T15:04:05Z0700"), err)
 		}
-		var diagw io.Writer
-		if diag != nil {
-			diagw = diag
-		}
-		logrot.Run(r, logFile, logSize, logCount, diagw)
 
-		// Run only returns once the pipe is closed or a read fails. Nothing
-		// else drains this pipe, so keep it drained regardless: a full pipe
-		// would block the node forever on its next log write.
+		// Nothing else drains this pipe, so keep it drained regardless: a
+		// full pipe would block the node forever on its next log write.
 		io.Copy(io.Discard, r)
 	}()
 
