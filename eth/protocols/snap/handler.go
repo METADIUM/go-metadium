@@ -171,10 +171,13 @@ func HandleMessage(backend Backend, peer *Peer) error {
 		})
 
 	case msg.Code == AccountRangeMsg:
-		// A range of accounts arrived to one of our previous requests
+		// A range of accounts arrived to one of our previous requests. Check the
+		// request id before expanding the payload; see response_gate.go.
 		res := new(AccountRangePacket)
-		if err := msg.Decode(res); err != nil {
-			return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+		if gated, err := gateResponse(peer, msg, AccountRangeMsg, res); err != nil {
+			return err
+		} else if gated {
+			return nil
 		}
 		// Ensure the range is monotonically increasing
 		for i := 1; i < len(res.Accounts); i++ {
@@ -205,8 +208,10 @@ func HandleMessage(backend Backend, peer *Peer) error {
 	case msg.Code == StorageRangesMsg:
 		// A range of storage slots arrived to one of our previous requests
 		res := new(StorageRangesPacket)
-		if err := msg.Decode(res); err != nil {
-			return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+		if gated, err := gateResponse(peer, msg, StorageRangesMsg, res); err != nil {
+			return err
+		} else if gated {
+			return nil
 		}
 		// Ensure the ranges are monotonically increasing
 		for i, slots := range res.Slots {
@@ -238,8 +243,10 @@ func HandleMessage(backend Backend, peer *Peer) error {
 	case msg.Code == ByteCodesMsg:
 		// A batch of byte codes arrived to one of our previous requests
 		res := new(ByteCodesPacket)
-		if err := msg.Decode(res); err != nil {
-			return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+		if gated, err := gateResponse(peer, msg, ByteCodesMsg, res); err != nil {
+			return err
+		} else if gated {
+			return nil
 		}
 		requestTracker.Fulfil(peer.id, peer.version, ByteCodesMsg, res.ID)
 
@@ -265,8 +272,10 @@ func HandleMessage(backend Backend, peer *Peer) error {
 	case msg.Code == TrieNodesMsg:
 		// A batch of trie nodes arrived to one of our previous requests
 		res := new(TrieNodesPacket)
-		if err := msg.Decode(res); err != nil {
-			return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+		if gated, err := gateResponse(peer, msg, TrieNodesMsg, res); err != nil {
+			return err
+		} else if gated {
+			return nil
 		}
 		requestTracker.Fulfil(peer.id, peer.version, TrieNodesMsg, res.ID)
 
