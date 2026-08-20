@@ -134,7 +134,19 @@ func (prv *PrivateKey) GenerateShared(pub *PublicKey, skLen, macLen int) (sk []b
 	// point is refused before GenerateShared is reached. This check covers the
 	// callers that build a PublicKey directly instead, and keeps the guarantee
 	// from depending on that property of the curve types.
-	if pub.X == nil || pub.Y == nil || !pub.Curve.IsOnCurve(pub.X, pub.Y) {
+	//
+	// The range check is explicit for the same reason it is in
+	// crypto.UnmarshalPubkey: IsOnCurve rejects an unreduced coordinate on the
+	// cgo curve but not on btcec, which reduces before testing. Keeping it here
+	// makes the guard equivalent in both build modes.
+	if pub.X == nil || pub.Y == nil {
+		return nil, ErrInvalidPublicKey
+	}
+	if p := pub.Curve.Params().P; pub.X.Sign() < 0 || pub.Y.Sign() < 0 ||
+		pub.X.Cmp(p) >= 0 || pub.Y.Cmp(p) >= 0 {
+		return nil, ErrInvalidPublicKey
+	}
+	if !pub.Curve.IsOnCurve(pub.X, pub.Y) {
 		return nil, ErrInvalidPublicKey
 	}
 	if skLen+macLen > MaxSharedKeyLength(pub) {

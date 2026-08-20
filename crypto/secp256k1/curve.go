@@ -98,9 +98,12 @@ func (BitCurve *BitCurve) IsOnCurve(x, y *big.Int) bool {
 	// out-of-range value into the scalar-multiplication path.
 	// (CVE-2026-26314/26315, upstream 895a8597c)
 	//
-	// This is the chokepoint elliptic.Unmarshal uses to validate decoded points,
-	// so it guards both the Go and CGo ScalarMult paths. That holds because
-	// BitCurve does not implement crypto/elliptic's unmarshaler interface, which
+	// This is the chokepoint elliptic.Unmarshal uses to validate decoded points
+	// in this package, which is the cgo build. The non-cgo build resolves S256()
+	// to btcec and gets the same range check from crypto.btCurve.IsOnCurve; the
+	// two are deliberately kept equivalent. That the chokepoint applies at all
+	// holds because BitCurve does not implement crypto/elliptic's unmarshaler
+	// interface, which
 	// requires both Unmarshal and UnmarshalCompressed: elliptic.Unmarshal only
 	// delegates to a curve that implements both, and otherwise runs its own
 	// decoder, which range-checks and then calls IsOnCurve. BitCurve.Unmarshal

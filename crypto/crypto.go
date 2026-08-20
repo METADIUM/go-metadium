@@ -176,6 +176,20 @@ func UnmarshalPubkey(pub []byte) (*ecdsa.PublicKey, error) {
 	// grew an UnmarshalCompressed method would otherwise silently stop being
 	// validated here. Upstream go-ethereum added it in "crypto: add IsOnCurve
 	// check" (159fb1a1d, CVE-2025-24883).
+	//
+	// The range half is spelled out rather than left to IsOnCurve, because the
+	// two build modes disagree about it: secp256k1.BitCurve.IsOnCurve rejects an
+	// unreduced coordinate, while btcec's KoblitzCurve converts to Jacobian
+	// coordinates first and so tests a coordinate at or above P as if it had
+	// been reduced. Upstream carries that check in a btCurve wrapper around
+	// btcec (895a8597c), which does not transplant here: this tree's S256()
+	// returns btcec.S256() directly, and wrapping it would change the curve
+	// identity that Sign and the key constructors compare against. Checking at
+	// the guard costs two comparisons and leaves both modes equivalent.
+	p := S256().Params().P
+	if x.Sign() < 0 || y.Sign() < 0 || x.Cmp(p) >= 0 || y.Cmp(p) >= 0 {
+		return nil, errInvalidPubkey
+	}
 	if !S256().IsOnCurve(x, y) {
 		return nil, errInvalidPubkey
 	}

@@ -316,11 +316,12 @@ func handleGetNodeData(backend Backend, msg Decoder, peer *Peer) error {
 }
 
 // handleNodeData handles a NodeData response from an eth/66 peer.
-// Since we don't request node data, this is a no-op.
+//
+// This node never sends GetNodeData, so every one of these is unsolicited by
+// definition and there is nothing to match it against — the message carries no
+// request id. Discarding it without decoding is the same property the response
+// gate gives the dispatcher-path responses: a peer cannot make us expand a
+// payload we never asked for.
 func handleNodeData(backend Backend, msg Decoder, peer *Peer) error {
-	var data NodeDataPacket
-	if err := msg.Decode(&data); err != nil {
-		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
-	}
 	return nil
 }
