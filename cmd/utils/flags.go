@@ -985,8 +985,8 @@ var (
 	}
 	LogFlag = &cli.StringFlag{
 		Name:  "log",
-		Usage: "Rotating log file: <file-name>,<count>,<size>",
-		Value: "log,5,10M",
+		Usage: "Rotating log file: <file-name>,<size>,<count>",
+		Value: "log,10M,5",
 	}
 	MaxTxsPerBlock = &cli.IntFlag{
 		Name:  "maxtxsperblock",

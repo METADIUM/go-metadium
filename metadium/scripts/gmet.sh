@@ -192,12 +192,15 @@ function start ()
     [ -d "$d/logs" ] || mkdir -p $d/logs
 
     cd $d
+    # logrot's own errors go to logs/logrot.err. They used to go to whatever
+    # terminal happened to start the node, so a rotation failure left nothing
+    # behind to explain itself.
     if [ ! "$2" = "inner" ]; then
 	$GMET --datadir ${PWD} --metrics $OPTS 2>&1 |   \
-	    ${d}/bin/logrot ${d}/logs/log 10M 5 &
+	    ${d}/bin/logrot ${d}/logs/log 10M 5 2>>${d}/logs/logrot.err &
     else
 	if [ -x "$d/bin/logrot" ]; then
-	    exec > >($d/bin/logrot $d/logs/log 10M 5)
+	    exec > >($d/bin/logrot $d/logs/log 10M 5 2>>${d}/logs/logrot.err)
 	    exec 2>&1
 	fi
 	exec $GMET --datadir ${PWD} --metrics $OPTS

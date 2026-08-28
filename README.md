@@ -224,6 +224,15 @@ before — but review the following **before** restarting on the new binary.
    `--syncmode` that starts on Metadium networks is `full` (item 5). systemd
    unit templates are provided at `metadium/scripts/gmet.service` (plus a
    sealer override).
+   Two `--log` behaviour changes for such launchers: the flag's usage string
+   used to document the wrong argument order — the parsed one is
+   `<file-name>,<size>,<count>`, the same order as `logrot <file> <size>
+   <count>` — and a `--log` value that fails to parse, or asks for a
+   non-positive size or count, now stops the node at startup instead of
+   silently running without rotation (following the documented-but-wrong
+   order used to produce a 5-byte size and ten million generations). The
+   standalone `logrot` also exits 1 rather than 0 when invoked with the
+   wrong number of arguments, so supervisors notice a missing drainer.
 10. **`metadium/metclient` library users**: signature changes —
     `SendValue`'s `amount` went `int` → `*big.Int`, and `_gasPrice` went
     `int` → `int64` in both `SendValue` and `Deploy` (`gas` is unchanged).
