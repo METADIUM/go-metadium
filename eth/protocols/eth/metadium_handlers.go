@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	metaapi "github.com/ethereum/go-ethereum/metadium/api"
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // Concurrency caps for the asynchronous Metadium message handlers below. Each
@@ -59,8 +60,22 @@ func handleGetBlobSidecars69(backend Backend, msg Decoder, peer *Peer) error {
 // handleBlobSidecars69 forwards a received blob-sidecar reply to the backend,
 // which correlates it with the in-flight request and validates/persists it.
 func handleBlobSidecars69(backend Backend, msg Decoder, peer *Peer) error {
-	var res BlobSidecarsPacket
-	if err := msg.Decode(&res); err != nil {
+	// Confirm this reply answers a fetch we issued before decoding the sidecars.
+	// A sidecar is up to 128KB of blob plus commitments, so this is the largest
+	// amplification the protocol offers an unsolicited sender. See
+	// response_gate.go.
+	env := new(responseEnvelope)
+	if err := msg.Decode(env); err != nil {
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+	if !peer.solicited(env.RequestId) {
+		peer.dropUnsolicited(BlobSidecarsMsg, env.RequestId)
+		return nil
+	}
+	peer.untrackPending(env.RequestId)
+
+	res := BlobSidecarsPacket{RequestId: env.RequestId}
+	if err := rlp.DecodeBytes(env.Payload, &res.Sidecars); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
 	return backend.Handle(peer, &res)
@@ -301,11 +316,12 @@ func handleGetNodeData(backend Backend, msg Decoder, peer *Peer) error {
 }
 
 // handleNodeData handles a NodeData response from an eth/66 peer.
-// Since we don't request node data, this is a no-op.
+//
+// This node never sends GetNodeData, so every one of these is unsolicited by
+// definition and there is nothing to match it against — the message carries no
+// request id. Discarding it without decoding is the same property the response
+// gate gives the dispatcher-path responses: a peer cannot make us expand a
+// payload we never asked for.
 func handleNodeData(backend Backend, msg Decoder, peer *Peer) error {
-	var data NodeDataPacket
-	if err := msg.Decode(&data); err != nil {
-		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
-	}
 	return nil
 }
