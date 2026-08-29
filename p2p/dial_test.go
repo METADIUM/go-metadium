@@ -152,6 +152,40 @@ func TestDialSchedNetRestrict(t *testing.T) {
 	})
 }
 
+// This test checks that a dial task which never finishes stops holding its slot,
+// so the node it was dialing can be dialed again. Without that, the destination
+// stays in dialing forever, checkDial refuses every later attempt, and a static
+// peer lost this way never comes back short of restarting the process.
+func TestDialSchedStalledDial(t *testing.T) {
+	t.Parallel()
+
+	node := newNode(uintID(0x01), "127.0.0.1:30303")
+	config := dialConfig{
+		// One slot, so the stalled task also starves the scheduler until it
+		// is given up on.
+		maxActiveDials: 1,
+		maxDialPeers:   1,
+	}
+
+	rounds := []dialTestRound{
+		// The dial is launched here and never completed: the round lists it
+		// under neither succeeded nor failed.
+		{
+			update:       func(d *dialScheduler) { d.addStatic(node) },
+			wantNewDials: []*enode.Node{node},
+		},
+	}
+	// Wait out stalledDialTimeout. Each round advances the clock by 16s, and no
+	// round in between may launch a dial -- the slot is still held.
+	for elapsed := 16 * time.Second; elapsed <= stalledDialTimeout; elapsed += 16 * time.Second {
+		rounds = append(rounds, dialTestRound{})
+	}
+	// The slot is released by now, so the node is dialed again.
+	rounds = append(rounds, dialTestRound{wantNewDials: []*enode.Node{node}})
+
+	runDialTest(t, config, rounds)
+}
+
 // This test checks that static dials work and obey the limits.
 func TestDialSchedStaticDial(t *testing.T) {
 	t.Parallel()

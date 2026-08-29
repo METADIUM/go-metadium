@@ -47,6 +47,22 @@ const (
 	// Endpoint resolution is throttled with bounded backoff.
 	initialResolveDelay = 60 * time.Second
 	maxResolveDelay     = time.Hour
+
+	// A dial task holds its destination in d.dialing for as long as it runs, and
+	// checkDial refuses to dial a node that is already in there. Nothing bounds how
+	// long a task may run: the socket dial and both handshakes have deadlines, but
+	// Server.checkpoint then waits on the run loop with none, so a task that never
+	// returns keeps its destination unreachable for the life of the process. Static
+	// peers never come back, and admin_addPeer keeps reporting success because it
+	// only registers the node -- which is what makes it hard to see.
+	//
+	// After this much time the scheduler gives up on a task and releases the slot,
+	// so a stall degrades to a delayed retry instead of a permanent one. The bound
+	// is far beyond any healthy dial: defaultDialTimeout is 15s and each handshake
+	// has a 5s deadline, so a task that is still running here is not making
+	// progress. The abandoned goroutine is left alone -- there is no way to cancel
+	// it -- and if it ever does connect, the server rejects the duplicate.
+	stalledDialTimeout = 2 * time.Minute
 )
 
 // NodeDialer is used to connect to nodes in the network, typically by using
@@ -110,6 +126,11 @@ type dialScheduler struct {
 	peers     map[enode.ID]struct{}  // all connected peers
 	dialPeers int                    // current number of dialed peers
 
+	// running counts the task goroutines that have not reported back yet. It differs
+	// from len(dialing) once a slot has been reaped: the task keeps running and will
+	// still send on doneCh, so shutdown has to drain this many, not that many.
+	running int
+
 	// The static map tracks all static dial tasks. The subset of usable static dial tasks
 	// (i.e. those passing checkDial) is kept in staticPool. The scheduler prefers
 	// launching random static tasks from the pool over launching dynamic dials from the
@@ -120,6 +141,9 @@ type dialScheduler struct {
 	// The dial history keeps recently dialed nodes. Members of history are not dialed.
 	history      expHeap
 	historyTimer *mclock.Alarm
+
+	// stalledTimer fires when the oldest entry in dialing is due to be given up on.
+	stalledTimer *mclock.Alarm
 
 	// for logStats
 	lastStatsLog     mclock.AbsTime
@@ -164,6 +188,7 @@ func newDialScheduler(config dialConfig, it enode.Iterator, setupFunc dialSetupF
 	d := &dialScheduler{
 		dialConfig:   cfg,
 		historyTimer: mclock.NewAlarm(cfg.clock),
+		stalledTimer: mclock.NewAlarm(cfg.clock),
 		setupFunc:    setupFunc,
 		dialing:      make(map[enode.ID]*dialTask),
 		static:       make(map[enode.ID]*dialTask),
@@ -238,6 +263,7 @@ loop:
 			nodesCh = nil
 		}
 		d.rearmHistoryTimer()
+		d.rearmStalledTimer()
 		d.logStats()
 
 		select {
@@ -250,7 +276,12 @@ loop:
 
 		case task := <-d.doneCh:
 			id := task.dest().ID()
-			delete(d.dialing, id)
+			d.running--
+			// The slot may already have been given up on and handed to a later
+			// task for the same node, in which case this one no longer owns it.
+			if d.dialing[id] == task {
+				delete(d.dialing, id)
+			}
 			d.updateStaticPool(id)
 			d.doneSinceLastLog++
 
@@ -301,6 +332,9 @@ loop:
 		case <-d.historyTimer.C():
 			d.expireHistory()
 
+		case <-d.stalledTimer.C():
+			d.reapStalledDials()
+
 		case <-d.ctx.Done():
 			it.Close()
 			break loop
@@ -308,7 +342,8 @@ loop:
 	}
 
 	d.historyTimer.Stop()
-	for range d.dialing {
+	d.stalledTimer.Stop()
+	for ; d.running > 0; d.running-- {
 		<-d.doneCh
 	}
 	d.wg.Done()
@@ -349,6 +384,38 @@ func (d *dialScheduler) rearmHistoryTimer() {
 		return
 	}
 	d.historyTimer.Schedule(d.history.nextExpiry())
+}
+
+// rearmStalledTimer configures d.stalledTimer to fire when the oldest running
+// dial task is due to be given up on.
+func (d *dialScheduler) rearmStalledTimer() {
+	if len(d.dialing) == 0 {
+		return
+	}
+	var next mclock.AbsTime
+	first := true
+	for _, task := range d.dialing {
+		if first || task.reapAt < next {
+			next, first = task.reapAt, false
+		}
+	}
+	d.stalledTimer.Schedule(next)
+}
+
+// reapStalledDials releases the slots held by dial tasks that have run for longer
+// than stalledDialTimeout, so their destinations can be dialed again. The tasks
+// themselves keep running; they cannot be cancelled, and the slot is what matters.
+func (d *dialScheduler) reapStalledDials() {
+	now := d.clock.Now()
+	for id, task := range d.dialing {
+		if now < task.reapAt {
+			continue
+		}
+		d.log.Warn("Giving up on stalled p2p dial",
+			"id", id, "flag", task.flags, "elapsed", now.Sub(task.startedAt))
+		delete(d.dialing, id)
+		d.updateStaticPool(id)
+	}
 }
 
 // expireHistory removes expired items from d.history.
@@ -441,8 +508,12 @@ func (d *dialScheduler) startDial(task *dialTask) {
 	node := task.dest()
 	d.log.Trace("Starting p2p dial", "id", node.ID(), "ip", node.IP(), "flag", task.flags)
 	hkey := string(node.ID().Bytes())
-	d.history.add(hkey, d.clock.Now().Add(dialHistoryExpiration))
+	now := d.clock.Now()
+	d.history.add(hkey, now.Add(dialHistoryExpiration))
+	task.startedAt = now
+	task.reapAt = now.Add(stalledDialTimeout)
 	d.dialing[node.ID()] = task
+	d.running++
 	go func() {
 		task.run(d)
 		d.doneCh <- task
@@ -453,6 +524,10 @@ func (d *dialScheduler) startDial(task *dialTask) {
 type dialTask struct {
 	staticPoolIndex int
 	flags           connFlag
+	// startedAt and reapAt are set by the scheduler before the task is launched and
+	// read only by the scheduler, so the task goroutine never touches them.
+	startedAt mclock.AbsTime
+	reapAt    mclock.AbsTime
 
 	// These fields are private to the task and should not be
 	// accessed by dialScheduler while the task is running.
