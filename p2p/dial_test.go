@@ -186,6 +186,195 @@ func TestDialSchedStalledDial(t *testing.T) {
 	runDialTest(t, config, rounds)
 }
 
+// seqDialTestDialer hands every Dial call to the test on a channel, so two
+// concurrent dials to the same node can be completed independently.
+// dialTestDialer cannot do that: it keys blocked calls by node ID, so the second
+// dial to a node overwrites the first and the first can never be released.
+type seqDialTestDialer struct {
+	calls chan *dialTestReq
+}
+
+func newSeqDialTestDialer() *seqDialTestDialer {
+	return &seqDialTestDialer{calls: make(chan *dialTestReq, 8)}
+}
+
+func (d *seqDialTestDialer) Dial(ctx context.Context, n *enode.Node) (net.Conn, error) {
+	req := &dialTestReq{n: n, unblock: make(chan error, 1)}
+	select {
+	case d.calls <- req:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case err := <-req.unblock:
+		if err != nil {
+			return nil, err
+		}
+		pipe, _ := net.Pipe()
+		return pipe, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// nextDial returns the next dial call, failing the test if none arrives.
+func (d *seqDialTestDialer) nextDial(t *testing.T, what string) *dialTestReq {
+	t.Helper()
+	select {
+	case req := <-d.calls:
+		return req
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		return nil
+	}
+}
+
+// noDial fails the test if any dial is attempted within the grace period.
+func (d *seqDialTestDialer) noDial(t *testing.T, grace time.Duration, why string) {
+	t.Helper()
+	select {
+	case req := <-d.calls:
+		t.Fatalf("unexpected dial to %v: %s", req.n.ID(), why)
+	case <-time.After(grace):
+	}
+}
+
+// newStalledDialTestScheduler builds a scheduler wired to a sequential dialer,
+// with one static node whose first dial is already in flight and stalled.
+func newStalledDialTestScheduler(t *testing.T, node *enode.Node) (*dialScheduler, *seqDialTestDialer, *mclock.Simulated, *dialTestReq) {
+	t.Helper()
+
+	clock := new(mclock.Simulated)
+	dialer := newSeqDialTestDialer()
+	config := dialConfig{
+		maxActiveDials: 2,
+		maxDialPeers:   2,
+		clock:          clock,
+		dialer:         dialer,
+		log:            testlog.Logger(t, log.LvlTrace),
+		rand:           rand.New(rand.NewSource(0x2222)),
+	}
+	d := newDialScheduler(config, newDialTestIterator(), func(net.Conn, connFlag, *enode.Node) error {
+		return nil
+	})
+
+	d.addStatic(node)
+	return d, dialer, clock, dialer.nextDial(t, "the first dial")
+}
+
+// This test checks that when an abandoned dial finally returns, it does not take
+// away the slot held by the dial that replaced it.
+//
+// A static destination is served by one long-lived dialTask that is returned to
+// the pool and launched again, so the abandoned run and its replacement would
+// otherwise be the same object. The identity check in the doneCh handler cannot
+// tell those apart, so the late return would free a slot that is still in use
+// and the scheduler would start a third concurrent dial to the same node.
+func TestDialSchedReapedStaticDialKeepsItsSlot(t *testing.T) {
+	node := newNode(uintID(0x01), "127.0.0.1:30303")
+	d, dialer, clock, first := newStalledDialTestScheduler(t, node)
+	defer d.stop()
+
+	// The first dial never completes, so its slot is given up on and the node is
+	// dialed again.
+	clock.Run(stalledDialTimeout + time.Second)
+	second := dialer.nextDial(t, "the redial after the stall")
+
+	// Now the abandoned run returns. The second dial is still in flight.
+	first.unblock <- errors.New("stalled dial finally returned")
+
+	// Expire the dial history, which is the only other thing that would hold a
+	// third dial back. Nothing may be dialed: the slot belongs to the second run.
+	clock.Run(dialHistoryExpiration + time.Second)
+	dialer.noDial(t, 300*time.Millisecond, "the abandoned run released a slot it no longer owned")
+
+	second.unblock <- errors.New("done")
+}
+
+// This test checks that shutdown waits for every dial goroutine it launched,
+// including those whose slot was given up on. Draining one reply per entry in
+// dialing rather than one per goroutine leaves an abandoned task blocked on the
+// unbuffered doneCh forever.
+func TestDialSchedShutdownDrainsReapedDial(t *testing.T) {
+	node := newNode(uintID(0x02), "127.0.0.1:30303")
+	d, dialer, clock, _ := newStalledDialTestScheduler(t, node)
+
+	// Give up on the first dial and let the replacement start, so there are two
+	// task goroutines outstanding but only one entry in dialing.
+	clock.Run(stalledDialTimeout + time.Second)
+	dialer.nextDial(t, "the redial after the stall")
+
+	// Both dials are still blocked; stop cancels their context, so both return
+	// and both must be drained.
+	d.stop()
+
+	// Nothing may be left waiting to report. A reply arriving here is one the
+	// drain failed to take.
+	select {
+	case task := <-d.doneCh:
+		t.Fatalf("shutdown left a dial task undrained: %v", task.dest().ID())
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// blockingDialTestResolver holds every Resolve call until the test releases it,
+// so more than one task can be parked inside resolve() at the same time.
+type blockingDialTestResolver struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingDialTestResolver) Resolve(n *enode.Node) *enode.Node {
+	r.entered <- struct{}{}
+	<-r.release
+	return newNode(n.ID(), "127.0.0.1:30303")
+}
+
+// This test checks that an abandoned dial and the one replacing it do not end up
+// inside resolve() on the same task.
+//
+// A static node with no endpoint has to be resolved before it can be dialed, and
+// resolve() writes lastResolved and resolveDelay. Those are plain fields, so two
+// runs sharing a task would race on them -- reachable only through a reap, since
+// that is what launches a second run while the first is still going. Run under
+// -race; without the fix the detector reports the write pair.
+func TestDialSchedReapedStaticDialDoesNotShareResolveState(t *testing.T) {
+	resolver := &blockingDialTestResolver{
+		entered: make(chan struct{}, 4),
+		release: make(chan struct{}),
+	}
+	clock := new(mclock.Simulated)
+	dialer := newSeqDialTestDialer()
+	config := dialConfig{
+		maxActiveDials: 2,
+		maxDialPeers:   2,
+		clock:          clock,
+		dialer:         dialer,
+		resolver:       resolver,
+		log:            testlog.Logger(t, log.LvlTrace),
+		rand:           rand.New(rand.NewSource(0x3333)),
+	}
+	d := newDialScheduler(config, newDialTestIterator(), func(net.Conn, connFlag, *enode.Node) error {
+		return nil
+	})
+	defer func() {
+		close(resolver.release)
+		d.stop()
+	}()
+
+	// A static node with no endpoint: the task parks in resolve() and never
+	// reaches the dialer, so its slot is eventually given up on.
+	d.addStatic(newNode(uintID(0x03), ""))
+	<-resolver.entered
+
+	clock.Run(stalledDialTimeout + time.Second)
+	select {
+	case <-resolver.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the replacement task never reached resolve")
+	}
+}
+
 // This test checks that static dials work and obey the limits.
 func TestDialSchedStaticDial(t *testing.T) {
 	t.Parallel()

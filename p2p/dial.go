@@ -61,7 +61,11 @@ const (
 	// is far beyond any healthy dial: defaultDialTimeout is 15s and each handshake
 	// has a 5s deadline, so a task that is still running here is not making
 	// progress. The abandoned goroutine is left alone -- there is no way to cancel
-	// it -- and if it ever does connect, the server rejects the duplicate.
+	// it -- and if it ever does connect, the server rejects the duplicate. It does
+	// still report back, so shutdown drains it like any other. A destination that
+	// stays wedged is retried on this period and accumulates one goroutine each
+	// time, which is the cost of not being able to cancel; the alternative is the
+	// peer never being dialed again.
 	stalledDialTimeout = 2 * time.Minute
 )
 
@@ -414,6 +418,21 @@ func (d *dialScheduler) reapStalledDials() {
 		d.log.Warn("Giving up on stalled p2p dial",
 			"id", id, "flag", task.flags, "elapsed", now.Sub(task.startedAt))
 		delete(d.dialing, id)
+		// A static destination is served by one long-lived task object, which
+		// updateStaticPool returns to the pool and startStaticDials launches
+		// again. Handing that same object to a replacement while the abandoned
+		// goroutine still holds it would put two runs inside one dialTask: the
+		// identity check in the doneCh handler could not tell them apart, and
+		// both would write lastResolved and resolveDelay in resolve(). Give the
+		// static entry a fresh object and leave the old one to its goroutine.
+		//
+		// The resolver backoff is not carried over, because a task that got far
+		// enough to stall has already resolved -- needResolve is false once dest
+		// has an IP -- so there is no backoff worth preserving, and reading those
+		// fields here would be the very race this avoids.
+		if cur, ok := d.static[id]; ok && cur == task {
+			d.static[id] = newDialTask(task.dest(), task.flags)
+		}
 		d.updateStaticPool(id)
 	}
 }
