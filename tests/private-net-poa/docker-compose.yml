@@ -16,7 +16,9 @@ networks:
 x-gmet-common: &gmet-common
   image: gmet-poa:latest
   restart: unless-stopped
-  user: "1000:1000"
+  # setup.sh writes the invoking user's ids into .env; start.sh/stop.sh export
+  # them as a fallback. The nodes have to own data/, which the host created.
+  user: "${GMET_UID:-1000}:${GMET_GID:-1000}"
   networks:
     - gmet-poa-net
 

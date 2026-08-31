@@ -23,6 +23,15 @@ err()  { echo "[ERROR] $*" >&2; exit 1; }
 
 log "=== PoA private network initialization started (chainId=$NETWORKID, CamelliaFork=100) ==="
 
+# The nodes run as whoever ran this script, because that is who owns data/.
+# docker compose reads .env from this directory, so a bare `docker compose up`
+# gets the right ids too.
+cat > .env <<EOF
+GMET_UID=$(id -u)
+GMET_GID=$(id -g)
+EOF
+log "Container user: $(id -u):$(id -g) (written to .env)"
+
 # Clean up existing data
 log "Cleaning up existing data..."
 rm -rf data/ passwords.txt static-nodes.json genesis.json
