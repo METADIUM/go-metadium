@@ -6,7 +6,7 @@ Metadium blockchain node implementation, forked from [go-ethereum](https://githu
 
 Metadium is a Proof-of-Authority (PoA) blockchain with on-chain governance. It uses a custom consensus layer built on top of go-ethereum's ethash engine, with block signing via node keys and reward distribution through governance smart contracts.
 
-**Current version:** 1.1.2-stable (Camellia fork)
+**Current version:** 1.1.3-stable (Camellia fork)
 
 ## Camellia Fork
 
