@@ -112,6 +112,10 @@ func (tx *AccessListTx) rawFeePayerSignatureValues() (v, r, s *big.Int) {
 	return nil, nil, nil
 }
 
+func (tx *AccessListTx) effectiveGasPrice(dst *big.Int, baseFee *big.Int) *big.Int {
+	return dst.Set(tx.GasPrice)
+}
+
 func (tx *AccessListTx) rawSignatureValues() (v, r, s *big.Int) {
 	return tx.V, tx.R, tx.S
 }

@@ -127,6 +127,20 @@ func (tx *FeeDelegateDynamicFeeTx) rawFeePayerSignatureValues() (v, r, s *big.In
 	return tx.FV, tx.FR, tx.FS
 }
 
+// effectiveGasPrice is the price per gas the feePayer actually pays, which is
+// the sender transaction's dynamic-fee price. It has to agree with what state
+// processing charges, so it follows DynamicFeeTx over the SenderTx fields.
+func (tx *FeeDelegateDynamicFeeTx) effectiveGasPrice(dst *big.Int, baseFee *big.Int) *big.Int {
+	if baseFee == nil {
+		return dst.Set(tx.SenderTx.GasFeeCap)
+	}
+	tip := dst.Sub(tx.SenderTx.GasFeeCap, baseFee)
+	if tip.Cmp(tx.SenderTx.GasTipCap) > 0 {
+		tip.Set(tx.SenderTx.GasTipCap)
+	}
+	return tip.Add(tip, baseFee)
+}
+
 func (tx *FeeDelegateDynamicFeeTx) rawSignatureValues() (v, r, s *big.Int) {
 	return tx.SenderTx.rawSignatureValues()
 }

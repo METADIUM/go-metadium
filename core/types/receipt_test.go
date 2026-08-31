@@ -23,6 +23,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
@@ -218,6 +220,10 @@ func TestDeriveFields(t *testing.T) {
 	// Create a few transactions to have receipts for
 	to2 := common.HexToAddress("0x2")
 	to3 := common.HexToAddress("0x3")
+	to4 := common.HexToAddress("0x4")
+	to5 := common.HexToAddress("0x5")
+	to6 := common.HexToAddress("0x6")
+	to7 := common.HexToAddress("0x7")
 	txs := Transactions{
 		NewTx(&LegacyTx{
 			Nonce:    1,
@@ -238,6 +244,46 @@ func TestDeriveFields(t *testing.T) {
 			Value:    big.NewInt(3),
 			Gas:      3,
 			GasPrice: big.NewInt(3),
+		}),
+		NewTx(&DynamicFeeTx{
+			To:        &to4,
+			Nonce:     4,
+			Value:     big.NewInt(4),
+			Gas:       4,
+			GasTipCap: big.NewInt(44),
+			GasFeeCap: big.NewInt(1045),
+		}),
+		NewTx(&DynamicFeeTx{
+			To:        &to5,
+			Nonce:     5,
+			Value:     big.NewInt(5),
+			Gas:       5,
+			GasTipCap: big.NewInt(56),
+			GasFeeCap: big.NewInt(1055),
+		}),
+		NewTx(&BlobTx{
+			To:               &to6,
+			Nonce:            6,
+			Value:            uint256.NewInt(6),
+			Gas:              6,
+			GasTipCap:        uint256.NewInt(66),
+			GasFeeCap:        uint256.NewInt(1066),
+			MaxFeePerBlobGas: uint256.NewInt(100077),
+			BlobHashes:       []common.Hash{{}, {}, {}},
+		}),
+		NewTx(&FeeDelegateDynamicFeeTx{
+			SenderTx: DynamicFeeTx{
+				To:        &to7,
+				Nonce:     7,
+				Value:     big.NewInt(7),
+				Gas:       7,
+				GasTipCap: big.NewInt(77),
+				GasFeeCap: big.NewInt(1077),
+			},
+			FeePayer: &to7,
+			FV:       new(big.Int),
+			FR:       new(big.Int),
+			FS:       new(big.Int),
 		}),
 	}
 	// Create the corresponding receipts
@@ -276,13 +322,63 @@ func TestDeriveFields(t *testing.T) {
 			ContractAddress: common.BytesToAddress([]byte{0x03, 0x33, 0x33}),
 			GasUsed:         3,
 		},
+		&Receipt{
+			Type:              DynamicFeeTxType,
+			PostState:         common.Hash{4}.Bytes(),
+			CumulativeGasUsed: 10,
+			Logs:              []*Log{},
+			TxHash:            txs[3].Hash(),
+			GasUsed:           4,
+		},
+		&Receipt{
+			Type:              DynamicFeeTxType,
+			PostState:         common.Hash{5}.Bytes(),
+			CumulativeGasUsed: 15,
+			Logs:              []*Log{},
+			TxHash:            txs[4].Hash(),
+			GasUsed:           5,
+		},
+		&Receipt{
+			Type:              BlobTxType,
+			PostState:         common.Hash{6}.Bytes(),
+			CumulativeGasUsed: 21,
+			Logs:              []*Log{},
+			TxHash:            txs[5].Hash(),
+			GasUsed:           6,
+		},
+		&Receipt{
+			Type:              FeeDelegateDynamicFeeTxType,
+			PostState:         common.Hash{7}.Bytes(),
+			CumulativeGasUsed: 28,
+			Logs:              []*Log{},
+			TxHash:            txs[6].Hash(),
+			GasUsed:           7,
+		},
 	}
 	// Clear all the computed fields and re-derive them
 	number := big.NewInt(1)
 	hash := common.BytesToHash([]byte{0x03, 0x14})
 
+	// The effective gas price is what the sender (or feePayer) is actually
+	// charged per gas, so the expectations are stated as literal values rather
+	// than recomputed through the same code under test. baseFee is 1000:
+	// legacy and access-list transactions pay their gas price as-is, the two
+	// dynamic-fee transactions exercise both sides of min(feeCap, baseFee+tip),
+	// and the blob and fee-delegation types follow the dynamic-fee rule.
+	baseFee := big.NewInt(1000)
+	blobGasPrice := big.NewInt(920)
+	wantEffectiveGasPrice := []*big.Int{
+		big.NewInt(1),    // legacy: gas price
+		big.NewInt(2),    // legacy: gas price
+		big.NewInt(3),    // access list: gas price
+		big.NewInt(1044), // dynamic fee: baseFee+tip below the cap
+		big.NewInt(1055), // dynamic fee: capped by feeCap
+		big.NewInt(1066), // blob: dynamic-fee rule over uint256 fields
+		big.NewInt(1077), // fee delegation: dynamic-fee rule over SenderTx
+	}
+
 	clearComputedFieldsOnReceipts(t, receipts)
-	if err := receipts.DeriveFields(params.TestChainConfig, hash, number.Uint64(), txs); err != nil {
+	if err := receipts.DeriveFields(params.TestChainConfig, hash, number.Uint64(), baseFee, blobGasPrice, txs); err != nil {
 		t.Fatalf("DeriveFields(...) = %v, want <nil>", err)
 	}
 	// Iterate over all the computed fields and check that they're correct
@@ -307,6 +403,23 @@ func TestDeriveFields(t *testing.T) {
 		}
 		if receipts[i].GasUsed != txs[i].Gas() {
 			t.Errorf("receipts[%d].GasUsed = %d, want %d", i, receipts[i].GasUsed, txs[i].Gas())
+		}
+		if receipts[i].EffectiveGasPrice == nil {
+			t.Errorf("receipts[%d].EffectiveGasPrice = nil, want %s", i, wantEffectiveGasPrice[i])
+		} else if receipts[i].EffectiveGasPrice.Cmp(wantEffectiveGasPrice[i]) != 0 {
+			t.Errorf("receipts[%d].EffectiveGasPrice = %s, want %s", i, receipts[i].EffectiveGasPrice, wantEffectiveGasPrice[i])
+		}
+		if txs[i].Type() == BlobTxType {
+			if receipts[i].BlobGasUsed != txs[i].BlobGas() {
+				t.Errorf("receipts[%d].BlobGasUsed = %d, want %d", i, receipts[i].BlobGasUsed, txs[i].BlobGas())
+			}
+			if receipts[i].BlobGasPrice == nil || receipts[i].BlobGasPrice.Cmp(blobGasPrice) != 0 {
+				t.Errorf("receipts[%d].BlobGasPrice = %s, want %s", i, receipts[i].BlobGasPrice, blobGasPrice)
+			}
+		} else {
+			if receipts[i].BlobGasUsed != 0 || receipts[i].BlobGasPrice != nil {
+				t.Errorf("receipts[%d] carries blob gas fields on a non-blob transaction", i)
+			}
 		}
 		if txs[i].To() != nil && receipts[i].ContractAddress != (common.Address{}) {
 			t.Errorf("receipts[%d].ContractAddress = %s, want %s", i, receipts[i].ContractAddress.String(), (common.Address{}).String())
@@ -481,6 +594,9 @@ func clearComputedFieldsOnReceipt(t *testing.T, receipt *Receipt) {
 	receipt.TransactionIndex = math.MaxUint32
 	receipt.ContractAddress = common.Address{}
 	receipt.GasUsed = 0
+	receipt.EffectiveGasPrice = nil
+	receipt.BlobGasUsed = 0
+	receipt.BlobGasPrice = nil
 
 	clearComputedFieldsOnLogs(t, receipt.Logs)
 }
