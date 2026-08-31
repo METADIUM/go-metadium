@@ -389,7 +389,11 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 		} else if len(receipts) < len(txs) {
 			txs = txs[:len(receipts)]
 		}
-		if err := receipts.DeriveFields(config, block.Hash(), block.NumberU64(), txs); err != nil {
+		var blobGasPrice *big.Int
+		if excessBlobGas := block.ExcessBlobGas(); excessBlobGas != nil {
+			blobGasPrice = eip4844.CalcBlobFee(*excessBlobGas)
+		}
+		if err := receipts.DeriveFields(config, block.Hash(), block.NumberU64(), block.BaseFee(), blobGasPrice, txs); err != nil {
 			panic(err)
 		}
 
