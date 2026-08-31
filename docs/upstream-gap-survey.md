@@ -1,6 +1,9 @@
 # Upstream go-ethereum Gap Survey — Hard-Fork vs Non-Fork Work
 
-Status: survey, 2026-08-13. Baseline `dev` after the m1.1.2 release.
+Status: survey, 2026-08-13; §4 and §6 updated 2026-08-31. Baseline `dev` after
+the m1.1.2 release — the measurements below are a snapshot at that tag, so
+running the Method commands against a later `dev` gives larger numbers without
+any of them being wrong.
 
 This document records what go-metadium is missing relative to upstream
 go-ethereum, and splits it into work that needs a hard fork and work that does
@@ -41,7 +44,7 @@ git show v1.17.5:core/vm/eips.go | grep -oE '^\s+[0-9]{3,4}:\s+enable[0-9]+'
 |---|---|---|
 | Hard fork required | Prague / Osaka / Amsterdam EIP families | C |
 | No fork required | storage, log index, RPC, P2P, tooling | A and B |
-| Security | CVE backports; **one real gap** remains | A (now) |
+| Security | CVE backports; **all applied** | A (done) |
 | Constraints | rebase conflict surface, protocol numbering, fork axis | decision input |
 
 ## 2. Hard-fork work (consensus rules)
@@ -113,7 +116,7 @@ walking adjacent release tags, and the state of this tree:
 | 2026-22862 / 22868 | high / medium | `638741b08 crypto/ecies: use aes blocksize`, `fdfd1235a core/txpool: drop peers on invalid KZG proofs` | Covered by different means: length guard at `symDecrypt`, and peer drop on `ErrInvalidBlob` in `eth/fetcher/tx_fetcher.go` |
 | 2026-26314 | high | `895a8597c crypto/secp256k1: fix coordinate check` | Coordinate bound check present in `crypto/secp256k1/curve.go`. The `ext.h` half has now been ported; the non-cgo curve override has not, and does not apply (see below) |
 | 2026-26315 | medium | `46bee92f9 crypto/ecies: fix ECIES invalid-curve handling` | Covered: an off-curve point is refused when `Decrypt` decodes it, before ECDH. The `GenerateShared` check has been ported as insurance |
-| **2026-26313** | medium | **`0cba803fb eth/protocols/eth, eth/protocols/snap: delayed p2p message decoding`** (v1.17.0) | **The one real gap.** Nothing in the existing hardening covers it; a scoped mitigation is described below |
+| **2026-26313** | medium | **`0cba803fb eth/protocols/eth, eth/protocols/snap: delayed p2p message decoding`** (v1.17.0) | **Applied.** The unsolicited-response path is gated for both protocols on `dev` (#94, #96). The deferred-decoding remainder belongs with the base jump — see below |
 
 Three notes:
 
@@ -142,11 +145,18 @@ across the eth/69-72 protocol layout and turns `p2p/tracker` into a per-peer
 instance, 26 files against code this tree does not have. The part that closes
 the unsolicited path does transplant, and is scoped as its own change: decode
 only the request id of a response, confirm it belongs to an in-flight request,
-and decode the payload after that. The rest — deferring until the response is
-checked against the request's limits, and the same treatment for
-`eth/protocols/snap` — belongs with the base jump in Track B. The snap response
-path is in any case unreachable here while `--syncmode snap` is rejected
-outright.
+and decode the payload after that. That is now on `dev` for both protocols:
+`eth/protocols/eth/response_gate.go` (#94) and
+`eth/protocols/snap/response_gate.go` (#96). What remains — deferring until the
+response has been checked against the request's limits — belongs with the base
+jump in Track B.
+
+An earlier version of this section said the snap path was unreachable here
+because `--syncmode snap` is rejected outright. That is wrong, and the review of
+#94 is what established it: what a peer may send is settled by capability
+negotiation, not by our syncmode, and `snap/1` is advertised whenever
+`SnapshotCache` is non-zero — which it is by default. #96 exists because of that
+correction.
 
 ## 5. Constraints
 
@@ -197,10 +207,16 @@ how governance carries the setting.
 Security and node-side improvements on the current base, shipped as ordinary
 patch releases. No fork block, no consensus change, so no exchange coordination
 window is needed; operators upgrade at their convenience and mixed versions
-interoperate. First items:
+interoperate.
 
-1. Backport CVE-2026-26313 (`0cba803fb`) — the only outstanding security gap.
-2. The defence-in-depth group from §4 plus the comment correction.
+Both items this section originally listed are done and merged into `dev`: the
+unsolicited-response gate for CVE-2026-26313 (#94 for `eth`, #96 for `snap`) and
+the defence-in-depth group from §4 together with the comment correction (#94).
+**Track A has no outstanding security item.**
+
+What is left on this track is the remainder of `0cba803fb` — deferring decoding
+until the response has been checked against the request's limits — which waits
+on the base jump rather than on a decision here.
 
 ### Track B — base jump, still no fork
 
