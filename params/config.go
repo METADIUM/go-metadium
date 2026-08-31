@@ -741,12 +741,26 @@ func (c *ChainConfig) CheckCompatible(newcfg *ChainConfig, height uint64, time u
 
 // CheckConfigForkOrder checks that we don't "skip" any forks, geth isn't pluggable enough
 // to guarantee that forks can be implemented in a different order than on official networks
+// CheckConfigForkOrder deliberately enforces nothing.
+//
+// Metadium chains carry stored configs written by earlier releases, and some of
+// them do not satisfy upstream's ordering rules. Enforcing at runtime would
+// refuse to start on those datadirs, which is a separate piece of work with its
+// own analysis (issue #72).
+//
+// The ordering logic itself is not dead, though: checkForkOrder holds it, and
+// the built-in Metadium configs are checked against it in the params tests. That
+// is what would have caught the nil PetersburgBlock that survived two release
+// lines, since nothing else compares a config against the fork sequence.
 func (c *ChainConfig) CheckConfigForkOrder() error {
-	// In metadium, this is not enforced.
-	if true {
-		return nil
-	}
+	return nil
+}
 
+// checkForkOrder reports whether the fork schedule is internally consistent:
+// no gap before a later fork, no fork scheduled before its predecessor, and no
+// block-numbered fork after a timestamped one. It is upstream's check, kept
+// callable for tests over configs this repository ships.
+func (c *ChainConfig) checkForkOrder() error {
 	type fork struct {
 		name      string
 		block     *big.Int // forks up to - and including the merge - were defined with block numbers

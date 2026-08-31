@@ -26,12 +26,15 @@ import (
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metadium/logrot"
 	"github.com/ethereum/go-ethereum/metadium/metclient"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/urfave/cli/v2"
 )
 
@@ -563,6 +566,66 @@ type genesisReturn struct {
 	Result string `json:"result"`
 }
 
+// canonicalGenesisConfig checks a genesis document served by a peer and, when it
+// is one of the canonical Metadium networks, replaces its chain config with the
+// compiled one.
+//
+// The genesis block hash does not cover the chain config, so a file that is
+// stale by a fork -- one written before camelliaBlock existed, say -- produces
+// the canonical hash while carrying a config that diverges from this binary's.
+// Initializing an empty datadir with such a file runs the first session on that
+// config, because $datadir/genesis.json is preferred over the embedded one
+// (core.loadDefaultGenesisFile). A restart self-heals, since the stored-config
+// path substitutes the compiled config, but the first session does not (#72).
+//
+// Everything except "config" is passed through byte for byte: the block fields
+// are what the hash is computed over, and they matched. A genesis that is not a
+// canonical network is left alone -- private networks bootstrap from a peer
+// exactly this way, and there is nothing to compare them against.
+//
+// It returns the document to write, the network name ("" when not canonical),
+// and whether the config was replaced.
+func canonicalGenesisConfig(doc []byte) ([]byte, string, bool, error) {
+	var parsed core.Genesis
+	if err := json.Unmarshal(doc, &parsed); err != nil {
+		return nil, "", false, fmt.Errorf("the served genesis does not parse: %w", err)
+	}
+	var (
+		network  string
+		compiled *params.ChainConfig
+	)
+	switch parsed.ToBlock().Hash() {
+	case params.MetadiumMainnetGenesisHash:
+		network, compiled = "mainnet", params.MetadiumMainnetChainConfig
+	case params.MetadiumTestnetGenesisHash:
+		network, compiled = "testnet", params.MetadiumTestnetChainConfig
+	default:
+		return doc, "", false, nil
+	}
+	served, err := json.Marshal(parsed.Config)
+	if err != nil {
+		return nil, network, false, err
+	}
+	want, err := json.Marshal(compiled)
+	if err != nil {
+		return nil, network, false, err
+	}
+	if bytes.Equal(served, want) {
+		return doc, network, false, nil
+	}
+	// Replace the config key only, leaving the rest of the document untouched.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &raw); err != nil {
+		return nil, network, false, err
+	}
+	raw["config"] = want
+	out, err := json.MarshalIndent(raw, "", "    ")
+	if err != nil {
+		return nil, network, false, err
+	}
+	return append(out, '\n'), network, true, nil
+}
+
 func downloadGenesis(ctx *cli.Context) error {
 	url := ctx.String(urlFlag.Name)
 	if url == "" {
@@ -586,6 +649,20 @@ func downloadGenesis(ctx *cli.Context) error {
 		return err
 	}
 
+	doc, network, replaced, err := canonicalGenesisConfig([]byte(genesis.Result))
+	if err != nil {
+		return err
+	}
+	switch {
+	case network == "":
+		log.Info("Genesis is not a canonical Metadium network, using it as served")
+	case replaced:
+		log.Warn("Peer served a stale chain config for a canonical network; using the compiled one",
+			"network", network)
+	default:
+		log.Info("Genesis matches the canonical network and its compiled config", "network", network)
+	}
+
 	w := os.Stdout
 	if fn := ctx.String(outFlag.Name); fn != "" {
 		w, err = os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
@@ -595,7 +672,7 @@ func downloadGenesis(ctx *cli.Context) error {
 		defer w.Close()
 	}
 
-	w.Write([]byte(genesis.Result))
+	w.Write(doc)
 	return nil
 }
 
