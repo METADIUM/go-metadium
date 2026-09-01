@@ -32,6 +32,17 @@ func asPoA(t *testing.T) {
 	t.Cleanup(func() { params.ConsensusMethod = old })
 }
 
+// setTRS updates the pool's TRS view the way a governance update would: under
+// pool.mu. That is the lock the pool holds when it reads these fields (see
+// trsAndFeePayerSweep, "the caller holds pool.mu"), so assigning them bare
+// races with the reorg loop -- which the race detector reports on these tests.
+func setTRS(pool *LegacyPool, list map[common.Address]bool, subscribe bool) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	pool.trsListMap = list
+	pool.trsSubscribe = subscribe
+}
+
 func TestTRSRejectsRestrictedSender(t *testing.T) {
 	asPoA(t)
 
@@ -41,15 +52,16 @@ func TestTRSRejectsRestrictedSender(t *testing.T) {
 	from := crypto.PubkeyToAddress(key.PublicKey)
 	testAddBalance(pool, from, big.NewInt(1000000))
 
+	listed := map[common.Address]bool{from: true}
+
 	// Not subscribed: the transaction is accepted even if listed.
-	pool.trsListMap = map[common.Address]bool{from: true}
-	pool.trsSubscribe = false
+	setTRS(pool, listed, false)
 	if err := pool.addRemote(transaction(0, 100000, key)); err != nil {
 		t.Fatalf("unsubscribed node rejected listed tx: %v", err)
 	}
 
 	// Subscribed: the next transaction from the listed sender is rejected.
-	pool.trsSubscribe = true
+	setTRS(pool, listed, true)
 	if err := pool.addRemote(transaction(1, 100000, key)); !errors.Is(err, txpool.ErrIncludedTRSList) {
 		t.Fatalf("want ErrIncludedTRSList, got %v", err)
 	}
@@ -65,8 +77,7 @@ func TestTRSRejectsRestrictedRecipient(t *testing.T) {
 	testAddBalance(pool, from, big.NewInt(1000000))
 
 	// transaction() sends to the zero address; restrict that recipient.
-	pool.trsListMap = map[common.Address]bool{{}: true}
-	pool.trsSubscribe = true
+	setTRS(pool, map[common.Address]bool{{}: true}, true)
 	if err := pool.addRemote(transaction(0, 100000, key)); !errors.Is(err, txpool.ErrIncludedTRSList) {
 		t.Fatalf("want ErrIncludedTRSList, got %v", err)
 	}
@@ -102,8 +113,11 @@ func TestTRSSweepCascade(t *testing.T) {
 		toTransaction(1, clean, key),
 		toTransaction(2, clean, key),
 	}
+	// Sync, because the assertion below reads the pending set. addRemote returns
+	// as soon as the transaction is queued and leaves promotion to the reorg
+	// loop, so with it this reads whatever the loop happens to have done.
 	for i, tx := range txs {
-		if err := pool.addRemote(tx); err != nil {
+		if err := pool.addRemoteSync(tx); err != nil {
 			t.Fatalf("failed to add tx %d: %v", i, err)
 		}
 	}
@@ -113,8 +127,7 @@ func TestTRSSweepCascade(t *testing.T) {
 
 	// The recipient lands on the list; the demote sweep must drop nonce 0 and
 	// re-queue (not leak) nonces 1 and 2.
-	pool.trsListMap = map[common.Address]bool{restricted: true}
-	pool.trsSubscribe = true
+	setTRS(pool, map[common.Address]bool{restricted: true}, true)
 
 	pool.mu.Lock()
 	pool.demoteUnexecutables()
@@ -148,7 +161,11 @@ func TestTRSSweepPurgesPending(t *testing.T) {
 	from := crypto.PubkeyToAddress(key.PublicKey)
 	testAddBalance(pool, from, big.NewInt(1000000))
 
-	if err := pool.addRemote(transaction(0, 100000, key)); err != nil {
+	// Sync, so that the transaction has actually been promoted before the
+	// pending count is read and before the sweep runs. See the note in
+	// TestTRSSweepCascade: addRemote hands promotion to the reorg loop,
+	// which is what made this test flake (issue #73).
+	if err := pool.addRemoteSync(transaction(0, 100000, key)); err != nil {
 		t.Fatalf("failed to add tx: %v", err)
 	}
 	pending, _ := pool.Stats()
@@ -158,8 +175,7 @@ func TestTRSSweepPurgesPending(t *testing.T) {
 
 	// The sender lands on the list after admission (e.g. governance update at
 	// the next head); the demotion sweep must purge the pending transaction.
-	pool.trsListMap = map[common.Address]bool{from: true}
-	pool.trsSubscribe = true
+	setTRS(pool, map[common.Address]bool{from: true}, true)
 
 	pool.mu.Lock()
 	pool.demoteUnexecutables()

@@ -3,7 +3,7 @@
   "blockNumber": "0x4",
   "contractAddress": null,
   "cumulativeGasUsed": "0x538d",
-  "effectiveGasPrice": null,
+  "effectiveGasPrice": "0x2325c42f",
   "from": "0x703c4b2bd70c169f5717101caee543299fc946c7",
   "gasUsed": "0x538d",
   "logs": [],

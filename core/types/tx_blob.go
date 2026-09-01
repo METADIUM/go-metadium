@@ -351,6 +351,17 @@ func (tx *BlobTx) blobGasCost() *big.Int {
 	return new(big.Int).Mul(tx.MaxFeePerBlobGas.ToBig(), new(big.Int).SetUint64(uint64(len(tx.BlobHashes)*131072)))
 }
 
+func (tx *BlobTx) effectiveGasPrice(dst *big.Int, baseFee *big.Int) *big.Int {
+	if baseFee == nil {
+		return dst.Set(tx.GasFeeCap.ToBig())
+	}
+	tip := dst.Sub(tx.GasFeeCap.ToBig(), baseFee)
+	if tip.Cmp(tx.GasTipCap.ToBig()) > 0 {
+		tip.Set(tx.GasTipCap.ToBig())
+	}
+	return tip.Add(tip, baseFee)
+}
+
 func (tx *BlobTx) rawSignatureValues() (*big.Int, *big.Int, *big.Int) {
 	return tx.V.ToBig(), tx.R.ToBig(), tx.S.ToBig()
 }

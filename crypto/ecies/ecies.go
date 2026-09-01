@@ -122,6 +122,33 @@ func (prv *PrivateKey) GenerateShared(pub *PublicKey, skLen, macLen int) (sk []b
 	if prv.PublicKey.Curve != pub.Curve {
 		return nil, ErrInvalidCurve
 	}
+	// Reject a point that is not on the curve before it reaches ScalarMult. An
+	// invalid-curve point turns the multiplication into an oracle that leaks
+	// bits of the private key. Upstream go-ethereum added this check in
+	// "crypto/ecies: fix ECIES invalid-curve handling" (46bee92f9, CVE-2026-26315).
+	//
+	// The handshake path into this function is already covered here: Decrypt
+	// obtains the peer's point through elliptic.Unmarshal, which validates it for
+	// both curves this tree resolves S256() to (see the note in
+	// crypto/secp256k1/curve.go on the unmarshaler interface), so an off-curve
+	// point is refused before GenerateShared is reached. This check covers the
+	// callers that build a PublicKey directly instead, and keeps the guarantee
+	// from depending on that property of the curve types.
+	//
+	// The range check is explicit for the same reason it is in
+	// crypto.UnmarshalPubkey: IsOnCurve rejects an unreduced coordinate on the
+	// cgo curve but not on btcec, which reduces before testing. Keeping it here
+	// makes the guard equivalent in both build modes.
+	if pub.X == nil || pub.Y == nil {
+		return nil, ErrInvalidPublicKey
+	}
+	if p := pub.Curve.Params().P; pub.X.Sign() < 0 || pub.Y.Sign() < 0 ||
+		pub.X.Cmp(p) >= 0 || pub.Y.Cmp(p) >= 0 {
+		return nil, ErrInvalidPublicKey
+	}
+	if !pub.Curve.IsOnCurve(pub.X, pub.Y) {
+		return nil, ErrInvalidPublicKey
+	}
 	if skLen+macLen > MaxSharedKeyLength(pub) {
 		return nil, ErrSharedKeyTooBig
 	}

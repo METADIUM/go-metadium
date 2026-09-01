@@ -25,6 +25,7 @@ import (
 	mrand "math/rand"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -46,6 +47,26 @@ const (
 	// Endpoint resolution is throttled with bounded backoff.
 	initialResolveDelay = 60 * time.Second
 	maxResolveDelay     = time.Hour
+
+	// A dial task holds its destination in d.dialing for as long as it runs, and
+	// checkDial refuses to dial a node that is already in there. Nothing bounds how
+	// long a task may run: the socket dial and both handshakes have deadlines, but
+	// Server.checkpoint then waits on the run loop with none, so a task that never
+	// returns keeps its destination unreachable for the life of the process. Static
+	// peers never come back, and admin_addPeer keeps reporting success because it
+	// only registers the node -- which is what makes it hard to see.
+	//
+	// After this much time the scheduler gives up on a task and releases the slot,
+	// so a stall degrades to a delayed retry instead of a permanent one. The bound
+	// is far beyond any healthy dial: defaultDialTimeout is 15s and each handshake
+	// has a 5s deadline, so a task that is still running here is not making
+	// progress. The abandoned goroutine is left alone -- there is no way to cancel
+	// it -- and if it ever does connect, the server rejects the duplicate. It does
+	// still report back, so shutdown drains it like any other. A destination that
+	// stays wedged is retried on this period and accumulates one goroutine each
+	// time, which is the cost of not being able to cancel; the alternative is the
+	// peer never being dialed again.
+	stalledDialTimeout = 2 * time.Minute
 )
 
 // NodeDialer is used to connect to nodes in the network, typically by using
@@ -109,6 +130,11 @@ type dialScheduler struct {
 	peers     map[enode.ID]struct{}  // all connected peers
 	dialPeers int                    // current number of dialed peers
 
+	// running counts the task goroutines that have not reported back yet. It differs
+	// from len(dialing) once a slot has been reaped: the task keeps running and will
+	// still send on doneCh, so shutdown has to drain this many, not that many.
+	running int
+
 	// The static map tracks all static dial tasks. The subset of usable static dial tasks
 	// (i.e. those passing checkDial) is kept in staticPool. The scheduler prefers
 	// launching random static tasks from the pool over launching dynamic dials from the
@@ -119,6 +145,9 @@ type dialScheduler struct {
 	// The dial history keeps recently dialed nodes. Members of history are not dialed.
 	history      expHeap
 	historyTimer *mclock.Alarm
+
+	// stalledTimer fires when the oldest entry in dialing is due to be given up on.
+	stalledTimer *mclock.Alarm
 
 	// for logStats
 	lastStatsLog     mclock.AbsTime
@@ -163,6 +192,7 @@ func newDialScheduler(config dialConfig, it enode.Iterator, setupFunc dialSetupF
 	d := &dialScheduler{
 		dialConfig:   cfg,
 		historyTimer: mclock.NewAlarm(cfg.clock),
+		stalledTimer: mclock.NewAlarm(cfg.clock),
 		setupFunc:    setupFunc,
 		dialing:      make(map[enode.ID]*dialTask),
 		static:       make(map[enode.ID]*dialTask),
@@ -237,6 +267,7 @@ loop:
 			nodesCh = nil
 		}
 		d.rearmHistoryTimer()
+		d.rearmStalledTimer()
 		d.logStats()
 
 		select {
@@ -248,8 +279,13 @@ loop:
 			}
 
 		case task := <-d.doneCh:
-			id := task.dest.ID()
-			delete(d.dialing, id)
+			id := task.dest().ID()
+			d.running--
+			// The slot may already have been given up on and handed to a later
+			// task for the same node, in which case this one no longer owns it.
+			if d.dialing[id] == task {
+				delete(d.dialing, id)
+			}
 			d.updateStaticPool(id)
 			d.doneSinceLastLog++
 
@@ -300,6 +336,9 @@ loop:
 		case <-d.historyTimer.C():
 			d.expireHistory()
 
+		case <-d.stalledTimer.C():
+			d.reapStalledDials()
+
 		case <-d.ctx.Done():
 			it.Close()
 			break loop
@@ -307,7 +346,8 @@ loop:
 	}
 
 	d.historyTimer.Stop()
-	for range d.dialing {
+	d.stalledTimer.Stop()
+	for ; d.running > 0; d.running-- {
 		<-d.doneCh
 	}
 	d.wg.Done()
@@ -348,6 +388,53 @@ func (d *dialScheduler) rearmHistoryTimer() {
 		return
 	}
 	d.historyTimer.Schedule(d.history.nextExpiry())
+}
+
+// rearmStalledTimer configures d.stalledTimer to fire when the oldest running
+// dial task is due to be given up on.
+func (d *dialScheduler) rearmStalledTimer() {
+	if len(d.dialing) == 0 {
+		return
+	}
+	var next mclock.AbsTime
+	first := true
+	for _, task := range d.dialing {
+		if first || task.reapAt < next {
+			next, first = task.reapAt, false
+		}
+	}
+	d.stalledTimer.Schedule(next)
+}
+
+// reapStalledDials releases the slots held by dial tasks that have run for longer
+// than stalledDialTimeout, so their destinations can be dialed again. The tasks
+// themselves keep running; they cannot be cancelled, and the slot is what matters.
+func (d *dialScheduler) reapStalledDials() {
+	now := d.clock.Now()
+	for id, task := range d.dialing {
+		if now < task.reapAt {
+			continue
+		}
+		d.log.Warn("Giving up on stalled p2p dial",
+			"id", id, "flag", task.flags, "elapsed", now.Sub(task.startedAt))
+		delete(d.dialing, id)
+		// A static destination is served by one long-lived task object, which
+		// updateStaticPool returns to the pool and startStaticDials launches
+		// again. Handing that same object to a replacement while the abandoned
+		// goroutine still holds it would put two runs inside one dialTask: the
+		// identity check in the doneCh handler could not tell them apart, and
+		// both would write lastResolved and resolveDelay in resolve(). Give the
+		// static entry a fresh object and leave the old one to its goroutine.
+		//
+		// The resolver backoff is not carried over, because a task that got far
+		// enough to stall has already resolved -- needResolve is false once dest
+		// has an IP -- so there is no backoff worth preserving, and reading those
+		// fields here would be the very race this avoids.
+		if cur, ok := d.static[id]; ok && cur == task {
+			d.static[id] = newDialTask(task.dest(), task.flags)
+		}
+		d.updateStaticPool(id)
+	}
 }
 
 // expireHistory removes expired items from d.history.
@@ -410,7 +497,7 @@ func (d *dialScheduler) startStaticDials(n int) (started int) {
 // updateStaticPool attempts to move the given static dial back into staticPool.
 func (d *dialScheduler) updateStaticPool(id enode.ID) {
 	task, ok := d.static[id]
-	if ok && task.staticPoolIndex < 0 && d.checkDial(task.dest) == nil {
+	if ok && task.staticPoolIndex < 0 && d.checkDial(task.dest()) == nil {
 		d.addToStaticPool(task)
 	}
 }
@@ -437,10 +524,15 @@ func (d *dialScheduler) removeFromStaticPool(idx int) {
 
 // startDial runs the given dial task in a separate goroutine.
 func (d *dialScheduler) startDial(task *dialTask) {
-	d.log.Trace("Starting p2p dial", "id", task.dest.ID(), "ip", task.dest.IP(), "flag", task.flags)
-	hkey := string(task.dest.ID().Bytes())
-	d.history.add(hkey, d.clock.Now().Add(dialHistoryExpiration))
-	d.dialing[task.dest.ID()] = task
+	node := task.dest()
+	d.log.Trace("Starting p2p dial", "id", node.ID(), "ip", node.IP(), "flag", task.flags)
+	hkey := string(node.ID().Bytes())
+	now := d.clock.Now()
+	d.history.add(hkey, now.Add(dialHistoryExpiration))
+	task.startedAt = now
+	task.reapAt = now.Add(stalledDialTimeout)
+	d.dialing[node.ID()] = task
+	d.running++
 	go func() {
 		task.run(d)
 		d.doneCh <- task
@@ -451,19 +543,30 @@ func (d *dialScheduler) startDial(task *dialTask) {
 type dialTask struct {
 	staticPoolIndex int
 	flags           connFlag
+	// startedAt and reapAt are set by the scheduler before the task is launched and
+	// read only by the scheduler, so the task goroutine never touches them.
+	startedAt mclock.AbsTime
+	reapAt    mclock.AbsTime
+
 	// These fields are private to the task and should not be
 	// accessed by dialScheduler while the task is running.
-	dest         *enode.Node
+	destPtr      atomic.Pointer[enode.Node]
 	lastResolved mclock.AbsTime
 	resolveDelay time.Duration
 }
 
 func newDialTask(dest *enode.Node, flags connFlag) *dialTask {
-	return &dialTask{dest: dest, flags: flags, staticPoolIndex: -1}
+	t := &dialTask{flags: flags, staticPoolIndex: -1}
+	t.destPtr.Store(dest)
+	return t
 }
 
 type dialError struct {
 	error
+}
+
+func (t *dialTask) dest() *enode.Node {
+	return t.destPtr.Load()
 }
 
 func (t *dialTask) run(d *dialScheduler) {
@@ -471,19 +574,19 @@ func (t *dialTask) run(d *dialScheduler) {
 		return
 	}
 
-	err := t.dial(d, t.dest)
+	err := t.dial(d, t.dest())
 	if err != nil {
 		// For static nodes, resolve one more time if dialing fails.
 		if _, ok := err.(*dialError); ok && t.flags&staticDialedConn != 0 {
 			if t.resolve(d) {
-				t.dial(d, t.dest)
+				t.dial(d, t.dest())
 			}
 		}
 	}
 }
 
 func (t *dialTask) needResolve() bool {
-	return t.flags&staticDialedConn != 0 && t.dest.IP() == nil
+	return t.flags&staticDialedConn != 0 && t.dest().IP() == nil
 }
 
 // resolve attempts to find the current endpoint for the destination
@@ -502,29 +605,31 @@ func (t *dialTask) resolve(d *dialScheduler) bool {
 	if t.lastResolved > 0 && time.Duration(d.clock.Now()-t.lastResolved) < t.resolveDelay {
 		return false
 	}
-	resolved := d.resolver.Resolve(t.dest)
+
+	node := t.dest()
+	resolved := d.resolver.Resolve(node)
 	t.lastResolved = d.clock.Now()
 	if resolved == nil {
 		t.resolveDelay *= 2
 		if t.resolveDelay > maxResolveDelay {
 			t.resolveDelay = maxResolveDelay
 		}
-		d.log.Debug("Resolving node failed", "id", t.dest.ID(), "newdelay", t.resolveDelay)
+		d.log.Debug("Resolving node failed", "id", node.ID(), "newdelay", t.resolveDelay)
 		return false
 	}
 	// The node was found.
 	t.resolveDelay = initialResolveDelay
-	t.dest = resolved
-	d.log.Debug("Resolved node", "id", t.dest.ID(), "addr", &net.TCPAddr{IP: t.dest.IP(), Port: t.dest.TCP()})
+	t.destPtr.Store(resolved)
+	d.log.Debug("Resolved node", "id", resolved.ID(), "addr", &net.TCPAddr{IP: resolved.IP(), Port: resolved.TCP()})
 	return true
 }
 
 // dial performs the actual connection attempt.
 func (t *dialTask) dial(d *dialScheduler, dest *enode.Node) error {
 	dialMeter.Mark(1)
-	fd, err := d.dialer.Dial(d.ctx, t.dest)
+	fd, err := d.dialer.Dial(d.ctx, dest)
 	if err != nil {
-		d.log.Trace("Dial error", "id", t.dest.ID(), "addr", nodeAddr(t.dest), "conn", t.flags, "err", cleanupDialErr(err))
+		d.log.Trace("Dial error", "id", dest.ID(), "addr", nodeAddr(dest), "conn", t.flags, "err", cleanupDialErr(err))
 		dialConnectionError.Mark(1)
 		return &dialError{err}
 	}
@@ -532,8 +637,9 @@ func (t *dialTask) dial(d *dialScheduler, dest *enode.Node) error {
 }
 
 func (t *dialTask) String() string {
-	id := t.dest.ID()
-	return fmt.Sprintf("%v %x %v:%d", t.flags, id[:8], t.dest.IP(), t.dest.TCP())
+	node := t.dest()
+	id := node.ID()
+	return fmt.Sprintf("%v %x %v:%d", t.flags, id[:8], node.IP(), node.TCP())
 }
 
 func cleanupDialErr(err error) error {

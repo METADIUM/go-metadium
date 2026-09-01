@@ -14,22 +14,27 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 
-	"github.com/charlanxcc/logrot"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metadium/logrot"
 	"github.com/ethereum/go-ethereum/metadium/metclient"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/urfave/cli/v2"
 )
 
@@ -561,6 +566,66 @@ type genesisReturn struct {
 	Result string `json:"result"`
 }
 
+// canonicalGenesisConfig checks a genesis document served by a peer and, when it
+// is one of the canonical Metadium networks, replaces its chain config with the
+// compiled one.
+//
+// The genesis block hash does not cover the chain config, so a file that is
+// stale by a fork -- one written before camelliaBlock existed, say -- produces
+// the canonical hash while carrying a config that diverges from this binary's.
+// Initializing an empty datadir with such a file runs the first session on that
+// config, because $datadir/genesis.json is preferred over the embedded one
+// (core.loadDefaultGenesisFile). A restart self-heals, since the stored-config
+// path substitutes the compiled config, but the first session does not (#72).
+//
+// Everything except "config" is passed through byte for byte: the block fields
+// are what the hash is computed over, and they matched. A genesis that is not a
+// canonical network is left alone -- private networks bootstrap from a peer
+// exactly this way, and there is nothing to compare them against.
+//
+// It returns the document to write, the network name ("" when not canonical),
+// and whether the config was replaced.
+func canonicalGenesisConfig(doc []byte) ([]byte, string, bool, error) {
+	var parsed core.Genesis
+	if err := json.Unmarshal(doc, &parsed); err != nil {
+		return nil, "", false, fmt.Errorf("the served genesis does not parse: %w", err)
+	}
+	var (
+		network  string
+		compiled *params.ChainConfig
+	)
+	switch parsed.ToBlock().Hash() {
+	case params.MetadiumMainnetGenesisHash:
+		network, compiled = "mainnet", params.MetadiumMainnetChainConfig
+	case params.MetadiumTestnetGenesisHash:
+		network, compiled = "testnet", params.MetadiumTestnetChainConfig
+	default:
+		return doc, "", false, nil
+	}
+	served, err := json.Marshal(parsed.Config)
+	if err != nil {
+		return nil, network, false, err
+	}
+	want, err := json.Marshal(compiled)
+	if err != nil {
+		return nil, network, false, err
+	}
+	if bytes.Equal(served, want) {
+		return doc, network, false, nil
+	}
+	// Replace the config key only, leaving the rest of the document untouched.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &raw); err != nil {
+		return nil, network, false, err
+	}
+	raw["config"] = want
+	out, err := json.MarshalIndent(raw, "", "    ")
+	if err != nil {
+		return nil, network, false, err
+	}
+	return append(out, '\n'), network, true, nil
+}
+
 func downloadGenesis(ctx *cli.Context) error {
 	url := ctx.String(urlFlag.Name)
 	if url == "" {
@@ -584,6 +649,20 @@ func downloadGenesis(ctx *cli.Context) error {
 		return err
 	}
 
+	doc, network, replaced, err := canonicalGenesisConfig([]byte(genesis.Result))
+	if err != nil {
+		return err
+	}
+	switch {
+	case network == "":
+		log.Info("Genesis is not a canonical Metadium network, using it as served")
+	case replaced:
+		log.Warn("Peer served a stale chain config for a canonical network; using the compiled one",
+			"network", network)
+	default:
+		log.Info("Genesis matches the canonical network and its compiled config", "network", network)
+	}
+
 	w := os.Stdout
 	if fn := ctx.String(outFlag.Name); fn != "" {
 		w, err = os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
@@ -593,38 +672,24 @@ func downloadGenesis(ctx *cli.Context) error {
 		defer w.Close()
 	}
 
-	w.Write([]byte(genesis.Result))
+	w.Write(doc)
 	return nil
 }
 
-// borrowed from https://github.com/charlanxcc/logrot
-func parseSize(size string) (int, error) {
-	m := 1
-	size = strings.TrimSpace(size)
-	switch size[len(size)-1:] {
-	case "k":
-		fallthrough
-	case "K":
-		m = 1024
-		size = strings.TrimSpace(size[:len(size)-1])
-	case "m":
-		fallthrough
-	case "M":
-		m = 1024 * 1024
-		size = strings.TrimSpace(size[:len(size)-1])
-	case "g":
-		fallthrough
-	case "G":
-		m = 1024 * 1024 * 1024
-		size = strings.TrimSpace(size[:len(size)-1])
-	}
-
-	i, err := strconv.Atoi(size)
-	if err != nil {
-		return 0, err
-	} else {
-		return i * m, nil
-	}
+// ignoreSIGPIPE keeps a closed log pipe from taking the node down.
+//
+// Go gives SIGPIPE on fd 1 and 2 the default disposition, so a node whose
+// stdout is a pipe dies the moment the reader exits — no panic, no log line,
+// nothing to find afterwards. Ignoring the signal turns those writes into
+// ordinary EPIPE errors, which the logger discards, so the node keeps
+// producing blocks while blind.
+//
+// It is installed only where the descriptors are expected to be pipes for the
+// life of the process: the node action itself (gmet.sh pipes it into logrot)
+// and the in-process --log path. One-shot commands keep the default so that
+// `gmet dump ... | head` still terminates when its reader does.
+func ignoreSIGPIPE() {
+	signal.Ignore(unix.SIGPIPE)
 }
 
 // logrot frontend
@@ -638,7 +703,7 @@ func logrota(ctx *cli.Context) error {
 	}
 
 	var err error
-	logSize := 10 * 1024 * 1024
+	logSize := int64(10 * 1024 * 1024)
 	logCount := 5
 	logOpts := strings.Split(logflag, ",")
 	logFile := ""
@@ -649,15 +714,20 @@ func logrota(ctx *cli.Context) error {
 		logFile = strings.TrimSpace(logOpts[0])
 	}
 	if len(logOpts) >= 2 {
-		if logSize, err = parseSize(logOpts[1]); err != nil {
+		if logSize, err = logrot.ParseSize(logOpts[1]); err != nil {
 			return err
 		}
 		logCount = 1
 	}
 	if len(logOpts) >= 3 {
-		if logCount, err = parseSize(logOpts[2]); err != nil {
-			return err
+		// A count, not a size: "5g" here would quietly ask for five billion
+		// generations, so no suffixes.
+		if logCount, err = strconv.Atoi(strings.TrimSpace(logOpts[2])); err != nil {
+			return fmt.Errorf("invalid log count %q: %v", logOpts[2], err)
 		}
+	}
+	if logSize <= 0 || logCount <= 0 {
+		return fmt.Errorf("log size and count must be positive, got %d and %d", logSize, logCount)
 	}
 
 	if dir := filepath.Dir(logFile); dir != "" && dir != "." {
@@ -668,12 +738,37 @@ func logrota(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	unix.Close(1) // stdout
-	unix.Close(2) // stderr
+	// Dup2 closes its target atomically; closing 1/2 first would open a
+	// window in which any concurrent open() could claim the descriptor.
 	unix.Dup2(int(w.Fd()), 1)
 	unix.Dup2(int(w.Fd()), 2)
 
-	go logrot.LogRotate(r, logFile, logSize, logCount)
+	// From here on the process's own stdout/stderr are backed by this pipe,
+	// so a dead drainer must cost EPIPE, not the process.
+	ignoreSIGPIPE()
+
+	// Diagnostics cannot go to stderr here: stderr is the pipe this goroutine
+	// is draining, so a broken log file would feed its own error reports back
+	// into itself. They go beside the log instead.
+	var diagw io.Writer = io.Discard
+	if diag, derr := os.OpenFile(logFile+".err", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600); derr == nil {
+		diagw = diag
+	}
+
+	go func() {
+		// Run returns only once the pipe is closed or its parameters were
+		// rejected — the latter cannot reach here, logSize/logCount are
+		// validated above before the descriptors were touched. Whatever the
+		// reason, leave it in the diagnostics rather than in the pipe.
+		if err := logrot.Run(r, logFile, logSize, logCount, diagw); err != nil {
+			fmt.Fprintf(diagw, "logrot: %s: rotation ended: %v (log output is being discarded)\n",
+				time.Now().Format("2006-01-02T15:04:05Z0700"), err)
+		}
+
+		// Nothing else drains this pipe, so keep it drained regardless: a
+		// full pipe would block the node forever on its next log write.
+		io.Copy(io.Discard, r)
+	}()
 
 	return nil
 }

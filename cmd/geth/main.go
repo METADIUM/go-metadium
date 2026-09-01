@@ -281,7 +281,9 @@ func init() {
 
 	app.Before = func(ctx *cli.Context) error {
 		// setup rotating log if specified
-		logrota(ctx)
+		if err := logrota(ctx); err != nil {
+			return err
+		}
 
 		maxprocs.Set() // Automatically set GOMAXPROCS to match Linux container CPU quota.
 		flags.MigrateGlobalFlags(ctx)
@@ -371,6 +373,13 @@ func geth(ctx *cli.Context) error {
 	if args := ctx.Args().Slice(); len(args) > 0 {
 		return fmt.Errorf("invalid command: %q", args[0])
 	}
+
+	// Keep a broken log pipe from killing the node. gmet.sh runs us as
+	// `gmet 2>&1 | logrot ...`, and Go handles SIGPIPE on fd 1 and 2 with the
+	// default disposition: if the reader ever goes away, the process dies on
+	// its next log write, silently. Only the node ignores the signal —
+	// one-shot commands keep the default so their pipelines terminate.
+	ignoreSIGPIPE()
 
 	prepare(ctx)
 	stack, backend := makeFullNode(ctx)

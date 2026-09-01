@@ -14,6 +14,13 @@ warn() { echo "[$(date '+%H:%M:%S')] [WARN] $*"; }
 [[ -f genesis.json ]] || { echo "[ERROR] genesis.json not found. Please run setup.sh first."; exit 1; }
 
 log "=== Starting PoA private network ==="
+# setup.sh records the owner of data/ in .env. Trees set up before .env existed
+# have none, so supply the current user rather than let the compose default
+# (1000:1000) hand the data directory to the wrong uid.
+if [[ ! -f .env ]]; then
+  GMET_UID="$(id -u)"; GMET_GID="$(id -g)"; export GMET_UID GMET_GID
+  log "No .env — running containers as $GMET_UID:$GMET_GID"
+fi
 docker compose up -d
 
 log "Waiting for node RPC..."
