@@ -336,10 +336,6 @@ FEE_PAYER="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 # shellcheck disable=SC2034  # TO_ADDR used in heredoc/python blocks below
 TO_ADDR="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
 
-# Record feePayer balance (before)
-FEEPAYER_BEFORE=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBalance\",\"params\":[\"$FEE_PAYER\",\"latest\"],\"id\":1}" | \
-  python3 -c "import sys,json; d=json.load(sys.stdin); print(int(d.get('result','0x0'),16))" 2>/dev/null || echo "0")
-
 # Record sender balance (before)
 SENDER_BEFORE=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBalance\",\"params\":[\"$SENDER\",\"latest\"],\"id\":1}" | \
   python3 -c "import sys,json; d=json.load(sys.stdin); print(int(d.get('result','0x0'),16))" 2>/dev/null || echo "0")
@@ -417,17 +413,20 @@ else
             fail "I-08: Fee Delegation tx failed (status=$STATUS)"
           fi
 
-          # I-09: Verify feePayer balance decreased
-          FEEPAYER_AFTER=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBalance\",\"params\":[\"$FEE_PAYER\",\"latest\"],\"id\":1}" | \
-            python3 -c "import sys,json; d=json.load(sys.stdin); print(int(d.get('result','0x0'),16))" 2>/dev/null || echo "0")
-
+          # I-09: Verify feePayer field is set in the mined tx (= FEE_PAYER, not sender).
+          # Balance check is unreliable since FEE_PAYER is node2's etherbase: on a
+          # rewarded network sealing income in the same window can exceed the gas
+          # just paid, and the balance rises (issue #100; same fix as spoa-test.sh).
           SENDER_AFTER=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBalance\",\"params\":[\"$SENDER\",\"latest\"],\"id\":1}" | \
             python3 -c "import sys,json; d=json.load(sys.stdin); print(int(d.get('result','0x0'),16))" 2>/dev/null || echo "0")
 
-          if [[ "$FEEPAYER_AFTER" -lt "$FEEPAYER_BEFORE" ]]; then
-            pass "I-09: feePayer balance decreased (before=$FEEPAYER_BEFORE after=$FEEPAYER_AFTER)"
+          FP_IN_TX=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getTransactionByHash\",\"params\":[\"$FD_HASH\"],\"id\":1}" | \
+            python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('result') or {}).get('feePayer') or '')" 2>/dev/null || echo "")
+
+          if [[ -n "$FP_IN_TX" && "${FP_IN_TX,,}" == "${FEE_PAYER,,}" && "${FP_IN_TX,,}" != "${SENDER,,}" ]]; then
+            pass "I-09: feePayer correctly set in tx (feePayer=$FP_IN_TX ≠ sender)"
           else
-            fail "I-09: feePayer balance not decreased — gas not deducted from feePayer"
+            fail "I-09: feePayer not set correctly in tx (got: ${FP_IN_TX:-<missing>})"
           fi
 
           if [[ "$SENDER_AFTER" -eq "$SENDER_BEFORE" ]]; then
