@@ -344,6 +344,12 @@ func testHeader(t *testing.T, chain []*types.Block, client *rpc.Client) {
 				if got.ExcessBlobGas != nil && got.ExcessBlobGas.Sign() == 0 {
 					got.ExcessBlobGas = nil
 				}
+				// BlobGasUsed is set on every Camellia block by the chain maker (as by
+				// the miner); a zero that went through the RPC hex round-trip is not
+				// DeepEqual to an in-memory new(big.Int), so normalize it the same way.
+				if got.BlobGasUsed != nil && got.BlobGasUsed.Sign() == 0 {
+					got.BlobGasUsed = nil
+				}
 				// Metadium Camellia sets WithdrawalsHash on all post-fork blocks,
 				// but PoW-mode test headers may not persist it. Normalize for comparison.
 				got.WithdrawalsHash = nil
@@ -353,6 +359,9 @@ func testHeader(t *testing.T, chain []*types.Block, client *rpc.Client) {
 				// Also normalize the want side for PoW-mode legacy headers.
 				if wantCopy.ExcessBlobGas != nil && wantCopy.ExcessBlobGas.Sign() == 0 {
 					wantCopy.ExcessBlobGas = nil
+				}
+				if wantCopy.BlobGasUsed != nil && wantCopy.BlobGasUsed.Sign() == 0 {
+					wantCopy.BlobGasUsed = nil
 				}
 				wantCopy.WithdrawalsHash = nil
 				tt.want = &wantCopy
