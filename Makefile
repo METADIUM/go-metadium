@@ -40,8 +40,18 @@ endif
 
 # gmet-linux always compiles inside a Linux container, so the host's uname must
 # not pick the engine for it. Default to RocksDB there and honour USE_ROCKSDB
-# only when it was given explicitly on the command line.
-ifeq ($(origin USE_ROCKSDB), command line)
+# only when a person set it — on the command line or in the environment. The
+# assignment above is uname-driven and must not leak into the container build,
+# which is why the file origin is excluded. The environment is accepted because
+# this repository configures builds that way elsewhere (dev-ci.yml passes
+# CFLAGS/CXXFLAGS through the environment), and silently building the other
+# engine is worse than either honouring or rejecting the variable.
+USE_ROCKSDB_ORIGIN := $(origin USE_ROCKSDB)
+ifeq ($(USE_ROCKSDB_ORIGIN),command line)
+GMET_LINUX_USE_ROCKSDB = $(USE_ROCKSDB)
+else ifeq ($(USE_ROCKSDB_ORIGIN),environment)
+GMET_LINUX_USE_ROCKSDB = $(USE_ROCKSDB)
+else ifeq ($(USE_ROCKSDB_ORIGIN),environment override)
 GMET_LINUX_USE_ROCKSDB = $(USE_ROCKSDB)
 else
 GMET_LINUX_USE_ROCKSDB = YES
@@ -163,16 +173,41 @@ gmet-linux:
 # Refuse artifacts that cannot run on the oldest distribution in the fleet.
 # Checks every ELF in $(GOBIN), not just gmet: the bundle also ships logrot,
 # which is built with cgo and carries a glibc floor of its own.
+# This is the last gate before publishing, so silence must never read as a pass.
+# Three ways it used to report OK without having checked anything:
+#   - objdump errors went to /dev/null, so an unreadable file produced empty
+#     output that was indistinguishable from a clean one ("GLIBC=none");
+#   - a non-GNU objdump (llvm-objdump on macOS) satisfies `command -v` and then
+#     prints a format this recipe does not parse;
+#   - an empty $(GOBIN) checked zero binaries and still printed OK.
+# Note that `objdump -T` legitimately fails on a statically linked binary
+# ("not a dynamic object"), which is why readability is probed with -f and a
+# missing dynamic symbol table is reported as such rather than as "none".
 release-check:
 	@command -v objdump > /dev/null 2>&1 || { echo "release-check: objdump not found" >&2; exit 1; }
-	@fail=0;							\
+	@objdump --version 2>/dev/null | head -1 | grep -q GNU || {		\
+		echo "release-check: objdump is not GNU binutils, whose output this check parses" >&2; \
+		echo "  found: `objdump --version 2>/dev/null | head -1`" >&2;	\
+		exit 1;								\
+	}
+	@fail=0; checked=0;						\
 	for f in $(GOBIN)/*; do						\
 		[ -f "$$f" ] || continue;				\
 		head -c 4 "$$f" | grep -q 'ELF' || continue;		\
-		glibc=`objdump -T "$$f" 2>/dev/null | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -V | tail -1`; \
-		gxx=`objdump -T "$$f" 2>/dev/null | grep -oE 'GLIBCXX_[0-9.]+' | sort -V | tail -1`; \
-		cxxabi=`objdump -T "$$f" 2>/dev/null | grep -oE 'CXXABI_[0-9.]+' | sort -V | tail -1`; \
-		echo "  $$f: GLIBC=$${glibc:-none} GLIBCXX=$${gxx:-none} CXXABI=$${cxxabi:-none}"; \
+		checked=`expr $$checked + 1`;				\
+		if ! objdump -f "$$f" > /dev/null 2>&1; then		\
+			echo "  $$f: FAIL: objdump cannot read this file" >&2; \
+			fail=1; continue;				\
+		fi;							\
+		if syms=`objdump -T "$$f" 2>/dev/null`; then		\
+			glibc=`echo "$$syms" | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -V | tail -1`; \
+			gxx=`echo "$$syms" | grep -oE 'GLIBCXX_[0-9.]+' | sort -V | tail -1`; \
+			cxxabi=`echo "$$syms" | grep -oE 'CXXABI_[0-9.]+' | sort -V | tail -1`; \
+			echo "  $$f: GLIBC=$${glibc:-none} GLIBCXX=$${gxx:-none} CXXABI=$${cxxabi:-none}"; \
+		else							\
+			glibc=; gxx=; cxxabi=;				\
+			echo "  $$f: no dynamic symbol table (statically linked)"; \
+		fi;							\
 		if [ -n "$$glibc" ] && [ "`printf '%s\n%s\n' "$$glibc" "$(MAX_GLIBC)" | sort -V | tail -1`" != "$(MAX_GLIBC)" ]; then \
 			echo "    FAIL: needs GLIBC_$$glibc > $(MAX_GLIBC)" >&2; fail=1; \
 		fi;							\
@@ -181,11 +216,15 @@ release-check:
 		fi;							\
 		objdump -p "$$f" 2>/dev/null | awk '/NEEDED/ {printf "    NEEDED %s\n", $$2}'; \
 	done;								\
+	if [ $$checked = 0 ]; then					\
+		echo "release-check: FAILED — no ELF binary found in $(GOBIN), nothing was checked" >&2; \
+		exit 1;							\
+	fi;								\
 	if [ $$fail != 0 ]; then					\
 		echo "release-check: FAILED — do not publish these artifacts" >&2; \
 		exit 1;							\
 	fi;								\
-	echo "release-check: OK (ceiling GLIBC_$(MAX_GLIBC))"
+	echo "release-check: OK ($$checked binaries, ceiling GLIBC_$(MAX_GLIBC))"
 	@echo "  NEEDED entries above must be present on target hosts (snappy, lz4, zstd, jemalloc)."
 
 ifneq ($(USE_ROCKSDB), YES)
