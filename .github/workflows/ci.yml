@@ -1,0 +1,87 @@
+name: ci
+
+# The amd64 pipeline, in one place. dev-ci, dev-cron and master-ci were three
+# near-identical copies of it, which is why the toolchain bump had to be applied
+# per file and why drift had already appeared: one build job was still named
+# "Go-MetadiumX", and go.yml pins a different Go patch release (issue #65).
+#
+# Callers differ in exactly three things, which are the inputs below: which ref
+# to check out, which make target runs the tests, and the Go version.
+#
+# Note for whoever compares check names across runs: jobs called through
+# workflow_call appear as "<caller job>/<job>", so these are reported as
+# "ci / build_test" and so on rather than "build_test". Nothing required them by
+# name — master's protection lists no required status checks and dev is
+# unprotected — so this rename does not gate any merge.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Ref to check out. Empty means the ref that triggered the caller.'
+        required: false
+        type: string
+        default: ''
+      test-target:
+        description: 'make target for the unit test job (test-short or test).'
+        required: false
+        type: string
+        default: test-short
+      go-version:
+        description: 'Go toolchain for every job here.'
+        required: false
+        type: string
+        default: '1.21'
+
+jobs:
+  build_test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Build Go-Metadium
+        env:
+          CFLAGS: "-Wno-error=unused-parameter"
+          CXXFLAGS: "-Wno-error=unused-parameter"
+        run: make metadium
+
+      - name: Check Build
+        run: ls -al build/metadium.tar.gz
+
+  lint_test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Check Lint
+        run: make lint
+
+  unit_test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Check golang Test Cases
+        run: |
+          unset ANDROID_HOME
+          make ${{ inputs.test-target }}
