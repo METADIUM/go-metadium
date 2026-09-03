@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -289,6 +290,8 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 		case header.ParentBeaconRoot != nil:
 			return fmt.Errorf("invalid parentBeaconRoot, have %#x, expected nil", header.ParentBeaconRoot)
 		}
+	} else if err := verifyCamelliaHeaderFields(header, parent); err != nil {
+		return err
 	}
 	// Add some fake checks for tests
 	if ethash.fakeDelay != nil {
@@ -524,10 +527,66 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 	return nil
 }
 
+// verifyCamelliaHeaderFields checks the values of the header fields Camellia
+// permits. Allowing a field and validating it are two different things, and
+// until this existed only the first was done: upstream verifies these in the
+// beacon wrapper, and Metadium's PoA engine is not wrapped by it, so nothing
+// checked them at all (issue #70).
+//
+// What that left open was not a split between honest nodes -- execution is
+// self-consistent, every node reads the same value out of the header -- but a
+// single sealer setting the blob fee market to whatever it liked, with the next
+// block deriving from it, and every node accepting the result. BPs are
+// permissioned, which caps the severity; header rules exist so that a single BP
+// does not have to be trusted.
+//
+// ⚠ This is a consensus rule and it applies to history as well as to new blocks.
+// A node running it cannot import a Camellia block that violates it, so a full
+// clean sync over the whole post-Camellia range has to pass before this is
+// deployed. The failure message carries the block, the parent and both values so
+// that a violation found that way is diagnosable rather than just a stall.
+func verifyCamelliaHeaderFields(header, parent *types.Header) error {
+	// Metadium PoA has no withdrawals; FinalizeAndAssemble pins the hash to the
+	// empty root, so anything else is a header that was not built by this code.
+	if header.WithdrawalsHash == nil {
+		return fmt.Errorf("missing withdrawalsHash in camellia block %v (parent %x): expected %x",
+			header.Number, parent.Hash(), types.EmptyWithdrawalsHash)
+	}
+	if *header.WithdrawalsHash != types.EmptyWithdrawalsHash {
+		return fmt.Errorf("invalid withdrawalsHash in block %v (parent %x): have %x, want %x",
+			header.Number, parent.Hash(), *header.WithdrawalsHash, types.EmptyWithdrawalsHash)
+	}
+	// The blob fee market: excessBlobGas is a pure function of the parent, so it
+	// is the field a sealer could otherwise choose freely.
+	if header.ExcessBlobGas == nil {
+		return fmt.Errorf("missing excessBlobGas in camellia block %v (parent %x)", header.Number, parent.Hash())
+	}
+	if header.BlobGasUsed == nil {
+		return fmt.Errorf("missing blobGasUsed in camellia block %v (parent %x)", header.Number, parent.Hash())
+	}
+	var parentBlobGasUsed uint64
+	if parent.BlobGasUsed != nil {
+		parentBlobGasUsed = parent.BlobGasUsed.Uint64()
+	}
+	// types.CalcExcessBlobGas is the same formula the block builder applies in
+	// miner.initExcessBlobGas, including the nil-parent case at the fork block.
+	if want := types.CalcExcessBlobGas(parent.ExcessBlobGas, parentBlobGasUsed); header.ExcessBlobGas.Cmp(want) != 0 {
+		return fmt.Errorf("invalid excessBlobGas in block %v (parent %x): have %v, want %v",
+			header.Number, parent.Hash(), header.ExcessBlobGas, want)
+	}
+	return nil
+}
+
 // Finalize implements consensus.Engine, accumulating the block and uncle rewards.
 func (ethash *Ethash) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, withdrawals []*types.Withdrawal) {
-	// Accumulate any block and uncle rewards
-	accumulateRewards(chain.Config(), state, header, uncles)
+	// Accumulate any block and uncle rewards. On this path the error is
+	// reported rather than propagated: the signature is fixed by
+	// consensus.Engine, and a wrong reward state is caught by the state-root
+	// comparison in the block validator. Logging it is what the block-18
+	// incident showed was missing.
+	if err := accumulateRewards(chain.Config(), state, header, uncles); err != nil {
+		log.Error("Reward calculation failed", "number", header.Number, "parent", header.ParentHash, "err", err)
+	}
 }
 
 // FinalizeAndAssemble implements consensus.Engine, accumulating the block and
@@ -536,8 +595,12 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 	if len(withdrawals) > 0 {
 		return nil, errors.New("ethash does not support withdrawals")
 	}
-	// Finalize block
-	ethash.Finalize(chain, header, state, txs, uncles, nil)
+	// Finalize block. Unlike the verifying path, refuse to build on a failed
+	// reward calculation: the block would be signed and published with no
+	// payouts credited (issue #70).
+	if err := accumulateRewards(chain.Config(), state, header, uncles); err != nil {
+		return nil, fmt.Errorf("reward calculation failed for block %v: %w", header.Number, err)
+	}
 
 	// Assign the final state root to header.
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
@@ -615,7 +678,18 @@ var (
 // AccumulateRewards credits the coinbase of the given block with the mining
 // reward. The total reward consists of the static block reward and rewards for
 // included uncles. The coinbase of each uncle block is also rewarded.
-func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header *types.Header, uncles []*types.Header) {
+// accumulateRewards credits the block's payouts. It returns an error only for a
+// reward calculation that failed unexpectedly: ErrNotInitialized is a normal
+// state (governance not deployed yet, e.g. while syncing early blocks) and is
+// handled here by crediting the fees alone.
+//
+// The error matters on the producing side. Before it was returned, an unexpected
+// failure fell through this function silently: a sealing node assembled and
+// signed a block with no payouts credited, and nothing said so. The verifying
+// side is already protected — the state root will not match — which is why
+// Finalize logs and continues while FinalizeAndAssemble refuses to sign
+// (issue #70).
+func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header *types.Header, uncles []*types.Header) error {
 	// Select the correct block reward based on chain progression
 	blockReward := FrontierBlockReward
 	if config.IsByzantium(header.Number) {
@@ -658,8 +732,12 @@ func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header 
 				feeReward = new(uint256.Int)
 			}
 			state.AddBalance(header.Coinbase, feeReward)
+		} else {
+			// Unexpected: only the legacy governance path returns a raw error
+			// here, and it means no payout was credited for this block.
+			return err
 		}
-		return
+		return nil
 	}
 	// Accumulate the rewards for the miner and any included uncles
 	reward := new(uint256.Int).Set(blockReward)
@@ -677,4 +755,5 @@ func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header 
 		reward.Add(reward, r)
 	}
 	state.AddBalance(header.Coinbase, reward)
+	return nil
 }
