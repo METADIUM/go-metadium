@@ -122,7 +122,9 @@ func deployGovernanceContracts(cliCtx *cli.Context) error {
 	)
 	membersAndNodes, stakes, rewardPoolAccount, maintenanceAccount, err = getInitialGovernanceMembersAndNodes(configJsFile)
 	if err != nil {
-		return nil
+		// Was "return nil", which is exit 0: the command reported a successful
+		// deployment on a missing or malformed config (issue #65).
+		return err
 	}
 
 	// cli connection
@@ -148,7 +150,9 @@ func deployGovernanceContracts(cliCtx *cli.Context) error {
 	} else {
 		defer fin.Close()
 		if contracts, err = metclient.LoadJsContract(fin); err != nil {
-			return nil
+			// Same typo as above: a contract file that fails to load must not
+			// report success.
+			return err
 		}
 	}
 
