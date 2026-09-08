@@ -259,11 +259,16 @@ var (
 	MaxTxsPerBlock int    = 5000 // Max # of transactions in a block
 	Hub            string = ""   // Hub's id
 
-	BlockInterval        int64  = 1       // Block generation interval in seconds
-	BlockTimeAdjBlocks   int64  = 120     // Block interval to adjust timestamp
-	BlockTimeAdjMultiple int64  = 4       // How many of block intervals to consider
-	BlockMinBuildTime    int64  = 300     // Minimum block generation time in ms
-	BlockMinBuildTxs     int64  = 2500    // Minimum txs in a block with pending txs
-	BlockTrailTime       int64  = 300     // Time to leave for block data transfer transfer in ms
-	BlobRetentionBlocks  uint64 = 1572480 // Number of blocks to keep blob sidecars (~36.4 days at Metadium's 2s block interval; 0 = forever)
+	BlockInterval        int64 = 1    // Block generation interval in seconds
+	BlockTimeAdjBlocks   int64 = 120  // Block interval to adjust timestamp
+	BlockTimeAdjMultiple int64 = 4    // How many of block intervals to consider
+	BlockMinBuildTime    int64 = 300  // Minimum block generation time in ms
+	BlockMinBuildTxs     int64 = 2500 // Minimum txs in a block with pending txs
+	BlockTrailTime       int64 = 300  // Time to leave for block data transfer transfer in ms
+	// Private-PoA (enterprise) block timing. 0 = off, which is the behavior of
+	// the public networks: a block is sealed when its slot elapses. Deployments
+	// that need lower confirmation latency than the on-chain block interval
+	// turn this on; see docs/enterprise-block-timing.md.
+	BlockIdleSealTime   int64  = 0       // Seal once the pool stays quiet this long (ms) and the block has txs
+	BlobRetentionBlocks uint64 = 1572480 // Number of blocks to keep blob sidecars (~36.4 days at Metadium's 2s block interval; 0 = forever)
 )
