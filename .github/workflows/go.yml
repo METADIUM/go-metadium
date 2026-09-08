@@ -22,6 +22,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
+          # Left as an exact patch pin, unlike the amd64 pipelines, which take
+          # '1.21' from ci.yml. Whether that exactness is deliberate is not
+          # recorded anywhere; if it is not, align it there so both move
+          # together (issue #65 noted the difference as drift).
           go-version: 1.21.4
       - name: Compile everything (including test binaries)
         run: |

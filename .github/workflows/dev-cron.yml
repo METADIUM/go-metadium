@@ -5,54 +5,10 @@ on:
     - cron: '0 0 * * *'
 
 jobs:
-  build_test:
-    runs-on: ubuntu-24.04
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: dev
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-
-    - name: Build Go-Metadium
-      env:
-        CFLAGS: "-Wno-error=unused-parameter"
-        CXXFLAGS: "-Wno-error=unused-parameter"
-      run: make metadium
-    - name: Check Build
-      run: ls -al build/metadium.tar.gz
-
-  lint_test:
-    runs-on: ubuntu-24.04
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: dev
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-
-    - name: Check Lint
-      run: make lint
-
-  unit_test:
-    runs-on: ubuntu-24.04
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: dev
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-
-    - name: Check golang Test Cases
-      run: |
-        unset ANDROID_HOME
-        make test
+  ci:
+    # Nightly run of the full test suite against dev. A scheduled run has no
+    # ref of its own, so dev is named explicitly.
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: dev
+      test-target: test
