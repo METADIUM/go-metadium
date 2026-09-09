@@ -148,6 +148,10 @@ cd tests/private-net-poa
 ./stop.sh     # Stop (data preserved)
 ```
 
+For an enterprise private PoA network that needs a transaction confirmed in
+~0.1 s instead of waiting out the block interval, see
+[docs/enterprise-private-poa.md](docs/enterprise-private-poa.md).
+
 ## Upgrading from 0.10.x
 
 v1.1.x rebases the tree onto go-ethereum v1.13.14 and changes several
@@ -278,7 +282,7 @@ stock layout). Every knob, with its default:
 | `DISCOVER` | unset (on) | `0` → `--nodiscover`. Note **`init`-generated `.rc` files contain `DISCOVER=0`** — remove or change it for ordinary full nodes, or the node dials no one. Mainnet/testnet bootnodes are compiled into the binary, so no `BOOT_NODES` is needed. |
 | `SYNC_MODE` | unset (**archive**) | `full` → pruned full node (recommended for exchange/API nodes, ~600GB-class). **Unset — or any unrecognized value, typos included — means `--syncmode full --gcmode archive`**: a multi-TB archive node. `fast`/`snap` make the node exit at startup (Metadium networks are full-sync only) — and since `gmet.sh start` backgrounds the node, `start` itself still returns 0, so check the log. |
 | `BOOT_NODES` | unset | Extra `--bootnodes` enodes (rarely needed, see above). |
-| `GMET_OPTS` | unset | Extra flags appended verbatim to the command line. |
+| `GMET_OPTS` | unset | Extra flags appended verbatim to the command line. Private PoA deployments that want sub-second confirmation put `--metadium.block.idleseal <ms>` here — see [docs/enterprise-private-poa.md](docs/enterprise-private-poa.md). The flag is refused on mainnet and testnet: the node exits rather than starting. |
 | `STOP_TIMEOUT` | `200` | Seconds `gmet.sh stop` waits for graceful shutdown before escalating. |
 | `STOP_FORCE` | `1` | `0` = never SIGKILL; `stop` exits non-zero instead (recommended for RocksDB nodes and anything driven by automation). |
 | `LOCK_TIMEOUT` | `200` | Seconds to wait for the chaindata lock to be released after exit. |
