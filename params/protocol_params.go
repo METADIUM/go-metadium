@@ -265,10 +265,13 @@ var (
 	BlockMinBuildTime    int64 = 300  // Minimum block generation time in ms
 	BlockMinBuildTxs     int64 = 2500 // Minimum txs in a block with pending txs
 	BlockTrailTime       int64 = 300  // Time to leave for block data transfer transfer in ms
-	// Private-PoA (enterprise) block timing. 0 = off, which is the behavior of
-	// the public networks: a block is sealed when its slot elapses. Deployments
-	// that need lower confirmation latency than the on-chain block interval
-	// turn this on; see docs/enterprise-block-timing.md.
+	// Private-PoA (enterprise) block timing. Both are 0 = off, which is the
+	// behavior of the public networks: a block is sealed when its slot elapses,
+	// and empty blocks are produced on every slot. Deployments that need lower
+	// confirmation latency than the on-chain block interval, or that do not want
+	// an empty-block stream while idle, turn these on; see
+	// docs/enterprise-block-timing.md.
 	BlockIdleSealTime   int64  = 0       // Seal once the pool stays quiet this long (ms) and the block has txs
+	BlockEmptyInterval  int64  = 0       // Withhold empty blocks until this many seconds since the parent
 	BlobRetentionBlocks uint64 = 1572480 // Number of blocks to keep blob sidecars (~36.4 days at Metadium's 2s block interval; 0 = forever)
 )

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math/big"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -232,15 +233,25 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The private-PoA idle seal changes when a sealer closes a block. Metadium
-	// mainnet and testnet take their cadence from governance and must keep the
-	// one behavior every node agrees on, so refuse to start rather than let a
-	// stray flag alter block production there. Keyed on the genesis hash, not
-	// the chain id, because a private chain may legitimately reuse a chain id
-	// but never the public genesis.
-	if params.BlockIdleSealTime > 0 {
+	// The private-PoA block timing flags change when a sealer closes a block.
+	// Metadium mainnet and testnet take their cadence from governance and must
+	// keep the one behavior every node agrees on, so refuse to start rather than
+	// let a stray flag alter block production there. Keyed on the genesis hash,
+	// not the chain id, because a private chain may legitimately reuse a chain
+	// id but never the public genesis.
+	if params.BlockIdleSealTime > 0 || params.BlockEmptyInterval > 0 {
 		if network := publicMetadiumNetwork(eth.blockchain.Genesis().Hash()); network != "" {
-			return nil, fmt.Errorf("--metadium.block.idleseal is for private networks only, but this node is on the Metadium %s", network)
+			// Name the flags actually set, so the operator is told which one to
+			// drop rather than being handed both to check.
+			var set []string
+			if params.BlockIdleSealTime > 0 {
+				set = append(set, "--metadium.block.idleseal")
+			}
+			if params.BlockEmptyInterval > 0 {
+				set = append(set, "--metadium.block.emptyinterval")
+			}
+			return nil, fmt.Errorf("%s is for private networks only, but this node is on the Metadium %s",
+				strings.Join(set, " and "), network)
 		}
 	}
 	eth.bloomIndexer.Start(eth.blockchain)
