@@ -148,8 +148,25 @@ So:
   `idleseal` plus about 20 ms.
 
 **Agreement was unaffected throughout that sweep**: 15 configurations, up to
-200 ms one-way (a 400 ms round trip, worse than any pair of AWS regions), zero
-`BAD BLOCK`, and the three nodes were never more than one block apart.
+200 ms one-way, zero `BAD BLOCK`, and the three nodes were never more than one
+block apart.
+
+For scale, 200 ms one-way is a 400 ms round trip — more than twice the worst
+link in Metadium mainnet's own three-region sealer set. Measured between the
+production nodes on 2026-09-09, 100 TCP handshakes per pair (median round trip):
+
+| Pair | Round trip | One-way |
+|---|---|---|
+| us-west-1 ↔ ap-southeast-1 | 176 ms | ~88 ms |
+| us-west-1 ↔ ap-northeast-1 | 108 ms | ~54 ms |
+| ap-northeast-1 ↔ ap-southeast-1 | 69 ms | ~34 ms |
+| within one region | 0.2 ms | ~0.1 ms |
+
+So sealers spread as far apart as that fleet sit inside the range the sweep
+covers, with the 80 ms row as the closest reference: median 741 ms at
+`idleseal 100`, worst case 1175 ms. Treat that worst case as the ceiling rather
+than interpolating between rows — ten samples per cell cannot resolve the
+difference between the 80, 120 and 200 ms rows, which came out flat.
 
 A negative value is rejected at startup. `0` means off.
 
@@ -225,7 +242,12 @@ flag at all) against such a chain: 9,887 blocks imported, no rejected headers.
 - **Untested combinations**, stated so a rollout does not assume them: sealers
   on genuinely separate hosts (delay between sealers has been measured, but by
   injecting it with `tc netem` on one host — real links also bring jitter, loss
-  and reordering, none of which was injected), the RocksDB build with this flag
+  and reordering, none of which was injected; of those three, jitter has since
+  been measured on the production links in the table above and is small, 0.7–3.4
+  ms standard deviation per pair with p99 within 6 ms of the median, so its
+  absence is unlikely to have flattered these numbers, while loss and reordering
+  remain unmeasured — a handshake timing cannot see a retransmitted SYN, and
+  ICMP is blocked across that fleet), the RocksDB build with this flag
   (it compiles and is verified, but no chain has been run on it), and sustained
   high block rates over hours (the longest run is the 10-minute soak, so there
   is no disk or state growth figure).
