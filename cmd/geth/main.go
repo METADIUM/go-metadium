@@ -220,6 +220,7 @@ var (
 		utils.BlockMinBuildTime,
 		utils.BlockMinBuildTxs,
 		utils.BlockTrailTime,
+		utils.BlockIdleSealTime,
 		utils.BlobRetentionBlocks,
 	}
 )

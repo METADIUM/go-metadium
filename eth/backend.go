@@ -104,6 +104,19 @@ type Ethereum struct {
 
 // New creates a new Ethereum object (including the
 // initialisation of the common Ethereum object)
+// publicMetadiumNetwork names the public Metadium network the given genesis
+// hash belongs to, or "" for any other (private) chain.
+func publicMetadiumNetwork(genesis common.Hash) string {
+	switch genesis {
+	case params.MetadiumMainnetGenesisHash:
+		return "mainnet"
+	case params.MetadiumTestnetGenesisHash:
+		return "testnet"
+	default:
+		return ""
+	}
+}
+
 func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	// Ensure configuration values are compatible and sane
 	if config.SyncMode == downloader.LightSync {
@@ -218,6 +231,17 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	eth.blockchain, err = core.NewBlockChain(chainDb, cacheConfig, config.Genesis, &overrides, eth.engine, vmConfig, eth.shouldPreserve, &config.TransactionHistory)
 	if err != nil {
 		return nil, err
+	}
+	// The private-PoA idle seal changes when a sealer closes a block. Metadium
+	// mainnet and testnet take their cadence from governance and must keep the
+	// one behavior every node agrees on, so refuse to start rather than let a
+	// stray flag alter block production there. Keyed on the genesis hash, not
+	// the chain id, because a private chain may legitimately reuse a chain id
+	// but never the public genesis.
+	if params.BlockIdleSealTime > 0 {
+		if network := publicMetadiumNetwork(eth.blockchain.Genesis().Hash()); network != "" {
+			return nil, fmt.Errorf("--metadium.block.idleseal is for private networks only, but this node is on the Metadium %s", network)
+		}
 	}
 	eth.bloomIndexer.Start(eth.blockchain)
 

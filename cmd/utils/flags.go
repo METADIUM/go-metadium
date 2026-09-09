@@ -1023,6 +1023,11 @@ var (
 		Usage: "Time to leave for block data transfer in ms",
 		Value: params.BlockTrailTime,
 	}
+	BlockIdleSealTime = &cli.Int64Flag{
+		Name:  "metadium.block.idleseal",
+		Usage: "Private networks only: seal a non-empty block once no new transaction arrives for this many ms (0 = off, hold the full block interval)",
+		Value: params.BlockIdleSealTime,
+	}
 	BlobRetentionBlocks = &cli.Uint64Flag{
 		Name:  "blob.retention",
 		Usage: "Number of blocks to retain blob sidecars (0 = keep forever)",
@@ -2054,6 +2059,12 @@ func SetMetadiumConfig(ctx *cli.Context, stack *node.Node, cfg *eth.Config) {
 	}
 	if ctx.IsSet(BlockTrailTime.Name) {
 		params.BlockTrailTime = ctx.Int64(BlockTrailTime.Name)
+	}
+	if ctx.IsSet(BlockIdleSealTime.Name) {
+		params.BlockIdleSealTime = ctx.Int64(BlockIdleSealTime.Name)
+		if params.BlockIdleSealTime < 0 {
+			Fatalf("Invalid %s: %d, must not be negative", BlockIdleSealTime.Name, params.BlockIdleSealTime)
+		}
 	}
 
 	if params.ConsensusMethod == params.ConsensusInvalid {

@@ -1067,61 +1067,19 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 	return nil
 }
 
-// collects ancestors' block times for possible throttling
-func (w *worker) ancestorTimes(num *big.Int) []int64 {
-	ts := make([]int64, 6)
-	for i := 0; i < len(ts); i++ {
-		bn := num.Int64()
-		switch i {
-		case 0:
-			bn -= 1
-		case 1:
-			bn -= 10
-		case 2:
-			bn -= 50
-		case 3:
-			bn -= 100
-		case 4:
-			bn -= 500
-		case 5:
-			bn -= 1000
-		}
-		if bn <= 0 {
-			continue
-		}
-		if bh := w.chain.GetHeaderByNumber(uint64(bn)); bh != nil {
-			ts[i] = int64(bh.Time)
+// stopTimer stops t and drains its channel if it had already fired, so the
+// timer can be discarded without leaking a pending tick. A nil timer is a
+// no-op, which lets callers keep optional timers unset.
+func stopTimer(t *time.Timer) {
+	if t == nil {
+		return
+	}
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
 		}
 	}
-	return ts
-}
-
-// returns throttle delay if necessary in seconds & seconds from the parent
-// blocks  seconds  seconds per
-//
-//	  10        1  0.1
-//	  50       10  0.2
-//	 100       50  0.5
-//	 500      500  1
-//	1000     2000  2
-func (w *worker) throttleMining(ts []int64) (int64, int64) {
-	t := time.Now().Unix()
-	dt, pt := int64(0), t-ts[0]
-
-	// 1000th
-	if dt = t - ts[5]; ts[5] > 0 && dt < 2000 {
-		return 2000 - dt, pt
-	}
-	if dt = t - ts[4]; ts[4] > 0 && dt < 500 {
-		return 500 - dt, pt
-	}
-	if dt = t - ts[3]; ts[3] > 0 && dt < 50 {
-		return 50 - dt, pt
-	}
-	if dt = t - ts[2]; ts[2] > 0 && dt < 10 {
-		return 10 - dt, pt
-	}
-	return 0, pt
 }
 
 func (w *worker) commitTransactionsEx(env *environment, interrupt *atomic.Int32, tstart time.Time) bool {
@@ -1207,30 +1165,43 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *atomic.Int32,
 
 		remaining := time.Until(*env.till)
 		timer := time.NewTimer(remaining)
+
+		// Metadium private PoA: once this block carries a transaction, close it
+		// as soon as the pool has stayed quiet for BlockIdleSealTime instead of
+		// holding the slot open until env.till. The quiet window starts after
+		// the fill above, which drained txCh, so an arrival during the wait
+		// resets it by taking the txCh branch. Off (0) on the public networks,
+		// where the slot always runs to env.till.
+		var (
+			quiet  *time.Timer
+			quietC <-chan time.Time
+		)
+		if params.BlockIdleSealTime > 0 && env.tcount > 0 {
+			quiet = time.NewTimer(time.Duration(params.BlockIdleSealTime) * time.Millisecond)
+			quietC = quiet.C
+		}
+
+		sealOnIdle := false
 		select {
 		case <-timer.C:
+		case <-quietC:
+			sealOnIdle = true
 		case <-txCh:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			stopTimer(timer)
+			stopTimer(quiet)
 			continue
 		case <-sub.Err():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			stopTimer(timer)
+			stopTimer(quiet)
 			return true
 		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
+		stopTimer(timer)
+		stopTimer(quiet)
+		if sealOnIdle {
+			log.Debug("Sealing early, transaction pool went quiet", "number", env.header.Number,
+				"txs", env.tcount, "idle-ms", params.BlockIdleSealTime,
+				"slot-left", common.PrettyDuration(time.Until(*env.till)))
+			break
 		}
 	}
 
