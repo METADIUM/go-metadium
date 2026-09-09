@@ -19,6 +19,44 @@ every rule below:
 
 Pull requests target `dev`. `master` is the release line.
 
+## Approvals required
+
+**Every pull request is sent to both reviewers.** What differs is how many
+approvals it waits for before merging.
+
+| Change | Approvals to merge |
+|---|---|
+| **C0–C3** — consensus (either direction), P2P wire, or database format | **2** |
+| Everything else | **1** |
+
+The dividing line is the class of failure, not the diff size and not whether
+code changed. C0–C3 are the tiers whose failure mode is a chain that splits, a
+peer set that cannot talk, or a rollback path that no longer exists — none of
+which a single reviewer should be the only one to have looked at, and none of
+which a revert fixes once a node has acted on it. Everything else fails in ways
+that are visible and recoverable: a wrong latency, a broken build, a bad doc.
+
+Two consequences worth stating, because they are the point of the split rather
+than an oversight:
+
+- **Producer-side timing and behaviour merge on one approval.** A change in the
+  sealer loop that does not alter block validity — the private-PoA idle seal is
+  the example — is a one-approval change. It runs on every block a producer
+  makes, so the single review carries weight; that is a deliberate trade for
+  not blocking on a second reader.
+- **A release cut is a one-approval change.** The version bump itself is
+  trivial; what protects a release is the runbook and its gates, not the count
+  of approvals on the PR.
+
+Two things the relaxed rule does not relax:
+
+- **Read the reviewers individually.** `reviewDecision: APPROVED` is an
+  aggregate — it can be reported for a stale commit, and it says nothing about
+  a blocking comment left outside a formal review. Check each reviewer's latest
+  state, and check that the approval names the current head.
+- **An approval belongs to the commit it was given on.** If commits land after
+  it, the approval no longer covers the branch and the count restarts.
+
 ## 1. Verify the declared compatibility tier
 
 This is the highest-value thing a review can do here. The author picks one of
