@@ -572,6 +572,22 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 	timer := time.NewTimer(10 * time.Millisecond)
 	defer timer.Stop()
 
+	// Metadium private PoA: when a round is in flight, a transaction arriving
+	// mid-round is picked up by the wait select in commitTransactionsEx. When
+	// no round is in flight, the 1s timer below is the only thing that notices,
+	// so a transaction can sit for most of a second before a round even starts
+	// to build it -- which is the whole latency BlockIdleSealTime is there to
+	// remove. Wake on arrival instead. commitSimple's busyMining CAS makes this
+	// a no-op while a round is already running. Left unsubscribed (a nil
+	// channel never selects) when idle sealing is off, so the public networks
+	// keep starting rounds exactly as before.
+	var txCh chan core.NewTxsEvent
+	if params.BlockIdleSealTime > 0 {
+		txCh = make(chan core.NewTxsEvent, 64)
+		sub := w.pool.SubscribeTransactions(txCh, true)
+		defer sub.Unsubscribe()
+	}
+
 	// commitSimple just starts a new commitNewWork
 	commitSimple := func() {
 		if atomic.CompareAndSwapInt32(&w.busyMining, 0, 1) {
@@ -600,6 +616,17 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 
 		case head := <-w.chainHeadCh:
 			clearPending(head.Block.NumberU64())
+			commitSimple()
+
+		case <-txCh:
+			// Collapse a burst into the one round that will pick all of it up.
+			for drained := false; !drained; {
+				select {
+				case <-txCh:
+				default:
+					drained = true
+				}
+			}
 			commitSimple()
 
 		case <-timer.C:
