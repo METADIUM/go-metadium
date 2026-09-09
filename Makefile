@@ -156,13 +156,33 @@ devtools:
 	@type "solc" 2> /dev/null || echo 'Please install solc'
 	@type "protoc" 2> /dev/null || echo 'Please install protoc'
 
+# The Go version release artifacts are built with. CI reads the same file
+# through setup-go's go-version-file, which is the point: before this, the
+# release image built on a toolchain no CI job had ever run.
+GO_VERSION := $(shell cat .go-version 2>/dev/null)
+
 gmet-linux:
 	@if ! docker --version > /dev/null 2>&1; then			\
 		echo "Docker not found. gmet-linux is the only supported"	\
 		     "way to build release artifacts; see README." >&2;	\
 		exit 1;							\
 	fi
-	docker build -t meta/builder:local -f Dockerfile.metadium .
+	@if [ -z "$(GO_VERSION)" ]; then				\
+		echo "release-build: .go-version is missing or empty" >&2; \
+		exit 1;							\
+	fi
+	@# The Dockerfile carries the checksum for its default GO_VERSION, so a
+	@# mismatch between the two would download one toolchain and verify
+	@# another. Refuse rather than pass an unverifiable version through.
+	@dv=`sed -n 's/^ARG GO_VERSION=//p' Dockerfile.metadium`;	\
+	if [ "$$dv" != "$(GO_VERSION)" ]; then				\
+		echo "release-build: .go-version ($(GO_VERSION)) and"	\
+		     "Dockerfile.metadium ARG GO_VERSION ($$dv) disagree;" \
+		     "update both, with the matching GO_SHA256" >&2;	\
+		exit 1;							\
+	fi
+	docker build -t meta/builder:local -f Dockerfile.metadium		\
+		--build-arg GO_VERSION=$(GO_VERSION) .
 	docker run -e HOME=/tmp --rm -v $(shell pwd):/data		\
 		-u $(shell id -u):$(shell id -g)			\
 		-w /data meta/builder:local				\

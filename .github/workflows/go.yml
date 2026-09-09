@@ -22,11 +22,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Left as an exact patch pin, unlike the amd64 pipelines, which take
-          # '1.21' from ci.yml. Whether that exactness is deliberate is not
-          # recorded anywhere; if it is not, align it there so both move
-          # together (issue #65 noted the difference as drift).
-          go-version: 1.21.4
+          # Same source as the amd64 pipelines and the release image. This job
+          # used to pin its own patch release, which is how the tree ended up
+          # with three different Go versions across CI and the builder image
+          # (issue #84). The 386 build was verified on the shared version.
+          go-version-file: .go-version
       - name: Compile everything (including test binaries)
         run: |
           go build ./...
