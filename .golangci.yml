@@ -55,6 +55,22 @@ issues:
       text: 'SA1019: "github.com/golang/protobuf/proto" is deprecated: Use the "google.golang.org/protobuf/proto" package instead.'
     - path: accounts/usbwallet/trezor/
       text: 'SA1019: "github.com/golang/protobuf/proto" is deprecated: Use the "google.golang.org/protobuf/proto" package instead.'
+    # Deprecations that Go 1.21 introduced and this tree has not migrated.
+    # staticcheck reports a deprecation only once the module's `go` directive
+    # reaches the version that deprecated it, so raising the directive to 1.22
+    # (required by the embedded etcd) turned these on at once, across upstream
+    # go-ethereum code: the crypto/elliptic -> crypto/ecdh migration and
+    # reflect.SliceHeader -> unsafe.Slice in the RLP decoder. Both are real
+    # changes to crypto and RLP internals and do not belong in a dependency
+    # bump; they are deferred deliberately.
+    #
+    # Scoped to these two deprecations rather than disabling SA1019, so any
+    # *other* deprecated API still fails the build. Not pinned per file either:
+    # the same call appears in several places and the list would go stale.
+    - path: (.+)\.go$
+      text: 'SA1019: elliptic\.(Marshal|Unmarshal|GenerateKey) has been deprecated since Go 1.21'
+    - path: (.+)\.go$
+      text: 'SA1019: reflect\.SliceHeader has been deprecated since Go 1.21'
     # Metadium-specific code paths - keep all unused symbols (intentionally retained)
     - path: ^metadium/
       linters:
