@@ -70,6 +70,14 @@ ROCKSDB_CGO_CFLAGS = -I$(ROCKSDB_DIR)/include
 ROCKSDB_CGO_LDFLAGS = -L$(ROCKSDB_DIR) -lrocksdb -lm $(STDCPP_LDFLAGS) $(shell awk '/PLATFORM_LDFLAGS/ {sub("PLATFORM_LDFLAGS=", ""); print} /JEMALLOC=1/ {print "-ljemalloc"}' < $(ROCKSDB_DIR)/make_config.mk)
 endif
 
+# What the deploy bundle ships. Named explicitly rather than tarring bin/
+# wholesale: $(GOBIN) is shared with `make all`, `make geth` and anything else
+# that installs there, and a leftover from one of those used to be packaged
+# with no complaint. release-check guards the glibc floor, not the provenance
+# of what sits in the directory, so an older artifact that happens to satisfy
+# the ceiling would ship silently. See issue #125.
+METADIUM_BUNDLE_BIN = gmet logrot gmet.sh solc.sh
+
 metadium: gmet logrot
 	@[ -d build/conf ] || mkdir -p build/conf
 	@cp -p metadium/scripts/gmet.sh metadium/scripts/solc.sh build/bin/
@@ -78,8 +86,18 @@ metadium: gmet logrot
 		metadium/contracts/MetadiumGovernance.js	\
 		metadium/scripts/deploy-governance.js		\
 		build/conf/
-	@(cd build; tar cfz metadium.tar.gz bin conf)
+	@missing=;							\
+	for f in $(METADIUM_BUNDLE_BIN); do				\
+		[ -f build/bin/$$f ] || missing="$$missing $$f";	\
+	done;								\
+	if [ -n "$$missing" ]; then					\
+		echo "metadium: missing from build/bin:$$missing" >&2;	\
+		exit 1;							\
+	fi
+	@(cd build; tar cfz metadium.tar.gz				\
+		$(patsubst %,bin/%,$(METADIUM_BUNDLE_BIN)) conf)
 	@echo "Done building build/metadium.tar.gz"
+	@echo "Bundled: $(patsubst %,bin/%,$(METADIUM_BUNDLE_BIN)) conf/"
 
 gmet: rocksdb metadium/governance_abi.go metadium/governance_legacy_abi.go
 ifeq ($(USE_ROCKSDB), NO)
@@ -180,6 +198,23 @@ gmet-linux:
 		     "Dockerfile.metadium ARG GO_VERSION ($$dv) disagree;" \
 		     "update both, with the matching GO_SHA256" >&2;	\
 		exit 1;							\
+	fi
+	@# Clear ELFs a previous build left in $(GOBIN). release-check covers every
+	@# ELF in that directory, so a host-built leftover makes the gate fail while
+	@# naming the release artifacts as the culprit -- the message says a binary
+	@# needs a too-new glibc and never mentions that the file is from another
+	@# build. Only ELFs go: gmet.sh and solc.sh are copied in by `make metadium`
+	@# and are not build outputs. See issue #125.
+	@if [ -d $(GOBIN) ]; then					\
+		removed=;						\
+		for f in $(GOBIN)/*; do					\
+			[ -f "$$f" ] || continue;			\
+			head -c 4 "$$f" | grep -q 'ELF' || continue;	\
+			rm -f "$$f";					\
+			removed="$$removed `basename $$f`";		\
+		done;							\
+		[ -z "$$removed" ] ||					\
+			echo "release-build: cleared stale artifacts:$$removed"; \
 	fi
 	@# Built from stdin, with no build context at all. The Dockerfile has no
 	@# COPY, so every build used to stream the whole working tree -- .git alone
