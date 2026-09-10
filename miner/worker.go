@@ -579,10 +579,14 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 	// to build it -- which is the whole latency BlockIdleSealTime is there to
 	// remove. Wake on arrival instead. commitSimple's busyMining CAS makes this
 	// a no-op while a round is already running. Left unsubscribed (a nil
-	// channel never selects) when idle sealing is off, so the public networks
-	// keep starting rounds exactly as before.
+	// channel never selects) when both timing flags are off, so the public
+	// networks keep starting rounds exactly as before.
+	//
+	// BlockEmptyInterval needs the same wake-up for a different reason: a round
+	// it withholds builds nothing, so an idle chain has no round in flight at
+	// all and the arrival would otherwise wait for the tick.
 	var txCh chan core.NewTxsEvent
-	if params.BlockIdleSealTime > 0 {
+	if params.BlockIdleSealTime > 0 || params.BlockEmptyInterval > 0 {
 		txCh = make(chan core.NewTxsEvent, 64)
 		sub := w.pool.SubscribeTransactions(txCh, true)
 		defer sub.Unsubscribe()
@@ -1234,6 +1238,17 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *atomic.Int32,
 
 	log.Debug("Block", "number", env.header.Number.Int64(), "elapsed", common.PrettyDuration(time.Since(tstart)), "txs", env.tcount)
 
+	// Note on BlockEmptyInterval: the withhold decision deliberately stays in
+	// commitWork, ahead of the mining-token gate, and is not re-taken here.
+	// Deciding it after the fill would be more precise -- a round can come out
+	// empty because another sealer got the transaction first, which the pool
+	// pre-check cannot see until its own reset lands -- but a round discarded
+	// at this point has already taken the mining token and would leave it to
+	// expire (TTL 10s). Measured on the 3-node private net: doing it here cut
+	// the trailing empty blocks but pushed idle-seal confirmation from 117ms to
+	// 4.4s average, because every withheld round burned a token. One empty
+	// block trailing a transaction block is the cheaper trade.
+
 	return false
 }
 
@@ -1634,6 +1649,18 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 	}
 	if !metaminer.IsPoW() {
 		parent := w.chain.CurrentBlock()
+		// Metadium private PoA: with an empty pool, skip the round entirely
+		// until BlockEmptyInterval has passed since the parent, so an idle
+		// chain does not accumulate empty blocks. Checked before the miner and
+		// mining-token gates below so a skipped round never holds the token.
+		// Off (0) on the public networks, which seal every slot.
+		if params.BlockEmptyInterval > 0 {
+			if pending, _ := w.eth.TxPool().Stats(); pending == 0 &&
+				time.Now().Unix()-int64(parent.Time) < params.BlockEmptyInterval {
+				w.refreshPending(true)
+				return
+			}
+		}
 		height := new(big.Int).Add(parent.Number, common.Big1)
 		if !w.chain.Config().IsBokbunja(height) {
 			if !metaminer.IsMiner() {

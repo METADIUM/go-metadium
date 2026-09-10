@@ -6,17 +6,16 @@ seal on that clock whether or not anyone sent a transaction. An enterprise chain
 is typically idle most of the time and then needs a transaction *confirmed*
 quickly -- waiting out the rest of a 5 second slot is the whole latency.
 
-One node flag restores the confirmation behavior early Metadium had
-(`11be6ec99`, 2018-06-29, "immediate block generation / empty blocks only after
-maxidleblockinterval"), without changing what the public networks do.
+Two node flags restore the behavior early Metadium had (`11be6ec99`, 2018-06-29,
+"immediate block generation / empty blocks only after maxidleblockinterval"),
+without changing what the public networks do.
 
 | Flag | Unit | Default | Effect |
 |---|---|---|---|
 | `--metadium.block.idleseal` | ms | `0` (off) | Once the block being built holds at least one transaction, seal it as soon as no new transaction has arrived for this long, instead of holding the slot open to its deadline. |
+| `--metadium.block.emptyinterval` | s | `0` (off) | While the pool is empty, produce no block at all until this many seconds have passed since the parent. |
 
-It defaults to off, which is exactly the behavior of a build without it. Empty
-blocks are untouched: with an empty pool the sealer still runs the slot to its
-deadline, so the on-chain interval remains the chain's heartbeat.
+Both default to off, which is exactly the behavior of a build without them.
 
 ## Configuring a private PoA network
 
@@ -34,11 +33,11 @@ deadline, so the on-chain interval remains the chain's heartbeat.
    `--metadium.block.interval` looks like the knob for this but is dead: the
    value is stored in `params.BlockInterval` and never read.
 
-2. **Set the flag identically on every sealer.** It only takes effect on the
-   node that is building a block, so a fleet with mixed values simply gets
+2. **Set the two flags identically on every sealer.** They only take effect on
+   the node that is building a block, so a fleet with mixed values simply gets
    different latency depending on whose turn it is. Non-sealing RPC and full
-   nodes ignore it (`commitWork` returns before this code on a non-miner), so
-   passing it there is harmless but pointless.
+   nodes ignore them (`commitWork` returns before this code on a non-miner), so
+   passing them there is harmless but pointless.
 
 3. **Typical enterprise profile** -- 5 second heartbeat, ~100ms confirmation:
 
@@ -50,6 +49,10 @@ deadline, so the on-chain interval remains the chain's heartbeat.
    --metadium.block.idleseal 100
    ```
 
+   Add `--metadium.block.emptyinterval <s>` only if the empty-block stream
+   itself is a problem (disk growth on a chain that is idle for long stretches).
+   It is not needed for latency.
+
 ## Measured behavior
 
 3-node PoA private net (`tests/private-net-poa`, LevelDB, one host), governance
@@ -58,20 +61,38 @@ from `eth_sendTransaction` returning to the receipt being available.
 
 | Configuration | Idle cadence | Confirm (single tx) | 40-tx burst |
 |---|---|---|---|
-| flag off (public-network behavior) | empty block every 4.3-5.8s | avg 2544ms (min 1962, max 2634) | 1 block, 5657ms |
+| flags off (public-network behavior) | empty block every 4.3-5.8s | avg 2544ms (min 1962, max 2634) | 1 block, 5657ms |
 | `idleseal=100` | empty block every 4.3s | **avg 117ms** (min 117, max 118) | 1 block, **174ms** |
+| `idleseal=100` + `emptyinterval=30` | **1 block / ~30s** | **avg 123ms** (min 116, max 127) | 1 block, 179ms |
 
 A 10-minute soak with `idleseal=100` and one transaction every 3 seconds, to see
 whether latency ever spikes: 193 transactions, **min 107ms, p50 118ms, p90 128ms,
 p99 130ms, max 130ms**, nothing above 500ms. The gap between p50 and the maximum
-is 12ms -- there is no tail. That run also produced 193 blocks for 193
+is 12ms — there is no tail. That run also produced 193 blocks for 193
 transactions: with traffic this steady every slot closes on a transaction, so no
-empty blocks appear at all.
+empty blocks appear at all even with `emptyinterval` off.
 
 Across the runs: three nodes stayed in lockstep at the same head, 40 sampled
 blocks had no parent-hash break, and the logs carried no `BAD BLOCK`, no panic
 and no seal failure. The only ERROR lines were the harness's pre-existing
 `static-nodes.json is deprecated` warnings.
+
+**Set `emptyinterval` above the on-chain interval, or it does almost nothing.**
+The withhold is measured from the parent's timestamp, so a value at or below the
+interval expires before the slot the sealer would have used anyway. Measured on
+the same chain (`blockCreationTime = 5000`), 8 single transactions and a 40-60s
+idle window per row:
+
+| Configuration | Idle cadence (median) | Confirm (median) |
+|---|---|---|
+| flags off | 4.34s (3.9-5.9) | 2825ms |
+| `idleseal=100` | 5.81s (1.3-5.9) | 121ms |
+| `idleseal=100` + `emptyinterval=5` | **4.97s (4.3-5.2)** — barely moved | 125ms |
+| `idleseal=100` + `emptyinterval=30` | **29.8s (17.0-30.1)** | 126ms |
+
+Pick the gap you actually want between empty blocks. A `5` on a 5-second chain
+reads like "one empty block every five seconds", which is what it was already
+doing.
 
 ## Interactions worth knowing
 
@@ -80,10 +101,9 @@ and no seal failure. The only ERROR lines were the harness's pre-existing
 `2000`). `getMaxIdleBlockInterval` is the idle heartbeat -- mainnet has it set
 to `5` -- and **nothing reads it for block production**: it is loaded into a
 struct and never consulted, the same fate as `throttleMining`'s call site. That
-is why an idle chain still mints an empty block every slot. Re-wiring it is not
-the small fix it looks like: mainnet has the value set to `5`, so honoring it
-would move mainnet's idle cadence from 2s to 5s. This flag deliberately leaves
-empty blocks alone and touches only the block that carries a transaction.
+is why an idle chain still mints an empty block every slot, and why
+`emptyinterval` is a node flag here rather than a revival of the on-chain
+value: re-wiring it would silently change mainnet's idle cadence from 2s to 5s.
 
 **The drift correction still owns the empty-block cadence, and only that.**
 `timeIt` compares recent block density against the nominal interval and either
@@ -142,7 +162,7 @@ timestamps are whole seconds. On mainnet's 2s interval the window is
 matches its measured spacing (1s 26.0%, 2s 55.8%, 3s 10.5%, 4s 7.7%).
 
 Only the empty heartbeat is affected. A block carrying a transaction is sealed
-by the idle rule long before either deadline -- the 10-minute soak above saw a
+by the idle rule long before either deadline -- the 10-minute soak below saw a
 maximum of 130ms.
 
 **`BlockMinBuildTime` is not a floor for idle sealing.** It only shapes the
@@ -176,40 +196,51 @@ the faster the chain, the longer the stall. Nothing is lost by removing it:
 catching up when the chain runs *late* was never its job, and that half is
 `timeIt`'s, which stays.
 
-**What disappears is the slot deadline acting as a ceiling on block rate.**
-Traffic arriving just slower than `idleseal` gives every transaction its own
-block. Nothing pathological appeared in testing -- steady traffic produced one
-block per transaction and dense traffic coalesced (40 transactions into one
-block) -- but if a deployment needs a floor under the block rate, the shape to
-add is a bounded minimum spacing since the parent.
+What genuinely disappears with idle sealing is the slot deadline acting as a
+natural ceiling on block *rate*: traffic arriving just slower than
+`idleseal` gives every transaction its own block. If a deployment needs a floor
+under that, the shape to add is a bounded minimum spacing, not this.
+
+**With `emptyinterval` on, a transaction block may be trailed by one empty
+block.** The withhold decision is taken in `commitWork` from the pool's own
+view, before the mining-token gate. A node that has not yet reset its pool after
+someone else sealed the transaction still sees it as pending, does not skip, and
+builds a round that comes out empty. Deciding after the fill instead -- where
+emptiness is known exactly -- was measured and rejected: a round discarded at
+that point has already taken the mining token and leaves it to expire (TTL 10s),
+which pushed confirmation from 117ms to **4.4s average**. One trailing empty
+block is the cheaper trade, and the comment in `commitTransactionsEx` records it
+so the next reader does not redo the experiment.
 
 **Timestamps are seconds, and several blocks can share one.** PoA permits it --
 the `header.Time <= parent.Time` rejection in `consensus/ethash/consensus.go` is
 guarded by `metaminer.IsPoW()` -- so this is consensus-legal. Explorers and
 indexers that compute block time by subtracting timestamps will show 0s gaps.
 
-**Finality depth is measured in blocks, not seconds.**
-`GetFinalizedBlockNumber` returns `head - (govNodeCount/2 + 1)`. Empty blocks
-keep arriving on the on-chain interval, so that depth fills at the same rate as
-before; sealing early only brings it forward, never delays it.
+**Finality depth is measured in blocks, not seconds.** `GetFinalizedBlockNumber`
+returns `head - (govNodeCount/2 + 1)`. Withholding empty blocks means those
+confirmations arrive only as fast as real traffic produces blocks, so on a very
+quiet chain a transaction is included in ~100ms but finalized later than the
+fixed-cadence chain would have finalized it. Use `emptyinterval` deliberately.
 
 ## Why mainnet and testnet are unaffected
 
-- **Off by default.** `params.BlockIdleSealTime` is 0, and every new path is
-  behind a `> 0` test. With the flag unset the sealer runs the same code it ran
-  before: the quiet timer is never created and the wait selects on a nil
-  channel, which never fires. Measured on the same binary with the flag
-  omitted: idle cadence and confirmation latency matched the pre-change
-  baseline.
+- **Off by default.** `params.BlockIdleSealTime` and `params.BlockEmptyInterval`
+  are 0, and every new path is behind a `> 0` test. With the flags unset the
+  sealer runs the same code it ran before: the idle timer is never created, no
+  extra transaction subscription is opened, and `commitWork` gains one integer
+  comparison. Measured on the same binary with the flags omitted: idle cadence
+  and confirmation latency matched the pre-change baseline.
 - **Refused outright on the public chains.** `eth.New` looks up the genesis hash
-  and returns an error -- the node exits rather than starting -- if the flag is
-  set on a chain whose genesis is `MetadiumMainnetGenesisHash` or
+  and returns an error -- the node exits rather than starting -- if either flag
+  is set on a chain whose genesis is `MetadiumMainnetGenesisHash` or
   `MetadiumTestnetGenesisHash`. Keyed on genesis rather than chain id, because a
   private chain may reuse a chain id but never the public genesis.
 - **No consensus rule is touched.** Block spacing is not validated by
   `verifyHeader`; producer rotation is height-based
   (`admin.go: ix := int(height/blocksPer) % len(nodes)`); rewards are per block.
-  A node running this flag produces blocks that any stock node accepts, and the
-  flag changes nothing about validation, so a mixed fleet stays in agreement --
-  the sealer just closes blocks sooner.
-- **Sealer-side only.** Nothing in the import, sync or RPC path reads the value.
+  A node running these flags produces blocks that any stock node accepts, and
+  the flags change nothing about validation, so a mixed fleet stays in
+  agreement -- the sealers just close blocks sooner.
+- **Sealer-side only.** Nothing in the import, sync or RPC path reads either
+  value.

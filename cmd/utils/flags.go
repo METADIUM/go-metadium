@@ -1028,6 +1028,11 @@ var (
 		Usage: "Private networks only: seal a non-empty block once no new transaction arrives for this many ms (0 = off, hold the full block interval)",
 		Value: params.BlockIdleSealTime,
 	}
+	BlockEmptyInterval = &cli.Int64Flag{
+		Name:  "metadium.block.emptyinterval",
+		Usage: "Private networks only: with an empty transaction pool, produce no block until this many seconds have passed since the parent (0 = off, produce empty blocks every interval)",
+		Value: params.BlockEmptyInterval,
+	}
 	BlobRetentionBlocks = &cli.Uint64Flag{
 		Name:  "blob.retention",
 		Usage: "Number of blocks to retain blob sidecars (0 = keep forever)",
@@ -2064,6 +2069,12 @@ func SetMetadiumConfig(ctx *cli.Context, stack *node.Node, cfg *eth.Config) {
 		params.BlockIdleSealTime = ctx.Int64(BlockIdleSealTime.Name)
 		if params.BlockIdleSealTime < 0 {
 			Fatalf("Invalid %s: %d, must not be negative", BlockIdleSealTime.Name, params.BlockIdleSealTime)
+		}
+	}
+	if ctx.IsSet(BlockEmptyInterval.Name) {
+		params.BlockEmptyInterval = ctx.Int64(BlockEmptyInterval.Name)
+		if params.BlockEmptyInterval < 0 {
+			Fatalf("Invalid %s: %d, must not be negative", BlockEmptyInterval.Name, params.BlockEmptyInterval)
 		}
 	}
 

@@ -28,9 +28,18 @@ second interval:
 | 40 transactions submitted at once | 1 block, 5.7 s | 1 block, **0.18 s** |
 | Empty-block cadence when idle | every 4.3–5.8 s | unchanged, every 4.3–5.8 s |
 
-The last row is the important one: **empty blocks are untouched.** The
+The last row is the important one: **`idleseal` leaves empty blocks alone.** The
 heartbeat of the chain stays the on-chain interval, and only blocks that carry
 transactions close early.
+
+If that heartbeat is itself the problem — a chain idle for long stretches, where
+the empty blocks are just disk growth — there is a second flag for it,
+`--metadium.block.emptyinterval <s>`: with an empty pool, no block is produced
+until that many seconds have passed since the parent. It is **not needed for
+confirmation latency** and this guide does not use it; measured behaviour, the
+one empty block that can trail a transaction block, and the effect on finality
+depth are in [enterprise-block-timing.md](enterprise-block-timing.md). The rest
+of this guide is about `idleseal`.
 
 ## Prerequisites
 
@@ -256,7 +265,7 @@ flag at all) against such a chain: 9,887 blocks imported, no rejected headers.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Node exits: `--metadium.block.idleseal is for private networks only` | The chain's genesis is the Metadium mainnet or testnet genesis | Not usable there. Confirm the chain has its own genesis |
+| Node exits: `--metadium.block.idleseal is for private networks only` (or the same for `--metadium.block.emptyinterval`, or both named at once) | The chain's genesis is the Metadium mainnet or testnet genesis | Not usable there. Confirm the chain has its own genesis |
 | Node exits: `flag provided but not defined` | Binary predates the flag (`m1.1.3` or older) | Upgrade the sealer |
 | Node exits: `Invalid metadium.block.idleseal: -1, must not be negative` | Negative value | Use `0` (off) or a positive millisecond count |
 | Confirmation is fast for some transactions and slow for others | The flag is set on some sealers but not all; latency then depends on whose turn it is | Set the same value on every sealer |
