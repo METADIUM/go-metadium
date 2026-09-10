@@ -19,6 +19,10 @@ Camellia is Metadium's hard fork that activates Ethereum's Shanghai and Cancun E
 
 Nodes must run this release before the mainnet activation block; older binaries will follow a diverging chain.
 
+**For contract authors:** the EVM is **Cancun** from the activation blocks above.
+Compile with `--evm-version cancun` (or a toolchain default targeting Cancun or
+older); a contract compiled for a newer EVM version will not run.
+
 | EIP | Feature | Status |
 |-----|---------|--------|
 | EIP-3855 | PUSH0 opcode | Verified |
@@ -44,7 +48,9 @@ See [docs/camellia-test-report.md](docs/camellia-test-report.md) for full test r
 
 ## Building
 
-Prerequisites: Go 1.21+, C compiler (for RocksDB builds).
+Prerequisites: Go 1.22+, C compiler (for RocksDB builds). The floor is set by
+the embedded etcd, whose own `go.mod` declares 1.22; a module cannot declare
+less than its dependencies.
 
 These are the Makefile targets CI validates. They build against whatever the
 host provides, which is what you want for development — but **not** for
