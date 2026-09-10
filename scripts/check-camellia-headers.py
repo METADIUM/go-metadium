@@ -37,7 +37,13 @@ BATCH = 100
 
 # params.BlobTxTargetBlobGasPerBlock, mirrored here so the check does not depend
 # on the node it is pointed at.
-TARGET_BLOB_GAS = 393216
+#
+# This is Metadium's value -- 1 blob per block for a 2-second PoA slot -- and it
+# is deliberately NOT upstream Ethereum's 3 blobs (393216). Do not "correct" it
+# to the upstream constant; that is the bug this line already had once, and it
+# was invisible because a chain that has never carried a blob gives the same
+# answer for any target.
+TARGET_BLOB_GAS = 131072  # 1 * params.BlobTxBlobGasPerBlob
 # types.EmptyWithdrawalsHash. Metadium PoA has no withdrawals and
 # FinalizeAndAssemble pins the header to this value.
 EMPTY_WITHDRAWALS = "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
