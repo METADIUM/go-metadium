@@ -6,7 +6,7 @@ Metadium blockchain node implementation, forked from [go-ethereum](https://githu
 
 Metadium is a Proof-of-Authority (PoA) blockchain with on-chain governance. It uses a custom consensus layer built on top of go-ethereum's ethash engine, with block signing via node keys and reward distribution through governance smart contracts.
 
-**Current version:** 1.1.3-stable (Camellia fork)
+**Current version:** 1.1.4-stable (Camellia fork)
 
 ## Camellia Fork
 
@@ -18,6 +18,10 @@ Camellia is Metadium's hard fork that activates Ethereum's Shanghai and Cancun E
 | Mainnet | 117,764,000 | 2026-08-27 12:00 KST (scheduled) |
 
 Nodes must run this release before the mainnet activation block; older binaries will follow a diverging chain.
+
+**For contract authors:** the EVM is **Cancun** from the activation blocks above.
+Compile with `--evm-version cancun` (or a toolchain default targeting Cancun or
+older); a contract compiled for a newer EVM version will not run.
 
 | EIP | Feature | Status |
 |-----|---------|--------|
@@ -44,7 +48,9 @@ See [docs/camellia-test-report.md](docs/camellia-test-report.md) for full test r
 
 ## Building
 
-Prerequisites: Go 1.21+, C compiler (for RocksDB builds).
+Prerequisites: Go 1.22+, C compiler (for RocksDB builds). The floor is set by
+the embedded etcd, whose own `go.mod` declares 1.22; a module cannot declare
+less than its dependencies.
 
 These are the Makefile targets CI validates. They build against whatever the
 host provides, which is what you want for development — but **not** for
