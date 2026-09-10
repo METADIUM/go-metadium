@@ -221,23 +221,46 @@ log "--- EIP-3651: Warm COINBASE ---"
 #   before fork (block 99): BALANCE cold access = 2600 gas → larger value returned
 #   after fork (block 100): COINBASE warm → BALANCE warm = 100 gas → smaller value returned
 WARM_CB_CODE="0x5a4131505a900360005260206000f3"
-# Must call with from != coinbase: if from==coinbase, EIP-2929 pre-warm makes it always warm
-# node1 coinbase = 0xf39..., use from = 0x709... (account2)
-WARM_CB_FROM="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+# The caller must not be the coinbase of the block being probed: EIP-2929
+# pre-warms the caller, so from == coinbase reports the warm cost at both
+# heights and the comparison collapses into a false FAIL. This used to hardcode
+# account2 on the assumption that node1 is the only producer; on a chain where
+# all three nodes seal, whichever of them sealed block 99 breaks it. Pick a
+# caller at runtime that sealed neither probed block. See issue #120.
+block_miner() {
+  rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$1\",false],\"id\":1}" | \
+    python3 -c "import sys,json; print((json.load(sys.stdin).get('result') or {}).get('miner','').lower())" 2>/dev/null
+}
+M99=$(block_miner "0x63")
+M100=$(block_miner "0x64")
+WARM_CB_FROM=""
+for cand in 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 \
+            0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+            0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC; do
+  lc=$(echo "$cand" | tr 'A-Z' 'a-z')
+  if [[ "$lc" != "$M99" && "$lc" != "$M100" ]]; then WARM_CB_FROM="$cand"; break; fi
+done
 
-R99=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_call\",\"params\":[{\"from\":\"$WARM_CB_FROM\",\"data\":\"$WARM_CB_CODE\",\"gas\":\"0x100000\"},\"0x63\"],\"id\":1}" | \
-  python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('result','') or d.get('error',{}).get('message','error'))")
-R100=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_call\",\"params\":[{\"from\":\"$WARM_CB_FROM\",\"data\":\"$WARM_CB_CODE\",\"gas\":\"0x100000\"},\"0x64\"],\"id\":1}" | \
-  python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('result','') or d.get('error',{}).get('message','error'))")
-GAS99=$(python3 -c "print(int('$R99', 16))" 2>/dev/null || echo "-1")
-GAS100=$(python3 -c "print(int('$R100', 16))" 2>/dev/null || echo "-1")
-
-if [[ "$GAS99" -eq -1 || "$GAS100" -eq -1 ]]; then
-  fail "Warm COINBASE: eth_call failed (block99=$R99, block100=$R100)"
-elif [[ "$GAS99" -gt "$GAS100" ]]; then
-  pass "Warm COINBASE: block99 gas=$GAS99 > block100 gas=$GAS100 (cold→warm savings confirmed)"
+if [[ -z "$WARM_CB_FROM" ]]; then
+  # Every known account sealed one of the two probed blocks. Skipping with the
+  # reason is right here: the check cannot be run, which is not the same as the
+  # fork misbehaving, and a FAIL would say the wrong thing.
+  skip "Warm COINBASE: no funded account that sealed neither block 99 ($M99) nor 100 ($M100)"
 else
-  fail "Warm COINBASE: block99=$GAS99, block100=$GAS100 (savings not confirmed)"
+  R99=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_call\",\"params\":[{\"from\":\"$WARM_CB_FROM\",\"data\":\"$WARM_CB_CODE\",\"gas\":\"0x100000\"},\"0x63\"],\"id\":1}" | \
+    python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('result','') or d.get('error',{}).get('message','error'))")
+  R100=$(rpc "{\"jsonrpc\":\"2.0\",\"method\":\"eth_call\",\"params\":[{\"from\":\"$WARM_CB_FROM\",\"data\":\"$WARM_CB_CODE\",\"gas\":\"0x100000\"},\"0x64\"],\"id\":1}" | \
+    python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('result','') or d.get('error',{}).get('message','error'))")
+  GAS99=$(python3 -c "print(int('$R99', 16))" 2>/dev/null || echo "-1")
+  GAS100=$(python3 -c "print(int('$R100', 16))" 2>/dev/null || echo "-1")
+
+  if [[ "$GAS99" -eq -1 || "$GAS100" -eq -1 ]]; then
+    fail "Warm COINBASE: eth_call failed (block99=$R99, block100=$R100)"
+  elif [[ "$GAS99" -gt "$GAS100" ]]; then
+    pass "Warm COINBASE: from=${WARM_CB_FROM:0:10} block99 gas=$GAS99 > block100 gas=$GAS100 (cold→warm savings confirmed)"
+  else
+    fail "Warm COINBASE: from=${WARM_CB_FROM:0:10} block99=$GAS99, block100=$GAS100 (savings not confirmed; miners 99=$M99 100=$M100)"
+  fi
 fi
 
 echo ""
