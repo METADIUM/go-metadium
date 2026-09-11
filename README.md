@@ -15,9 +15,9 @@ Camellia is Metadium's hard fork that activates Ethereum's Shanghai and Cancun E
 | Network | Activation block | Activation time |
 |---------|------------------|-----------------|
 | Testnet | 86,449,000 | 2026-05-20 12:00 KST (activated) |
-| Mainnet | 117,764,000 | 2026-08-27 12:00 KST (scheduled) |
+| Mainnet | 117,764,000 | 2026-08-27 12:00 KST (activated) |
 
-Nodes must run this release before the mainnet activation block; older binaries will follow a diverging chain.
+Both networks are past their activation block, so a Camellia-capable release is required to follow the chain at all. A pre-Camellia binary does not diverge onto its own chain — block production is permissioned and every producer has upgraded — it stops importing at the activation block. See [Upgrading from 0.10.x](#upgrading-from-010x) for which release to take.
 
 **For contract authors:** the EVM is **Cancun** from the activation blocks above.
 Compile with `--evm-version cancun` (or a toolchain default targeting Cancun or
@@ -174,9 +174,10 @@ before — but review the following **before** restarting on the new binary.
 
 ### Upgrade checklist
 
-1. **Upgrade before the activation block** — mainnet 117,764,000. The block
-   height is authoritative; wall-clock estimates are approximate. Nodes on
-   older binaries follow a diverging chain from that block on.
+1. **Both networks are already past activation** — mainnet 117,764,000,
+   testnet 86,449,000. The block height is authoritative; wall-clock
+   estimates are approximate. A pre-Camellia binary stops importing at the
+   activation block; it does not diverge onto its own chain.
 2. **Use the engine-matched tarball.** The DB engine is decided at build time.
    Check the node's chaindata before extracting: `.sst` files → rocksdb
    tarball, `.ldb` files → leveldb tarball. A mismatched binary cannot open
