@@ -174,9 +174,10 @@ before — but review the following **before** restarting on the new binary.
 
 ### Upgrade checklist
 
-1. **Upgrade before the activation block** — mainnet 117,764,000. The block
-   height is authoritative; wall-clock estimates are approximate. Nodes on
-   older binaries follow a diverging chain from that block on.
+1. **Both networks are already past activation** — mainnet 117,764,000,
+   testnet 86,449,000. The block height is authoritative; wall-clock
+   estimates are approximate. A pre-Camellia binary stops importing at the
+   activation block; it does not diverge onto its own chain.
 2. **Use the engine-matched tarball.** The DB engine is decided at build time.
    Check the node's chaindata before extracting: `.sst` files → rocksdb
    tarball, `.ldb` files → leveldb tarball. A mismatched binary cannot open
