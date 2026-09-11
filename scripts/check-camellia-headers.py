@@ -2,6 +2,11 @@
 # check-camellia-headers.py - verify a chain's post-Camellia headers against the
 # rule consensus/ethash/consensus.go enforces (verifyCamelliaHeaderFields).
 #
+# Covers all five checks that rule makes: withdrawalsHash pinned to the empty
+# root, excessBlobGas derived from the parent, parentBeaconRoot absent,
+# blobGasUsed within the per-block cap, and blobGasUsed a whole multiple of a
+# blob's gas. The last three were added for issue #134.
+#
 # Usage:
 #   python3 scripts/check-camellia-headers.py [RPC_URL] [START] [END]
 #   python3 scripts/check-camellia-headers.py http://localhost:8545 117764000
@@ -44,6 +49,13 @@ BATCH = 100
 # was invisible because a chain that has never carried a blob gives the same
 # answer for any target.
 TARGET_BLOB_GAS = 131072  # 1 * params.BlobTxBlobGasPerBlob
+# params.BlobTxBlobGasPerBlob and params.MaxBlobGasPerBlock (2 blobs). The cap
+# and the multiple are the two blobGasUsed rules added for issue #134: nothing
+# on the verify path capped the field, and core.ValidateBody compares it to the
+# body's blob count by dividing, which leaves up to PER_BLOB-1 of slack that
+# feeds the next block's excessBlobGas undivided.
+PER_BLOB = 131072
+MAX_BLOB_GAS = 2 * PER_BLOB
 # types.EmptyWithdrawalsHash. Metadium PoA has no withdrawals and
 # FinalizeAndAssemble pins the header to this value.
 EMPTY_WITHDRAWALS = "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
@@ -108,10 +120,18 @@ def main():
                 continue
 
             withdrawals = block.get("withdrawalsRoot")
+            beacon_root = block.get("parentBeaconBlockRoot")
             excess = field(block, "excessBlobGas")
             used = field(block, "blobGasUsed")
             parent_excess = field(parent, "excessBlobGas") or 0
             parent_used = field(parent, "blobGasUsed") or 0
+
+            # Metadium has no beacon chain and the sealing path never sets this;
+            # core.ProcessBeaconBlockRoot acts on it whenever it is present.
+            if beacon_root is not None:
+                print(f"  {num}: parentBeaconBlockRoot {beacon_root}, want absent",
+                      flush=True)
+                violations += 1
 
             if withdrawals is None:
                 print(f"  {num}: missing withdrawalsRoot", flush=True)
@@ -128,6 +148,14 @@ def main():
                 print(f"  {num}: missing blobGasUsed", flush=True)
                 violations += 1
             else:
+                if used > MAX_BLOB_GAS:
+                    print(f"  {num}: blobGasUsed {used} over the per-block max {MAX_BLOB_GAS}",
+                          flush=True)
+                    violations += 1
+                if used % PER_BLOB:
+                    print(f"  {num}: blobGasUsed {used} is not a multiple of {PER_BLOB}",
+                          flush=True)
+                    violations += 1
                 want = calc_excess_blob_gas(parent_excess, parent_used)
                 if excess != want:
                     print(f"  {num}: excessBlobGas {excess}, want {want} "
