@@ -80,6 +80,48 @@ func TestVerifyCamelliaHeaderFields(t *testing.T) {
 			header(func(h *types.Header) { h.ExcessBlobGas = new(big.Int) }),
 			"invalid excessBlobGas",
 		},
+		// Issue #134. Three fields in the same class as excessBlobGas: signed by
+		// the seal, acted on by the node, and previously unverified.
+		{
+			// core.ProcessBeaconBlockRoot runs the EIP-4788 system call whenever
+			// this is set, so leaving it free let a sealer write contract storage
+			// that no rule authorised.
+			"parent beacon root set",
+			header(func(h *types.Header) { h.ParentBeaconRoot = &other }),
+			"invalid parentBeaconRoot",
+		},
+		{
+			// The builder capped this; nothing on the verify path did. Header and
+			// body agreeing with each other was enough.
+			"blob gas used over the block maximum",
+			header(func(h *types.Header) {
+				h.BlobGasUsed = new(big.Int).SetUint64(params.MaxBlobGasPerBlock + params.BlobTxBlobGasPerBlob)
+			}),
+			"over the per-block maximum",
+		},
+		{
+			"blob gas used at the block maximum",
+			header(func(h *types.Header) {
+				h.BlobGasUsed = new(big.Int).SetUint64(params.MaxBlobGasPerBlock)
+			}),
+			"",
+		},
+		{
+			// core.ValidateBody divides, so this passes there; the child's
+			// excessBlobGas derives from it undivided.
+			"blob gas used with sub-blob slack",
+			header(func(h *types.Header) {
+				h.BlobGasUsed = new(big.Int).SetUint64(params.BlobTxBlobGasPerBlob + params.BlobTxBlobGasPerBlob - 1)
+			}),
+			"not a multiple of",
+		},
+		{
+			"blob gas used one whole blob",
+			header(func(h *types.Header) {
+				h.BlobGasUsed = new(big.Int).SetUint64(params.BlobTxBlobGasPerBlob)
+			}),
+			"",
+		},
 	} {
 		err := verifyCamelliaHeaderFields(tt.header, parent)
 		switch {

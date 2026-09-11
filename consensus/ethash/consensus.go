@@ -546,6 +546,18 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 // deployed. The failure message carries the block, the parent and both values so
 // that a violation found that way is diagnosable rather than just a stall.
 func verifyCamelliaHeaderFields(header, parent *types.Header) error {
+	// EIP-4788's parentBeaconRoot means nothing here -- Metadium has no beacon
+	// chain, and the PoA sealing path never sets the field; only the engine-API
+	// payload path does. The pre-Camellia branch pins it to nil, and this branch
+	// has to as well: core.ProcessBeaconBlockRoot acts on it whenever it is set,
+	// running the EIP-4788 system call and writing the ring-buffer contract's
+	// storage. That is deterministic, so every node would agree on a state
+	// change no rule had authorised. The field is covered by the seal hash, so
+	// it is a signed field with no rule attached.
+	if header.ParentBeaconRoot != nil {
+		return fmt.Errorf("invalid parentBeaconRoot in camellia block %v (parent %x): have %#x, expected nil",
+			header.Number, parent.Hash(), *header.ParentBeaconRoot)
+	}
 	// Metadium PoA has no withdrawals; FinalizeAndAssemble pins the hash to the
 	// empty root, so anything else is a header that was not built by this code.
 	if header.WithdrawalsHash == nil {
@@ -563,6 +575,26 @@ func verifyCamelliaHeaderFields(header, parent *types.Header) error {
 	}
 	if header.BlobGasUsed == nil {
 		return fmt.Errorf("missing blobGasUsed in camellia block %v (parent %x)", header.Number, parent.Hash())
+	}
+	// The per-block blob ceiling existed only in the builder. eip4844's
+	// VerifyEIP4844Header is not called on the ethash path, and
+	// core.ValidateBody only reconciles the header against the body's blob
+	// count, so nothing capped it: a block carrying ten blobs verified, because
+	// header and body agreed with each other.
+	if !header.BlobGasUsed.IsUint64() || header.BlobGasUsed.Uint64() > params.MaxBlobGasPerBlock {
+		return fmt.Errorf("blobGasUsed over the per-block maximum in block %v (parent %x): have %v, max %d",
+			header.Number, parent.Hash(), header.BlobGasUsed, uint64(params.MaxBlobGasPerBlock))
+	}
+	// core.ValidateBody compares the body's blob count to blobGasUsed by
+	// dividing, so every value in [blobs*perBlob, (blobs+1)*perBlob) passes
+	// there. The parent's blobGasUsed then feeds the child's excessBlobGas
+	// undivided, just below -- so that slack moves the blob fee market by up to
+	// perBlob-1 per block, compounding, and the excessBlobGas check cannot see
+	// it because it is computing from the inflated value. Require a whole
+	// multiple so the two readings of the field agree.
+	if rem := new(big.Int).Mod(header.BlobGasUsed, big.NewInt(params.BlobTxBlobGasPerBlob)); rem.Sign() != 0 {
+		return fmt.Errorf("blobGasUsed not a multiple of %d in block %v (parent %x): have %v",
+			uint64(params.BlobTxBlobGasPerBlob), header.Number, parent.Hash(), header.BlobGasUsed)
 	}
 	var parentBlobGasUsed uint64
 	if parent.BlobGasUsed != nil {
