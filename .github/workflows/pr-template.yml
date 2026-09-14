@@ -1,0 +1,36 @@
+name: pr-template
+
+# Enforces the two fields the PR template calls required -- the compatibility
+# tier and the rollout gate -- which until now nothing but reviewer diligence
+# checked (issue #113).
+#
+# This reads the pull request body out of the event payload. It builds nothing
+# and needs no checkout of the head code, so it finishes in seconds and cannot
+# be affected by what the PR changes. The body is passed to the script through
+# the environment, never interpolated into a shell line: a PR description is
+# attacker-controlled text.
+#
+# Advisory to begin with. Make it a required check on dev only after it has been
+# seen passing on a few PRs, so a false positive does not block a merge before
+# anyone has watched it run.
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  fields:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+
+      - name: Check the required template fields
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          bash .github/scripts/check-pr-template.sh "$RUNNER_TEMP/pr-body.md"
