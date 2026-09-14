@@ -103,10 +103,19 @@ else
 		# rest of the testnet left on the old build. Prose satisfies this --
 		# #136 said it in a sentence rather than a checkbox -- so the test is
 		# that the gate is named at all, not how.
+		#
+		# Only what the author asserted counts. The template's own first Rollout
+		# box spells out "testnet" and "block producers", so grepping the
+		# section as a whole would let an untouched template satisfy the gate
+		# for a C0-C3 change that never committed to it. Unticked boxes are
+		# dropped the way has_prose drops them; ticked ones stay, so ticking the
+		# real gate box still passes.
+		asserted=$(printf '%s\n' "$unwrapped" | grep -vE '^[[:space:]]*-[[:space:]]*\[[[:space:]]\]')
+
 		case $tier in
 		C0 | C1 | C2 | C3)
-			if printf '%s' "$unwrapped" | grep -qi 'testnet' &&
-				printf '%s' "$unwrapped" | grep -qiE '\bBPs?\b|block producers?'; then
+			if printf '%s' "$asserted" | grep -qi 'testnet' &&
+				printf '%s' "$asserted" | grep -qiE '\bBPs?\b|block producers?'; then
 				echo "ok: $tier rollout names the testnet-BP-first gate"
 			else
 				problem "tier $tier requires the testnet-BP-first gate in '## Rollout' (testnet block producers upgrade first, the rest of the testnet stays on the old build). It is not mentioned."
