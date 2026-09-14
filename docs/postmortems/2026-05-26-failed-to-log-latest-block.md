@@ -41,13 +41,13 @@ INFO  mined potential block           number=33945287 ...
 ```text
 [블록 채굴 완료]
     │
-    └─▶ LogBlock(height, hash)              metadium/legacy.go:575
+    └─▶ LogBlock(height, hash)              metadium/legacy.go:588
             │
             ├─▶ json.Marshal(metaWork)       직렬화 (정상)
             │
-            ├─▶ etcdPut("metadium-work", …) metadium/etcdutil.go:614
+            ├─▶ etcdPut("metadium-work", …) metadium/etcdutil.go:640
             │       │
-            │       └─▶ etcdIsReady()        metadium/etcdutil.go:155
+            │       └─▶ etcdIsReady()        metadium/etcdutil.go:175
             │               │
             │               └─▶ ma.etcd != nil
             │                   && ma.etcdCli != nil
@@ -60,7 +60,7 @@ INFO  mined potential block           number=33945287 ...
 
 ### 2.2 핵심 코드
 
-**`LogBlock()` — metadium/legacy.go:575**
+**`LogBlock()` — metadium/legacy.go:588**
 
 ```go
 func LogBlock(height int64, hash common.Hash) {
@@ -80,7 +80,7 @@ func LogBlock(height int64, hash common.Hash) {
 }
 ```
 
-**`etcdPut()` — metadium/etcdutil.go:614**
+**`etcdPut()` — metadium/etcdutil.go:640**
 
 ```go
 func (ma *metaAdmin) etcdPut(key, value string) (int64, error) {
@@ -95,7 +95,7 @@ func (ma *metaAdmin) etcdPut(key, value string) (int64, error) {
 }
 ```
 
-**`etcdIsReady()` — metadium/etcdutil.go:155**
+**`etcdIsReady()` — metadium/etcdutil.go:175**
 
 ```go
 func (ma *metaAdmin) etcdIsReady() bool {
@@ -108,7 +108,7 @@ func (ma *metaAdmin) etcdIsReady() bool {
 ```text
 [etcd 상태 이상 또는 Raft 리더십 이전]
     │
-    ├─▶ etcdReady = false  (etcdutil.go:315 부근)
+    ├─▶ etcdReady = false  (etcdutil.go:341 부근)
     │
     ├─▶ etcdPut() → ErrNotRunning (매 블록마다 반복)
     │
@@ -127,9 +127,9 @@ func (ma *metaAdmin) etcdIsReady() bool {
 
 | 위치 | 문제 |
 | --- | --- |
-| `legacy.go:593` | `etcdPut` 실패 시 에러를 무시하고 계속 진행 |
-| `legacy.go:601` | `blocksMined++`가 etcd 기록 성공 여부와 무관하게 증가 |
-| `etcdutil.go:615` | `etcdIsReady` 실패 시 재시도 로직 없음 |
+| `legacy.go:605` | `etcdPut` 실패 시 에러를 무시하고 계속 진행 |
+| `legacy.go:614` | `blocksMined++`가 etcd 기록 성공 여부와 무관하게 증가 |
+| `etcdutil.go:641` | `etcdIsReady` 실패 시 재시도 로직 없음 |
 
 ---
 
@@ -181,7 +181,7 @@ func (ma *metaAdmin) etcdIsReady() bool {
 
 아래 중 하나라도 해당하면 **즉시 노드 재시작 또는 etcd 복구** 필요:
 
-- `etcdctl endpoint health` 결과에 unhealthy 노드가 있는 경우
+- `admin.metadiumInfo.etcd`의 `leader`가 비어 있거나 `members`가 구성보다 적은 경우 (§5.1)
 - uncle 블록 비율이 평소보다 현저히 높은 경우
 - 로그에서 `"Metadium - yield failed"` 메시지가 함께 발생하는 경우
 - 2개 이상의 노드에서 동시에 동일 에러가 발생하는 경우
@@ -192,7 +192,7 @@ func (ma *metaAdmin) etcdIsReady() bool {
 
 - 에러가 단일 노드에서만 발생
 - uncle 블록 비율이 정상 범위 내
-- `etcdctl endpoint health`에서 클러스터 전체가 healthy
+- `admin.metadiumInfo.etcd`에 `leader`가 잡혀 있고 `members`가 구성과 일치
 - Raft 리더십이 다른 노드로 정상 이전되어 채굴이 계속됨
 
 #### 코드 수정 우선순위
@@ -200,64 +200,85 @@ func (ma *metaAdmin) etcdIsReady() bool {
 | 항목 | 우선순위 | 이유 |
 | --- | --- | --- |
 | 운영 조치 (etcd 복구/노드 재시작) | **긴급** | 현재 발생 중인 에러 해소 |
-| `blocksMined` 조건 개선 (§6.1) | **높음** | 리더십 로테이션 오작동 방지 |
-| etcdPut 재시도 로직 (§6.2) | **중간** | 일시적 네트워크 오류 내성 강화 |
-| etcdReady 자동 복구 워치독 (§6.3) | **낮음** | 장기적 안정성 향상 |
+| `blocksMined` 조건 개선 (§7.1) | **높음** | 리더십 로테이션 오작동 방지 |
+| `etcdReady` 복구 경로 수정 (§7.3) | **높음** | 이 장애가 몇 시간씩 지속된 직접 원인 |
+| etcdPut 재시도 로직 (§7.2) | **보류** | §7.2 참조 — 이 장애에는 효과 없음 |
 
 ---
 
 ## 5. 점검 사항
 
-### 5.1 즉시 점검 (노드 서버에서 실행)
+> **etcd는 `gmet` 프로세스에 임베드되어 있습니다** (`embed.StartEtcd`). 별도 etcd
+> 프로세스도, 기본 포트 2379/2380도 없습니다. `etcdNewConfig`가 peer를
+> `https://<ip>:<self.Port+1>`, client를 `http://localhost:<self.Port+2>`로
+> 바인딩합니다(`metadium/etcdutil.go:152-158`). client는 **localhost 바인딩**이라
+> 외부에서 붙을 수 없습니다.
+>
+> 따라서 아래는 `gmet` 콘솔(`gmet attach`)을 기준으로 합니다. `etcdctl`은 노드에
+> 별도로 설치돼 있고 `--endpoints=http://localhost:<self.Port+2>`를 지정한
+> 경우에만 쓸 수 있으며, 설치를 전제하지 마십시오.
 
-```bash
-# etcd 클러스터 전체 상태 확인
-etcdctl endpoint health --cluster
+### 5.1 즉시 점검 (gmet 콘솔)
 
-# etcd 멤버 목록 및 리더 확인
-etcdctl member list
+```javascript
+// 클러스터 구성 · 멤버 목록 · self · 현재 리더
+//   (etcdctl member list / endpoint status --cluster 에 해당)
+admin.metadiumInfo.etcd
 
-# 현재 etcd 리더 확인
-etcdctl endpoint status --cluster -w table
+// metadium-work 키 최신 값  (etcdctl get metadium-work 에 해당)
+admin.etcdGetWork()
 
-# metadium-work 키 최신 값 확인
-etcdctl get metadium-work
-
-# etcd 최근 에러 로그 확인
-journalctl -u geth --since "2026-05-19 15:25:00" --until "2026-05-19 15:35:00" | grep -i etcd
+// 임의 키 조회  (etcdctl get <key> 에 해당)
+debug.etcdGet("metadium-work")
 ```
 
-### 5.2 etcd 상태 진단
+`admin.metadiumInfo.etcd`는 `cluster`, `members`, `self`, `leader`를 돌려줍니다
+(`metadium/etcdutil.go:1193` `etcdInfo()`, `admin.go:2081`에서 합성).
+`leader`가 비어 있거나 `self`와 계속 어긋나면 리더십이 정착하지 못한 상태입니다.
+
+### 5.2 노드 로그 점검
 
 ```bash
-# etcd 프로세스 정상 여부
-pgrep -fl etcd
+# 장애 구간의 etcd 관련 로그
+journalctl -u <gmet-service> --since "2026-05-19 15:25:00" --until "2026-05-19 15:35:00" | grep -iE "etcd|log the latest block"
 
-# etcd 데이터 디렉터리 용량 확인 (가득 찬 경우 쓰기 실패)
-du -sh /path/to/etcd/data
-
-# etcd alarm 확인 (NOSPACE 등)
-etcdctl alarm list
-
-# alarm이 있는 경우 해제 시도
-etcdctl alarm disarm
+# 정상/실패 판정에 직접 쓰이는 두 줄
+journalctl -u <gmet-service> -f | grep -E "logged the latest block|failed to log|etcd server ready"
 ```
 
-### 5.3 노드 간 연결 확인
+`etcd server ready`는 `etcdEventHandler`가 `etcdReady = true`를 찍는 유일한
+지점입니다(`etcdutil.go:332-339`). 장애 구간에 이 줄이 없다면 §7.3의 고착
+상태입니다.
+
+### 5.3 etcd 데이터 디렉터리
 
 ```bash
-# Raft 통신 포트(기본 2380) 연결 확인
-nc -zv <peer-node-ip> 2380
-
-# 클라이언트 포트(기본 2379) 연결 확인
-nc -zv <peer-node-ip> 2379
+# 데이터 디렉터리는 <datadir>/etcd (admin.go의 etcdDir)
+du -sh <datadir>/etcd
+df -h <datadir>
 ```
+
+디스크가 가득 차면 etcd가 `NOSPACE` alarm을 걸고 쓰기를 거부합니다. alarm 조회·해제와
+compaction은 트리에 RPC가 없으므로, `etcdctl`이 있는 경우에만 §6.1을 쓸 수 있습니다.
+
+### 5.4 노드 간 연결 확인
+
+```bash
+# Raft peer 포트 = <노드의 p2p 포트> + 1  (기본 2380 아님)
+nc -zv <peer-node-ip> <peer-port+1>
+```
+
+client 포트(`+2`)는 localhost 바인딩이므로 노드 간 연결 확인 대상이 아닙니다.
 
 ---
 
 ## 6. 후속 조치 방법
 
 ### 6.1 etcd가 alarm 상태인 경우
+
+> alarm 조회·해제와 compaction은 트리에 대응 RPC가 없습니다. 아래는 노드에 `etcdctl`이
+> 설치돼 있고 `--endpoints=http://localhost:<self.Port+2>`를 지정할 수 있는 경우에만
+> 해당합니다(§5 머리말).
 
 ```bash
 # alarm 목록 확인
@@ -288,13 +309,23 @@ journalctl -u geth -f | grep -E "logged the latest block|failed to log"
 
 3노드 클러스터에서 2노드 이상 장애 시 쿼럼 손실. 이 경우:
 
-```bash
-# 강제 새 클러스터 구성 (마지막 수단, 데이터 손실 가능성 있음)
-etcd --force-new-cluster
+임베디드 etcd에는 `etcd --force-new-cluster` 플래그를 넘길 경로가 없습니다. 대신
+트리가 같은 일을 하는 RPC를 노출합니다 — `admin.etcdInit()`은 `etcdNewConfig(true)`를
+거쳐 `ClusterState=new`, `ForceNewCluster=true`로 임베디드 서버를 띄웁니다
+(`etcdutil.go:160-161`, `web3ext.go:199`).
 
-# 또는 스냅샷에서 복구
-etcdctl snapshot restore <snapshot-file> --data-dir <new-data-dir>
+```javascript
+// 강제 새 클러스터 구성 (마지막 수단, 데이터 손실 가능성 있음)
+//   기존 멤버가 살아 있는 상태에서 실행하면 클러스터가 갈라집니다.
+admin.etcdInit()
+
+// 이후 나머지 노드를 다시 합류시킵니다
+admin.etcdJoin("<node-name>")      // 합류하는 노드에서
+admin.etcdAddMember("<node-name>") // 새 클러스터 쪽에서
 ```
+
+스냅샷에서 복구해야 한다면 노드를 **정지한 상태에서** `<datadir>/etcd`를 교체한 뒤
+기동합니다. 실행 중인 노드에 `etcdctl snapshot restore`를 거는 경로는 없습니다.
 
 ### 6.4 정상 복구 확인 기준
 
@@ -308,7 +339,7 @@ INFO  Metadium - logged the latest block  height=XXXXXXXX hash=... took=...
 
 ## 7. 코드 개선 권고사항
 
-### 7.1 `blocksMined` 카운터 조건 개선 (legacy.go:601)
+### 7.1 `blocksMined` 카운터 조건 개선 (legacy.go:614)
 
 etcd 기록 실패 시 카운터를 증가시키지 않아야 올바른 리더십 로테이션이 가능합니다:
 
@@ -329,7 +360,15 @@ if err != nil {
 admin.blocksMined++  // 성공 시에만 증가
 ```
 
-### 7.2 etcdPut 재시도 로직 추가 (etcdutil.go:614)
+### 7.2 etcdPut 재시도 로직 추가 (etcdutil.go:640) — 보류
+
+> **보류 사유 (#140 참조).** 아래 초안은 `ErrNotRunning`에서 재시도 없이 반환하는데,
+> 이 장애에서 `etcdPut`이 반환한 것은 **매번 `ErrNotRunning`** 이었습니다. 즉 재시도가
+> 한 번도 수행되지 않습니다. 게다가 `LogBlock`은 `admin.lock`을 함수 전체에 걸고
+> 약 5초마다 실행되므로, 그 락 안의 sleep 백오프는 `handleNewBlocks` 및
+> `admin.go:1332` 루프와 경합합니다. 개별 시도는 이미 `ReqTimeout()`으로 제한됩니다.
+> `ErrNotRunning`이 아닌 일시적 `Put` 실패가 실제로 관측되면 그때 에러 분포를 들고
+> 재검토합니다.
 
 일시적인 네트워크 오류에 대한 재시도를 추가하면 불필요한 에러 로그를 줄일 수 있습니다:
 
@@ -353,9 +392,32 @@ func (ma *metaAdmin) etcdPutWithRetry(key, value string, maxRetry int) (int64, e
 }
 ```
 
-### 7.3 etcdReady 복구 메커니즘
+### 7.3 etcdReady 복구 메커니즘 — #140
 
-`etcdReady = false`가 된 후 자동으로 재연결을 시도하는 워치독 고루틴을 추가하는 것을 권고합니다.
+**워치독을 새로 만들 필요는 없습니다. 복구 경로가 이미 있고, 하필 필요한 상태에서만
+동작을 거부합니다.**
+
+`admin.go:1332-1340`의 주기 루프가 `EtcdStart()`를 부르고, `EtcdStart()`는
+`!etcdIsRunning()`일 때 `etcdAutoJoin()`을 띄웁니다. 그런데 두 술어가 한 플래그
+차이입니다:
+
+```go
+etcdIsRunning() = etcd != nil && etcdCli != nil              // etcdutil.go:171
+etcdIsReady()   = etcd != nil && etcdCli != nil && etcdReady // etcdutil.go:175
+```
+
+고착 상태는 `running == true && ready == false`입니다. `etcdPut`은 **ready**로
+판정하는데 복구 분기는 전부 **running**으로 판정하므로, 세 갈래가 모두 "할 일 없음"으로
+빠집니다:
+
+1. `!admin.etcdIsLeader()` — etcd 리더인 노드는 `EtcdStart`에 도달조차 못 함
+2. `etcdStart()`는 `ErrAlreadyRunning` 즉시 반환 (반환값은 버려짐)
+3. `etcdAutoJoin()`은 `!etcdIsRunning()`일 때만 기동 → 기동 안 됨
+
+수정 방향은 별도 워치독이 아니라 술어 교정입니다 — `EtcdStart`가 `!etcdIsReady()`로
+판정하고, `etcdStart`가 `running && !ready`를 "stop 후 start"로 처리하고, `etcdStop`이
+`etcdReady`를 정리하고, `admin.go:1336`의 `etcdIsLeader` 게이트를 재검토하는 것.
+자세한 내용은 #140에 있습니다.
 
 ---
 
@@ -363,9 +425,18 @@ func (ma *metaAdmin) etcdPutWithRetry(key, value string, maxRetry int) (int64, e
 
 | 파일 | 라인 | 설명 |
 | --- | --- | --- |
-| `metadium/legacy.go` | 575–622 | `LogBlock()` 함수 전체 |
-| `metadium/etcdutil.go` | 614–628 | `etcdPut()` 함수 |
-| `metadium/etcdutil.go` | 155–157 | `etcdIsReady()` 함수 |
-| `metadium/etcdutil.go` | 312, 315 | `etcdReady` 플래그 토글 위치 |
-| `metadium/admin.go` | 106–109 | `metaWork` 구조체 정의 |
-| `metadium/admin.go` | 408–457 | `getMinerNodes()` 함수 |
+| `metadium/legacy.go` | 588–635 | `LogBlock()` 함수 전체 |
+| `metadium/etcdutil.go` | 640–654 | `etcdPut()` 함수 |
+| `metadium/etcdutil.go` | 175–177 | `etcdIsReady()` 함수 |
+| `metadium/etcdutil.go` | 171–173 | `etcdIsRunning()` 함수 (§7.3의 핵심) |
+| `metadium/etcdutil.go` | 338, 341 | `etcdReady` 플래그 토글 위치 |
+| `metadium/etcdutil.go` | 332 | `etcdEventHandler()` — 플래그를 true로 만드는 유일한 지점 |
+| `metadium/admin.go` | 107–110 | `metaWork` 구조체 정의 |
+| `metadium/admin.go` | 410–459 | `getMinerNodes()` 함수 |
+| `metadium/admin.go` | 1332–1340 | `EtcdStart()`를 호출하는 주기 루프 |
+
+> **기준 커밋: `560ef3cc2` (`dev`).** 줄 번호는 구조적으로 낡습니다 — 이 문서의
+> 최초 작성 시점(2026-05) 숫자는 #132(etcd 3.5.16)가 `etcdutil.go`에 순증 2줄을
+> 넣으면서 이미 두 번 어긋났습니다. 위 숫자가 맞지 않으면 함수 이름으로 찾거나
+> `git show 560ef3cc2:metadium/etcdutil.go` 로 당시 트리를 직접 여는 편이
+> 확실합니다.
