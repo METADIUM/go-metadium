@@ -7,6 +7,8 @@
 #
 # Usage: ./deploy.sh
 # Options: GMET_BIN=/path/to/gmet ./deploy.sh
+#          BLOCK_CREATION_TIME=5000 (ms, on-chain block interval; default 2000)
+#          MAX_IDLE_BLOCK_INTERVAL=5 (s, on-chain idle interval; default 5)
 
 set -euo pipefail
 
@@ -81,8 +83,8 @@ cat > config.json <<EOF
     "ballotDurationMax":      604800,
     "stakingMin":             1000000000000000000,
     "stakingMax":             100000000000000000000000000,
-    "MaxIdleBlockInterval":   5,
-    "blockCreationTime":      2000,
+    "MaxIdleBlockInterval":   ${MAX_IDLE_BLOCK_INTERVAL:-5},
+    "blockCreationTime":      ${BLOCK_CREATION_TIME:-2000},
     "blockRewardAmount":      1000000000000000000,
     "maxPriorityFeePerGas":   80000000000,
     "rewardDistributionMethod": [4000, 1000, 2500, 2500],

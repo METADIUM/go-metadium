@@ -572,6 +572,26 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 	timer := time.NewTimer(10 * time.Millisecond)
 	defer timer.Stop()
 
+	// Metadium private PoA: when a round is in flight, a transaction arriving
+	// mid-round is picked up by the wait select in commitTransactionsEx. When
+	// no round is in flight, the 1s timer below is the only thing that notices,
+	// so a transaction can sit for most of a second before a round even starts
+	// to build it -- which is the whole latency BlockIdleSealTime is there to
+	// remove. Wake on arrival instead. commitSimple's busyMining CAS makes this
+	// a no-op while a round is already running. Left unsubscribed (a nil
+	// channel never selects) when both timing flags are off, so the public
+	// networks keep starting rounds exactly as before.
+	//
+	// BlockEmptyInterval needs the same wake-up for a different reason: a round
+	// it withholds builds nothing, so an idle chain has no round in flight at
+	// all and the arrival would otherwise wait for the tick.
+	var txCh chan core.NewTxsEvent
+	if params.BlockIdleSealTime > 0 || params.BlockEmptyInterval > 0 {
+		txCh = make(chan core.NewTxsEvent, 64)
+		sub := w.pool.SubscribeTransactions(txCh, true)
+		defer sub.Unsubscribe()
+	}
+
 	// commitSimple just starts a new commitNewWork
 	commitSimple := func() {
 		if atomic.CompareAndSwapInt32(&w.busyMining, 0, 1) {
@@ -600,6 +620,17 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 
 		case head := <-w.chainHeadCh:
 			clearPending(head.Block.NumberU64())
+			commitSimple()
+
+		case <-txCh:
+			// Collapse a burst into the one round that will pick all of it up.
+			for drained := false; !drained; {
+				select {
+				case <-txCh:
+				default:
+					drained = true
+				}
+			}
 			commitSimple()
 
 		case <-timer.C:
@@ -936,6 +967,17 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 			log.Trace("Transaction count limit reached", "have", env.tcount, "max", params.MaxTxsPerBlock)
 			break
 		}
+		// Metadium: stop filling once this block's slot has elapsed, as long as
+		// it already carries enough transactions to be worth sealing. Without
+		// this the deadline is only consulted between whole Pending() batches
+		// (commitTransactionsEx), so a burst can push a single batch past the
+		// slot -- and --miner.blockminbuildtxs, which exists to tune exactly
+		// this, has no effect at all. Restores old master's per-tx guard,
+		// which the v1.13.14 rebase dropped (issue #65).
+		if env.till != nil && int64(env.tcount) >= params.BlockMinBuildTxs && time.Now().After(*env.till) {
+			log.Trace("Block build deadline passed", "txs", env.tcount, "min", params.BlockMinBuildTxs)
+			break
+		}
 		// If we don't have enough blob space for any further blob transactions,
 		// skip that list altogether
 		if !blobTxs.Empty() && env.blobs*params.BlobTxBlobGasPerBlob >= params.MaxBlobGasPerBlock {
@@ -1056,61 +1098,19 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 	return nil
 }
 
-// collects ancestors' block times for possible throttling
-func (w *worker) ancestorTimes(num *big.Int) []int64 {
-	ts := make([]int64, 6)
-	for i := 0; i < len(ts); i++ {
-		bn := num.Int64()
-		switch i {
-		case 0:
-			bn -= 1
-		case 1:
-			bn -= 10
-		case 2:
-			bn -= 50
-		case 3:
-			bn -= 100
-		case 4:
-			bn -= 500
-		case 5:
-			bn -= 1000
-		}
-		if bn <= 0 {
-			continue
-		}
-		if bh := w.chain.GetHeaderByNumber(uint64(bn)); bh != nil {
-			ts[i] = int64(bh.Time)
+// stopTimer stops t and drains its channel if it had already fired, so the
+// timer can be discarded without leaking a pending tick. A nil timer is a
+// no-op, which lets callers keep optional timers unset.
+func stopTimer(t *time.Timer) {
+	if t == nil {
+		return
+	}
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
 		}
 	}
-	return ts
-}
-
-// returns throttle delay if necessary in seconds & seconds from the parent
-// blocks  seconds  seconds per
-//
-//	  10        1  0.1
-//	  50       10  0.2
-//	 100       50  0.5
-//	 500      500  1
-//	1000     2000  2
-func (w *worker) throttleMining(ts []int64) (int64, int64) {
-	t := time.Now().Unix()
-	dt, pt := int64(0), t-ts[0]
-
-	// 1000th
-	if dt = t - ts[5]; ts[5] > 0 && dt < 2000 {
-		return 2000 - dt, pt
-	}
-	if dt = t - ts[4]; ts[4] > 0 && dt < 500 {
-		return 500 - dt, pt
-	}
-	if dt = t - ts[3]; ts[3] > 0 && dt < 50 {
-		return 50 - dt, pt
-	}
-	if dt = t - ts[2]; ts[2] > 0 && dt < 10 {
-		return 10 - dt, pt
-	}
-	return 0, pt
 }
 
 func (w *worker) commitTransactionsEx(env *environment, interrupt *atomic.Int32, tstart time.Time) bool {
@@ -1196,34 +1196,58 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *atomic.Int32,
 
 		remaining := time.Until(*env.till)
 		timer := time.NewTimer(remaining)
+
+		// Metadium private PoA: once this block carries a transaction, close it
+		// as soon as the pool has stayed quiet for BlockIdleSealTime instead of
+		// holding the slot open until env.till. The quiet window starts after
+		// the fill above, which drained txCh, so an arrival during the wait
+		// resets it by taking the txCh branch. Off (0) on the public networks,
+		// where the slot always runs to env.till.
+		var (
+			quiet  *time.Timer
+			quietC <-chan time.Time
+		)
+		if params.BlockIdleSealTime > 0 && env.tcount > 0 {
+			quiet = time.NewTimer(time.Duration(params.BlockIdleSealTime) * time.Millisecond)
+			quietC = quiet.C
+		}
+
+		sealOnIdle := false
 		select {
 		case <-timer.C:
+		case <-quietC:
+			sealOnIdle = true
 		case <-txCh:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			stopTimer(timer)
+			stopTimer(quiet)
 			continue
 		case <-sub.Err():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			stopTimer(timer)
+			stopTimer(quiet)
 			return true
 		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
+		stopTimer(timer)
+		stopTimer(quiet)
+		if sealOnIdle {
+			log.Debug("Sealing early, transaction pool went quiet", "number", env.header.Number,
+				"txs", env.tcount, "idle-ms", params.BlockIdleSealTime,
+				"slot-left", common.PrettyDuration(time.Until(*env.till)))
+			break
 		}
 	}
 
 	log.Debug("Block", "number", env.header.Number.Int64(), "elapsed", common.PrettyDuration(time.Since(tstart)), "txs", env.tcount)
+
+	// Note on BlockEmptyInterval: the withhold decision deliberately stays in
+	// commitWork, ahead of the mining-token gate, and is not re-taken here.
+	// Deciding it after the fill would be more precise -- a round can come out
+	// empty because another sealer got the transaction first, which the pool
+	// pre-check cannot see until its own reset lands -- but a round discarded
+	// at this point has already taken the mining token and would leave it to
+	// expire (TTL 10s). Measured on the 3-node private net: doing it here cut
+	// the trailing empty blocks but pushed idle-seal confirmation from 117ms to
+	// 4.4s average, because every withheld round burned a token. One empty
+	// block trailing a transaction block is the cheaper trade.
 
 	return false
 }
@@ -1625,6 +1649,18 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 	}
 	if !metaminer.IsPoW() {
 		parent := w.chain.CurrentBlock()
+		// Metadium private PoA: with an empty pool, skip the round entirely
+		// until BlockEmptyInterval has passed since the parent, so an idle
+		// chain does not accumulate empty blocks. Checked before the miner and
+		// mining-token gates below so a skipped round never holds the token.
+		// Off (0) on the public networks, which seal every slot.
+		if params.BlockEmptyInterval > 0 {
+			if pending, _ := w.eth.TxPool().Stats(); pending == 0 &&
+				time.Now().Unix()-int64(parent.Time) < params.BlockEmptyInterval {
+				w.refreshPending(true)
+				return
+			}
+		}
 		height := new(big.Int).Add(parent.Number, common.Big1)
 		if !w.chain.Config().IsBokbunja(height) {
 			if !metaminer.IsMiner() {
@@ -1676,6 +1712,14 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 	}
 
 	if !metaminer.IsPoW() { // Metadium
+		// This path never swaps the environment into w.current, so nothing
+		// downstream stops the prefetcher that makeEnv started -- and every
+		// round that commits a transaction leaked its subfetcher goroutines.
+		// commitEx works on a copy for assembly and updateSnapshot copies the
+		// state, so discarding here releases only this round's prefetcher
+		// (issue #65).
+		defer work.discard()
+
 		if !w.commitTransactionsEx(work, interrupt, start) {
 			w.commitEx(work, w.fullTaskHook, true, start)
 		}

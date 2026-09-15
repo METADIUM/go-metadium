@@ -40,8 +40,18 @@ endif
 
 # gmet-linux always compiles inside a Linux container, so the host's uname must
 # not pick the engine for it. Default to RocksDB there and honour USE_ROCKSDB
-# only when it was given explicitly on the command line.
-ifeq ($(origin USE_ROCKSDB), command line)
+# only when a person set it — on the command line or in the environment. The
+# assignment above is uname-driven and must not leak into the container build,
+# which is why the file origin is excluded. The environment is accepted because
+# this repository configures builds that way elsewhere (dev-ci.yml passes
+# CFLAGS/CXXFLAGS through the environment), and silently building the other
+# engine is worse than either honouring or rejecting the variable.
+USE_ROCKSDB_ORIGIN := $(origin USE_ROCKSDB)
+ifeq ($(USE_ROCKSDB_ORIGIN),command line)
+GMET_LINUX_USE_ROCKSDB = $(USE_ROCKSDB)
+else ifeq ($(USE_ROCKSDB_ORIGIN),environment)
+GMET_LINUX_USE_ROCKSDB = $(USE_ROCKSDB)
+else ifeq ($(USE_ROCKSDB_ORIGIN),environment override)
 GMET_LINUX_USE_ROCKSDB = $(USE_ROCKSDB)
 else
 GMET_LINUX_USE_ROCKSDB = YES
@@ -60,6 +70,14 @@ ROCKSDB_CGO_CFLAGS = -I$(ROCKSDB_DIR)/include
 ROCKSDB_CGO_LDFLAGS = -L$(ROCKSDB_DIR) -lrocksdb -lm $(STDCPP_LDFLAGS) $(shell awk '/PLATFORM_LDFLAGS/ {sub("PLATFORM_LDFLAGS=", ""); print} /JEMALLOC=1/ {print "-ljemalloc"}' < $(ROCKSDB_DIR)/make_config.mk)
 endif
 
+# What the deploy bundle ships. Named explicitly rather than tarring bin/
+# wholesale: $(GOBIN) is shared with `make all`, `make geth` and anything else
+# that installs there, and a leftover from one of those used to be packaged
+# with no complaint. release-check guards the glibc floor, not the provenance
+# of what sits in the directory, so an older artifact that happens to satisfy
+# the ceiling would ship silently. See issue #125.
+METADIUM_BUNDLE_BIN = gmet logrot gmet.sh solc.sh
+
 metadium: gmet logrot
 	@[ -d build/conf ] || mkdir -p build/conf
 	@cp -p metadium/scripts/gmet.sh metadium/scripts/solc.sh build/bin/
@@ -68,8 +86,18 @@ metadium: gmet logrot
 		metadium/contracts/MetadiumGovernance.js	\
 		metadium/scripts/deploy-governance.js		\
 		build/conf/
-	@(cd build; tar cfz metadium.tar.gz bin conf)
+	@missing=;							\
+	for f in $(METADIUM_BUNDLE_BIN); do				\
+		[ -f build/bin/$$f ] || missing="$$missing $$f";	\
+	done;								\
+	if [ -n "$$missing" ]; then					\
+		echo "metadium: missing from build/bin:$$missing" >&2;	\
+		exit 1;							\
+	fi
+	@(cd build; tar cfz metadium.tar.gz				\
+		$(patsubst %,bin/%,$(METADIUM_BUNDLE_BIN)) conf)
 	@echo "Done building build/metadium.tar.gz"
+	@echo "Bundled: $(patsubst %,bin/%,$(METADIUM_BUNDLE_BIN)) conf/"
 
 gmet: rocksdb metadium/governance_abi.go metadium/governance_legacy_abi.go
 ifeq ($(USE_ROCKSDB), NO)
@@ -146,13 +174,55 @@ devtools:
 	@type "solc" 2> /dev/null || echo 'Please install solc'
 	@type "protoc" 2> /dev/null || echo 'Please install protoc'
 
+# The Go version release artifacts are built with. CI reads the same file
+# through setup-go's go-version-file, which is the point: before this, the
+# release image built on a toolchain no CI job had ever run.
+GO_VERSION := $(shell cat .go-version 2>/dev/null)
+
 gmet-linux:
 	@if ! docker --version > /dev/null 2>&1; then			\
 		echo "Docker not found. gmet-linux is the only supported"	\
 		     "way to build release artifacts; see README." >&2;	\
 		exit 1;							\
 	fi
-	docker build -t meta/builder:local -f Dockerfile.metadium .
+	@if [ -z "$(GO_VERSION)" ]; then				\
+		echo "release-build: .go-version is missing or empty" >&2; \
+		exit 1;							\
+	fi
+	@# The Dockerfile carries the checksum for its default GO_VERSION, so a
+	@# mismatch between the two would download one toolchain and verify
+	@# another. Refuse rather than pass an unverifiable version through.
+	@dv=`sed -n 's/^ARG GO_VERSION=//p' Dockerfile.metadium`;	\
+	if [ "$$dv" != "$(GO_VERSION)" ]; then				\
+		echo "release-build: .go-version ($(GO_VERSION)) and"	\
+		     "Dockerfile.metadium ARG GO_VERSION ($$dv) disagree;" \
+		     "update both, with the matching GO_SHA256" >&2;	\
+		exit 1;							\
+	fi
+	@# Clear ELFs a previous build left in $(GOBIN). release-check covers every
+	@# ELF in that directory, so a host-built leftover makes the gate fail while
+	@# naming the release artifacts as the culprit -- the message says a binary
+	@# needs a too-new glibc and never mentions that the file is from another
+	@# build. Only ELFs go: gmet.sh and solc.sh are copied in by `make metadium`
+	@# and are not build outputs. See issue #125.
+	@if [ -d $(GOBIN) ]; then					\
+		removed=;						\
+		for f in $(GOBIN)/*; do					\
+			[ -f "$$f" ] || continue;			\
+			head -c 4 "$$f" | grep -q 'ELF' || continue;	\
+			rm -f "$$f";					\
+			removed="$$removed `basename $$f`";		\
+		done;							\
+		[ -z "$$removed" ] ||					\
+			echo "release-build: cleared stale artifacts:$$removed"; \
+	fi
+	@# Built from stdin, with no build context at all. The Dockerfile has no
+	@# COPY, so every build used to stream the whole working tree -- .git alone
+	@# is ~260MB, and rocksdb after a submodule checkout is larger. Doing it
+	@# here rather than in .dockerignore keeps the context rules for the other
+	@# images (which do COPY the tree) untouched.
+	docker build -t meta/builder:local					\
+		--build-arg GO_VERSION=$(GO_VERSION) - < Dockerfile.metadium
 	docker run -e HOME=/tmp --rm -v $(shell pwd):/data		\
 		-u $(shell id -u):$(shell id -g)			\
 		-w /data meta/builder:local				\
@@ -163,16 +233,41 @@ gmet-linux:
 # Refuse artifacts that cannot run on the oldest distribution in the fleet.
 # Checks every ELF in $(GOBIN), not just gmet: the bundle also ships logrot,
 # which is built with cgo and carries a glibc floor of its own.
+# This is the last gate before publishing, so silence must never read as a pass.
+# Three ways it used to report OK without having checked anything:
+#   - objdump errors went to /dev/null, so an unreadable file produced empty
+#     output that was indistinguishable from a clean one ("GLIBC=none");
+#   - a non-GNU objdump (llvm-objdump on macOS) satisfies `command -v` and then
+#     prints a format this recipe does not parse;
+#   - an empty $(GOBIN) checked zero binaries and still printed OK.
+# Note that `objdump -T` legitimately fails on a statically linked binary
+# ("not a dynamic object"), which is why readability is probed with -f and a
+# missing dynamic symbol table is reported as such rather than as "none".
 release-check:
 	@command -v objdump > /dev/null 2>&1 || { echo "release-check: objdump not found" >&2; exit 1; }
-	@fail=0;							\
+	@objdump --version 2>/dev/null | head -1 | grep -q GNU || {		\
+		echo "release-check: objdump is not GNU binutils, whose output this check parses" >&2; \
+		echo "  found: `objdump --version 2>/dev/null | head -1`" >&2;	\
+		exit 1;								\
+	}
+	@fail=0; checked=0;						\
 	for f in $(GOBIN)/*; do						\
 		[ -f "$$f" ] || continue;				\
 		head -c 4 "$$f" | grep -q 'ELF' || continue;		\
-		glibc=`objdump -T "$$f" 2>/dev/null | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -V | tail -1`; \
-		gxx=`objdump -T "$$f" 2>/dev/null | grep -oE 'GLIBCXX_[0-9.]+' | sort -V | tail -1`; \
-		cxxabi=`objdump -T "$$f" 2>/dev/null | grep -oE 'CXXABI_[0-9.]+' | sort -V | tail -1`; \
-		echo "  $$f: GLIBC=$${glibc:-none} GLIBCXX=$${gxx:-none} CXXABI=$${cxxabi:-none}"; \
+		checked=`expr $$checked + 1`;				\
+		if ! objdump -f "$$f" > /dev/null 2>&1; then		\
+			echo "  $$f: FAIL: objdump cannot read this file" >&2; \
+			fail=1; continue;				\
+		fi;							\
+		if syms=`objdump -T "$$f" 2>/dev/null`; then		\
+			glibc=`echo "$$syms" | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -V | tail -1`; \
+			gxx=`echo "$$syms" | grep -oE 'GLIBCXX_[0-9.]+' | sort -V | tail -1`; \
+			cxxabi=`echo "$$syms" | grep -oE 'CXXABI_[0-9.]+' | sort -V | tail -1`; \
+			echo "  $$f: GLIBC=$${glibc:-none} GLIBCXX=$${gxx:-none} CXXABI=$${cxxabi:-none}"; \
+		else							\
+			glibc=; gxx=; cxxabi=;				\
+			echo "  $$f: no dynamic symbol table (statically linked)"; \
+		fi;							\
 		if [ -n "$$glibc" ] && [ "`printf '%s\n%s\n' "$$glibc" "$(MAX_GLIBC)" | sort -V | tail -1`" != "$(MAX_GLIBC)" ]; then \
 			echo "    FAIL: needs GLIBC_$$glibc > $(MAX_GLIBC)" >&2; fail=1; \
 		fi;							\
@@ -181,19 +276,30 @@ release-check:
 		fi;							\
 		objdump -p "$$f" 2>/dev/null | awk '/NEEDED/ {printf "    NEEDED %s\n", $$2}'; \
 	done;								\
+	if [ $$checked = 0 ]; then					\
+		echo "release-check: FAILED — no ELF binary found in $(GOBIN), nothing was checked" >&2; \
+		exit 1;							\
+	fi;								\
 	if [ $$fail != 0 ]; then					\
 		echo "release-check: FAILED — do not publish these artifacts" >&2; \
 		exit 1;							\
 	fi;								\
-	echo "release-check: OK (ceiling GLIBC_$(MAX_GLIBC))"
+	echo "release-check: OK ($$checked binaries, ceiling GLIBC_$(MAX_GLIBC))"
 	@echo "  NEEDED entries above must be present on target hosts (snappy, lz4, zstd, jemalloc)."
 
 ifneq ($(USE_ROCKSDB), YES)
 rocksdb:
 else
+# -j comes from the host rather than a fixed 8: a fixed 8 under-uses a large
+# build host and oversubscribes a small one. getconf rather than nproc so this
+# still works on a developer's macOS box.
+#
+# Keep this comment out of the recipe: the first recipe line ends in a
+# continuation, so a `@#` line placed after it lands inside that same shell
+# command and the shell tries to execute `@#` (exit 127).
 rocksdb:
 	@[ ! -e rocksdb/.git ] && git submodule update --init rocksdb;	\
-	cd $(ROCKSDB_DIR) && PORTABLE=1 make -j8 static_lib;
+	cd $(ROCKSDB_DIR) && PORTABLE=1 make -j$$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8) static_lib;
 endif
 
 AWK_CODE='								     \

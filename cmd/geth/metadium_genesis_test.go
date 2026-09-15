@@ -17,11 +17,20 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"runtime"
+	"sort"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/urfave/cli/v2"
 )
 
 // asPoA switches the process-wide consensus method for one test. Without it
@@ -160,5 +169,134 @@ func TestCanonicalGenesisConfigPassesPrivateNet(t *testing.T) {
 	}
 	if string(out) != string(doc) {
 		t.Fatal("a private genesis was rewritten")
+	}
+}
+
+// unsortedGenesis renders a genesis document with its top-level keys in
+// reverse-sorted order, the way no Go map marshal would ever produce it. A
+// rewrite that round-trips the document through a map re-sorts these keys, so
+// byte-exact assertions against this fixture pin the splice behaviour (#102).
+func unsortedGenesis(t *testing.T, doc []byte, config json.RawMessage) []byte {
+	t.Helper()
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if config != nil {
+		raw["config"] = config
+	}
+	keys := make([]string, 0, len(raw))
+	for k := range raw {
+		keys = append(keys, k)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+	var out bytes.Buffer
+	out.WriteString("{")
+	for i, k := range keys {
+		if i > 0 {
+			out.WriteString(",")
+		}
+		fmt.Fprintf(&out, "%q: %s", k, raw[k])
+	}
+	out.WriteString("}")
+	return out.Bytes()
+}
+
+// TestCanonicalGenesisConfigPreservesServedBytes is item 3 of #102: the
+// replacement branch must leave every byte it does not replace exactly as
+// served -- same key order, same spacing -- so that all three of the command's
+// paths stay diffable against the peer's document.
+func TestCanonicalGenesisConfigPreservesServedBytes(t *testing.T) {
+	asPoA(t)
+
+	stale := *params.MetadiumMainnetChainConfig
+	stale.CamelliaBlock = nil
+	staleRaw, err := json.Marshal(&stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(params.MetadiumMainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := servedGenesis(t, "mainnet", nil)
+	doc := unsortedGenesis(t, base, staleRaw)
+
+	out, network, replaced, err := canonicalGenesisConfig(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if network != "mainnet" || !replaced {
+		t.Fatalf("network=%q replaced=%v", network, replaced)
+	}
+	expected := unsortedGenesis(t, base, want)
+	if !bytes.Equal(out, expected) {
+		t.Fatalf("the rewritten document does not match the served bytes outside config:\nhave %s\nwant %s",
+			out, expected)
+	}
+}
+
+// TestSpliceConfigAddsMissingKey covers the served document that carries no
+// config at all: the compiled config has to be added, and the rest of the
+// document still passes through untouched.
+func TestSpliceConfigAddsMissingKey(t *testing.T) {
+	doc := []byte(`{"nonce": "0x42","alloc": {}}`)
+	out, err := spliceConfig(doc, []byte(`{"chainId":11}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"nonce": "0x42","alloc": {},"config": {"chainId":11}}`
+	if string(out) != want {
+		t.Fatalf("have %s\nwant %s", out, want)
+	}
+}
+
+// TestReadGenesisEnvelopeDrainsBody is item 1 of #102: one Read is not one
+// body. The one-byte reader forces the transport-may-return-less case that a
+// single Read into a large buffer silently truncates.
+func TestReadGenesisEnvelopeDrainsBody(t *testing.T) {
+	inner := strings.Repeat("x", 64*1024)
+	envelope, err := json.Marshal(map[string]string{"result": inner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := readGenesisEnvelope(iotest.OneByteReader(bytes.NewReader(envelope)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(doc) != inner {
+		t.Fatalf("the envelope was not drained: got %d bytes, want %d", len(doc), len(inner))
+	}
+}
+
+// TestReadGenesisEnvelopeRejectsOversize pins the explicit ceiling: a response
+// larger than the old implicit 1MB bound errors out loudly instead of being
+// cut short.
+func TestReadGenesisEnvelopeRejectsOversize(t *testing.T) {
+	huge := strings.NewReader("[" + strings.Repeat("0,", maxGenesisDocument/2) + "0]")
+	if _, err := readGenesisEnvelope(huge); err == nil {
+		t.Fatal("an oversized response was accepted")
+	}
+}
+
+// TestEmitGenesisReportsWriteFailure is item 4 of #102: a write the disk
+// refuses must fail the command, not leave a truncated genesis behind an
+// exit status of 0. /dev/full is the kernel's deterministic full disk.
+func TestEmitGenesisReportsWriteFailure(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("/dev/full is a Linux device")
+	}
+	if _, err := os.Stat("/dev/full"); err != nil {
+		t.Skip("/dev/full is not available")
+	}
+	set := flag.NewFlagSet("test", flag.ContinueOnError)
+	set.String(outFlag.Name, "", "")
+	if err := set.Set(outFlag.Name, "/dev/full"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := cli.NewContext(nil, set, nil)
+	if err := emitGenesis(ctx, []byte(`{"nonce":"0x42"}`)); err == nil {
+		t.Fatal("a failed write went unreported")
 	}
 }

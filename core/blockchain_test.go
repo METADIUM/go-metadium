@@ -597,11 +597,15 @@ func testReorg(t *testing.T, first, second []int64, td int64, full bool, scheme 
 	}
 	defer blockchain.Stop()
 
-	// Insert an easy and a difficult chain afterwards
-	easyBlocks, _ := GenerateChain(params.TestChainConfig, blockchain.GetBlockByHash(blockchain.CurrentBlock().Hash()), ethash.NewFaker(), genDb, len(first), func(i int, b *BlockGen) {
+	// Insert an easy and a difficult chain afterwards. Generate with the chain's
+	// own config: generating with a different one produced blocks that the chain
+	// does not consider well-formed once a fork applies header rules -- Camellia
+	// requires withdrawalsHash and the blob-gas fields, and TestChainConfig does
+	// not activate it while the chain above does (issue #70).
+	easyBlocks, _ := GenerateChain(blockchain.Config(), blockchain.GetBlockByHash(blockchain.CurrentBlock().Hash()), ethash.NewFaker(), genDb, len(first), func(i int, b *BlockGen) {
 		b.OffsetTime(first[i])
 	})
-	diffBlocks, _ := GenerateChain(params.TestChainConfig, blockchain.GetBlockByHash(blockchain.CurrentBlock().Hash()), ethash.NewFaker(), genDb, len(second), func(i int, b *BlockGen) {
+	diffBlocks, _ := GenerateChain(blockchain.Config(), blockchain.GetBlockByHash(blockchain.CurrentBlock().Hash()), ethash.NewFaker(), genDb, len(second), func(i int, b *BlockGen) {
 		b.OffsetTime(second[i])
 	})
 	if full {

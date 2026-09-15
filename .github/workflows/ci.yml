@@ -1,0 +1,92 @@
+name: ci
+
+# The amd64 pipeline, in one place. dev-ci, dev-cron and master-ci were three
+# near-identical copies of it, which is why the toolchain bump had to be applied
+# per file and why drift had already appeared: one build job was still named
+# "Go-MetadiumX", and go.yml pins a different Go patch release (issue #65).
+#
+# Callers differ in exactly two things, which are the inputs below: which ref to
+# check out and which make target runs the tests. The toolchain is not an input:
+# it comes from .go-version, shared with the release image.
+#
+# Note for whoever compares check names across runs: jobs called through
+# workflow_call appear as "<caller job>/<job>", so these are reported as
+# "ci / build_test" and so on rather than "build_test". Nothing required them by
+# name — master's protection lists no required status checks and dev is
+# unprotected — so this rename does not gate any merge.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Ref to check out. Empty means the ref that triggered the caller.'
+        required: false
+        type: string
+        default: ''
+      test-target:
+        description: 'make target for the unit test job (test-short or test).'
+        required: false
+        type: string
+        default: test-short
+
+jobs:
+  build_test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # .go-version is the single source: the release image builds with the
+          # same value (Makefile passes it as a build-arg), so CI exercises the
+          # toolchain that ships (issue #84).
+          go-version-file: .go-version
+
+      - name: Build Go-Metadium
+        env:
+          CFLAGS: "-Wno-error=unused-parameter"
+          CXXFLAGS: "-Wno-error=unused-parameter"
+        run: make metadium
+
+      - name: Check Build
+        run: ls -al build/metadium.tar.gz
+
+  lint_test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # .go-version is the single source: the release image builds with the
+          # same value (Makefile passes it as a build-arg), so CI exercises the
+          # toolchain that ships (issue #84).
+          go-version-file: .go-version
+
+      - name: Check Lint
+        run: make lint
+
+  unit_test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # .go-version is the single source: the release image builds with the
+          # same value (Makefile passes it as a build-arg), so CI exercises the
+          # toolchain that ships (issue #84).
+          go-version-file: .go-version
+
+      - name: Check golang Test Cases
+        run: |
+          unset ANDROID_HOME
+          make ${{ inputs.test-target }}

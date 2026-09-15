@@ -614,16 +614,67 @@ func canonicalGenesisConfig(doc []byte) ([]byte, string, bool, error) {
 		return doc, network, false, nil
 	}
 	// Replace the config key only, leaving the rest of the document untouched.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(doc, &raw); err != nil {
-		return nil, network, false, err
-	}
-	raw["config"] = want
-	out, err := json.MarshalIndent(raw, "", "    ")
+	// Rebuilding the document through a map would re-sort its keys, and this
+	// command's output is meant to stay diffable against what the peer serves
+	// on every path, not just the two pass-through ones (#102).
+	out, err := spliceConfig(doc, want)
 	if err != nil {
 		return nil, network, false, err
 	}
-	return append(out, '\n'), network, true, nil
+	return out, network, true, nil
+}
+
+// spliceConfig replaces the value of the top-level "config" key in doc with
+// val, leaving every other byte of the document as served. Values are skipped
+// whole, so a nested "config" key inside some other object is never touched.
+func spliceConfig(doc, val []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(doc))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, fmt.Errorf("the genesis document is not a JSON object")
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return nil, fmt.Errorf("unexpected %v where a genesis key was expected", tok)
+		}
+		start := dec.InputOffset() // just past the key, before the colon
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		if key != "config" {
+			continue
+		}
+		end := dec.InputOffset() // just past the value
+		var out bytes.Buffer
+		out.Grow(len(doc) - int(end-start) + len(val) + 2)
+		out.Write(doc[:start])
+		out.WriteString(": ")
+		out.Write(val)
+		out.Write(doc[end:])
+		return out.Bytes(), nil
+	}
+	// The served document has no config key at all; add one. The object is
+	// known to be non-empty -- its block fields are what matched the canonical
+	// hash -- so a separating comma is always right.
+	last := bytes.LastIndexByte(doc, '}')
+	if last < 0 {
+		return nil, fmt.Errorf("the genesis document has no closing brace")
+	}
+	var out bytes.Buffer
+	out.Write(doc[:last])
+	out.WriteString(`,"config": `)
+	out.Write(val)
+	out.Write(doc[last:])
+	return out.Bytes(), nil
 }
 
 func downloadGenesis(ctx *cli.Context) error {
@@ -637,19 +688,14 @@ func downloadGenesis(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	defer rsp.Body.Close()
 
-	buf := make([]byte, 1024*1024)
-	n, err := rsp.Body.Read(buf)
-	if err != nil && err != io.EOF {
+	served, err := readGenesisEnvelope(rsp.Body)
+	if err != nil {
 		return err
 	}
 
-	var genesis genesisReturn
-	if err := json.Unmarshal(buf[:n], &genesis); err != nil {
-		return err
-	}
-
-	doc, network, replaced, err := canonicalGenesisConfig([]byte(genesis.Result))
+	doc, network, replaced, err := canonicalGenesisConfig(served)
 	if err != nil {
 		return err
 	}
@@ -663,17 +709,53 @@ func downloadGenesis(ctx *cli.Context) error {
 		log.Info("Genesis matches the canonical network and its compiled config", "network", network)
 	}
 
-	w := os.Stdout
-	if fn := ctx.String(outFlag.Name); fn != "" {
-		w, err = os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-		if err != nil {
-			utils.Fatalf("%v", err)
-		}
-		defer w.Close()
-	}
+	return emitGenesis(ctx, doc)
+}
 
-	w.Write(doc)
-	return nil
+// maxGenesisDocument bounds the eth_genesis response, as the old fixed read
+// buffer did implicitly. A response that hits the ceiling errors out instead of
+// being cut short.
+const maxGenesisDocument = 1024 * 1024
+
+// readGenesisEnvelope drains an eth_genesis response and returns the genesis
+// document it carries. One Read is not one body -- the transport may return
+// fewer bytes than are available even when everything fits in the buffer -- so
+// the body has to be read in full (#102).
+func readGenesisEnvelope(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxGenesisDocument+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxGenesisDocument {
+		return nil, fmt.Errorf("the genesis response exceeds %d bytes", maxGenesisDocument)
+	}
+	var genesis genesisReturn
+	if err := json.Unmarshal(body, &genesis); err != nil {
+		return nil, err
+	}
+	return []byte(genesis.Result), nil
+}
+
+// emitGenesis writes the genesis document to the file named by --out, or to
+// stdout without one. The write and the close are both checked: a full disk
+// fails the write or the final flush, and exiting 0 after leaving a truncated
+// genesis behind is the failure mode most likely to be found much later, by
+// whatever tries to use the file (#102).
+func emitGenesis(ctx *cli.Context, doc []byte) error {
+	fn := ctx.String(outFlag.Name)
+	if fn == "" {
+		_, err := os.Stdout.Write(doc)
+		return err
+	}
+	w, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		utils.Fatalf("%v", err)
+	}
+	if _, err := w.Write(doc); err != nil {
+		w.Close()
+		return err
+	}
+	return w.Close()
 }
 
 // ignoreSIGPIPE keeps a closed log pipe from taking the node down.

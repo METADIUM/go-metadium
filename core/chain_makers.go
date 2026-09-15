@@ -446,10 +446,21 @@ func (cm *chainMaker) makeHeader(parent *types.Block, state *state.StateDB, engi
 		}
 	}
 	// Set blob gas fields for Cancun or Camellia (Metadium EIP-4844 fork).
-	// For Camellia, only set on post-merge (PoS) blocks — pre-merge PoW blocks
-	// use the ethash consensus which does not accept these fields.
-	isPoS := header.Difficulty != nil && header.Difficulty.BitLen() == 0
-	if cm.config.IsCancun(header.Number, header.Time) || (cm.config.IsCamellia(header.Number) && isPoS) {
+	// Under Camellia these fields belong on every block, not only on post-merge
+	// ones: the PoA engine now verifies them against the parent, exactly as the
+	// block builder computes them (miner.initExcessBlobGas). The earlier
+	// difficulty-based condition left generated Camellia chains without the
+	// fields, which the engine's verification rejects (issue #70).
+	if cm.config.IsCamellia(header.Number) {
+		var parentBlobGasUsed uint64
+		parentHeader := parent.Header()
+		if parentHeader.BlobGasUsed != nil {
+			parentBlobGasUsed = parentHeader.BlobGasUsed.Uint64()
+		}
+		header.ExcessBlobGas = types.CalcExcessBlobGas(parentHeader.ExcessBlobGas, parentBlobGasUsed)
+		header.BlobGasUsed = new(big.Int)
+		// ParentBeaconRoot is not in Metadium header format
+	} else if cm.config.IsCancun(header.Number, header.Time) {
 		var (
 			parentExcessBlobGas uint64
 			parentBlobGasUsed   uint64
@@ -464,7 +475,6 @@ func (cm *chainMaker) makeHeader(parent *types.Block, state *state.StateDB, engi
 		excessBlobGas := eip4844.CalcExcessBlobGas(parentExcessBlobGas, parentBlobGasUsed)
 		header.ExcessBlobGas = new(big.Int).SetUint64(excessBlobGas)
 		header.BlobGasUsed = new(big.Int)
-		// ParentBeaconRoot is not in Metadium header format
 	}
 	return header
 }

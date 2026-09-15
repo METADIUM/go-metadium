@@ -5,58 +5,11 @@ on:
     branches:
       - master
 
-# master carries the Camellia (go-ethereum v1.13.14) tree, which needs the
-# same toolchain as dev-ci; the old 1.17-1.19 matrix predates the rebase and
-# cannot build this codebase.
 jobs:
-  build_test:
-    runs-on: ubuntu-24.04
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-
-    - name: Build Go-Metadium
-      env:
-        CFLAGS: "-Wno-error=unused-parameter"
-        CXXFLAGS: "-Wno-error=unused-parameter"
-      run: make metadium
-    - name: Check Build
-      run: ls -al build/metadium.tar.gz
-
-  lint_test:
-    runs-on: ubuntu-24.04
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-
-    - name: Check Lint
-      run: make lint
-
-  unit_test:
-    runs-on: ubuntu-24.04
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-
-    - name: Check golang Test Cases
-      run: |
-        unset ANDROID_HOME
-        make test-short
+  ci:
+    # master carries the same tree as dev, so it runs the same pipeline. The
+    # head SHA is checked out explicitly rather than the merge commit, which is
+    # what a release-promotion PR is reviewed against.
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha }}

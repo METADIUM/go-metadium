@@ -6,7 +6,7 @@ Metadium blockchain node implementation, forked from [go-ethereum](https://githu
 
 Metadium is a Proof-of-Authority (PoA) blockchain with on-chain governance. It uses a custom consensus layer built on top of go-ethereum's ethash engine, with block signing via node keys and reward distribution through governance smart contracts.
 
-**Current version:** 1.1.3-stable (Camellia fork)
+**Current version:** 1.1.4-stable (Camellia fork)
 
 ## Camellia Fork
 
@@ -15,9 +15,13 @@ Camellia is Metadium's hard fork that activates Ethereum's Shanghai and Cancun E
 | Network | Activation block | Activation time |
 |---------|------------------|-----------------|
 | Testnet | 86,449,000 | 2026-05-20 12:00 KST (activated) |
-| Mainnet | 117,764,000 | 2026-08-27 12:00 KST (scheduled) |
+| Mainnet | 117,764,000 | 2026-08-27 12:00 KST (activated) |
 
-Nodes must run this release before the mainnet activation block; older binaries will follow a diverging chain.
+Both networks are past their activation block, so a Camellia-capable release is required to follow the chain at all. A pre-Camellia binary does not diverge onto its own chain — block production is permissioned and every producer has upgraded — it stops importing at the activation block. See [Upgrading from 0.10.x](#upgrading-from-010x) for which release to take.
+
+**For contract authors:** the EVM is **Cancun** from the activation blocks above.
+Compile with `--evm-version cancun` (or a toolchain default targeting Cancun or
+older); a contract compiled for a newer EVM version will not run.
 
 | EIP | Feature | Status |
 |-----|---------|--------|
@@ -44,7 +48,9 @@ See [docs/camellia-test-report.md](docs/camellia-test-report.md) for full test r
 
 ## Building
 
-Prerequisites: Go 1.21+, C compiler (for RocksDB builds).
+Prerequisites: Go 1.22+, C compiler (for RocksDB builds). The floor is set by
+the embedded etcd, whose own `go.mod` declares 1.22; a module cannot declare
+less than its dependencies.
 
 These are the Makefile targets CI validates. They build against whatever the
 host provides, which is what you want for development — but **not** for
@@ -63,9 +69,15 @@ container target, never on the build host directly:
 ```bash
 make gmet-linux                     # RocksDB
 make gmet-linux USE_ROCKSDB=NO      # LevelDB
+USE_ROCKSDB=NO make gmet-linux      # LevelDB, from the environment
 ```
 
-`make gmet-linux` builds `Dockerfile.metadium` and compiles inside it. Two
+The container build defaults to RocksDB regardless of the build host, because
+the host's `uname` must not pick the engine for a Linux container. `USE_ROCKSDB`
+is honoured when you set it explicitly, either on the command line or in the
+environment.
+
+`make gmet-linux` builds `Dockerfile.metadium` and compiles inside it. Three
 properties come from that image and nothing else guarantees them:
 
 - its base pins the oldest glibc the artifacts have to run against (Ubuntu
@@ -75,6 +87,10 @@ properties come from that image and nothing else guarantees them:
 - it sets `STATIC_STDCPP=YES`, which links libstdc++ from its archive so the
   binary carries no `GLIBCXX`/`CXXABI` requirement either. Host builds keep the
   shared libstdc++ so a plain development box still links.
+- its toolchain is pinned: the base image by digest, gcc/g++ by package version,
+  and the Go tarball by checksum. The Go version itself lives in `.go-version`,
+  which CI reads too, so release binaries are built with the toolchain CI ran.
+  `make gmet-linux` refuses to build if that file and the Dockerfile disagree.
 
 `gmet-linux` runs `make release-check` on the result and fails the build if an
 artifact would not run on the fleet. Run it standalone against anything you are
@@ -85,10 +101,22 @@ make release-check                  # ceiling from MAX_GLIBC (default 2.31)
 ```
 
 It covers every ELF in `build/bin` — `logrot` ships in the same bundle and has
-its own glibc floor — and prints each artifact's `NEEDED` list. Those shared
+its own glibc floor — and prints each artifact's `NEEDED` list. It refuses to
+report success without having checked something: a file `objdump` cannot read,
+an `objdump` that is not GNU binutils, and an empty `build/bin` are all
+failures rather than quiet passes. A statically linked artifact is reported as
+having no dynamic symbol table, which is a different line from a clean dynamic
+one. Those shared
 libraries (snappy, lz4, zstd, jemalloc) must exist on the target host; the
 symbol-version checks passing does not by itself make an artifact runnable on a
 freshly installed machine.
+
+Two consequences of building this way are standing rules rather than build steps,
+and they live in
+[docs/release-build-toolchain.md](docs/release-build-toolchain.md): a toolchain
+CVE means a rebuild and a re-release, because the statically linked libstdc++ is
+no longer reachable by a distro update, and the move off the 20.04 base is gated
+on the fleet, with `MAX_GLIBC` as the last step rather than the first.
 
 Direct `go build` works for development — **these produce non-portable binaries
 and must not be published** (`./cmd/gmet` and `./cmd/geth` are the same
@@ -133,6 +161,10 @@ cd tests/private-net-poa
 ./stop.sh     # Stop (data preserved)
 ```
 
+For an enterprise private PoA network that needs a transaction confirmed in
+~0.1 s instead of waiting out the block interval, see
+[docs/enterprise-private-poa.md](docs/enterprise-private-poa.md).
+
 ## Upgrading from 0.10.x
 
 v1.1.x rebases the tree onto go-ethereum v1.13.14 and changes several
@@ -142,9 +174,10 @@ before — but review the following **before** restarting on the new binary.
 
 ### Upgrade checklist
 
-1. **Upgrade before the activation block** — mainnet 117,764,000. The block
-   height is authoritative; wall-clock estimates are approximate. Nodes on
-   older binaries follow a diverging chain from that block on.
+1. **Both networks are already past activation** — mainnet 117,764,000,
+   testnet 86,449,000. The block height is authoritative; wall-clock
+   estimates are approximate. A pre-Camellia binary stops importing at the
+   activation block; it does not diverge onto its own chain.
 2. **Use the engine-matched tarball.** The DB engine is decided at build time.
    Check the node's chaindata before extracting: `.sst` files → rocksdb
    tarball, `.ldb` files → leveldb tarball. A mismatched binary cannot open
@@ -263,7 +296,7 @@ stock layout). Every knob, with its default:
 | `DISCOVER` | unset (on) | `0` → `--nodiscover`. Note **`init`-generated `.rc` files contain `DISCOVER=0`** — remove or change it for ordinary full nodes, or the node dials no one. Mainnet/testnet bootnodes are compiled into the binary, so no `BOOT_NODES` is needed. |
 | `SYNC_MODE` | unset (**archive**) | `full` → pruned full node (recommended for exchange/API nodes, ~600GB-class). **Unset — or any unrecognized value, typos included — means `--syncmode full --gcmode archive`**: a multi-TB archive node. `fast`/`snap` make the node exit at startup (Metadium networks are full-sync only) — and since `gmet.sh start` backgrounds the node, `start` itself still returns 0, so check the log. |
 | `BOOT_NODES` | unset | Extra `--bootnodes` enodes (rarely needed, see above). |
-| `GMET_OPTS` | unset | Extra flags appended verbatim to the command line. |
+| `GMET_OPTS` | unset | Extra flags appended verbatim to the command line. Private PoA deployments that want sub-second confirmation put `--metadium.block.idleseal <ms>` here — see [docs/enterprise-private-poa.md](docs/enterprise-private-poa.md). The flag is refused on mainnet and testnet: the node exits rather than starting. |
 | `STOP_TIMEOUT` | `200` | Seconds `gmet.sh stop` waits for graceful shutdown before escalating. |
 | `STOP_FORCE` | `1` | `0` = never SIGKILL; `stop` exits non-zero instead (recommended for RocksDB nodes and anything driven by automation). |
 | `LOCK_TIMEOUT` | `200` | Seconds to wait for the chaindata lock to be released after exit. |
