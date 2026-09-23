@@ -1,244 +1,244 @@
-# PBFT 합의 엔진 설계안 (go-metadium)
+# PBFT consensus design (go-metadium)
 
-- **Date:** 2026-09-23 (rev.4 — 리뷰 1~8 반영, §15)
-- **Status:** Design (pre-implementation) — 검토 후 착수
-- **적용 대상:** **신규 프라이빗 네트워크**의 초기 설정. 기존 Metadium Mainnet/Testnet 적용은 범위 밖
-- **전환 방식:** PoA로 부트스트랩 → 제네시스에 지정한 `BftBlock` 높이에서 PBFT로 전환 (§9, B안)
-- **용어:** 본 문서의 pre-fork / post-fork 는 각각 `BftBlock` 이전 / 이후 높이를 뜻한다.
-  `BlockHash(h)` 는 §5.2에서 정의하는, `BftRound`·`CommitSeals` 를 뺀 헤더 해시다.
-
----
-
-## 1. 목표와 범위
-
-### 1.1 목표
-- 신규 프라이빗 네트워크를 구성할 때 합의 방식으로 **PBFT를 선택**할 수 있게 한다.
-  선택하면 블록 생성 권한 조정이 **etcd(raft, CFT)** 에서 **BFT 합의**로 바뀐다.
-- **즉시 finality**(committed = final)를 확보하여 현재의 `head - (N/2+1)` 휴리스틱
-  (`metadium/admin.go:645`)을 제거한다.
-- 비잔틴 노드(악의적 이중 제안, 거짓 투표, 침묵)가 `f = floor((N-1)/3)` 이하일 때
-  safety(포크 없음)와 liveness(블록 생성 지속)를 보장한다.
-- 거버넌스 컨트랙트가 정의하는 validator set을 그대로 합의 주체로 사용한다.
-
-### 1.2 범위 밖 (Non-goals)
-- **기존 Metadium Mainnet/Testnet의 PBFT 전환** (운영 중인 체인의 하드포크 마이그레이션)
-- 슬래싱/벌금 (거버넌스 컨트랙트 변경이 필요 — 별도 과제). 단 **이중 서명 증거 수집은 범위 안** (§7.1)
-- validator set의 동적 가중치(stake weighting) — 현행 1노드 1표 유지
-- etcd 제거 자체 (본 설계는 **블록 생성 경로에서만** 제거, 운영 채널은 잔존)
-- 라이트 클라이언트 / 체크포인트 동기화 최적화
+- **Date:** 2026-09-23 (rev.4 — first review round folded in, §15)
+- **Status:** Design (pre-implementation) — to be reviewed before work starts
+- **Scope:** initial configuration of **new private networks**. Existing Metadium Mainnet/Testnet are out of scope
+- **Transition:** bootstrap on PoA → switch to PBFT at the `BftBlock` height set in the genesis (§9, option B)
+- **Terms:** pre-fork / post-fork mean heights below / at-or-above `BftBlock`.
+  `BlockHash(h)` is the header hash without `BftRound` and `CommitSeals`, defined in §5.2.
 
 ---
 
-## 2. 현재 상태 (baseline)
+## 1. Goals and scope
 
-코드 인용은 `release/v1.1.4` (`e804c8fe4`, master `b716f5b03` 에 병합) 기준이다.
+### 1.1 Goals
+- Let a new private network **choose PBFT** as its consensus when it is set up.
+  When chosen, block-production coordination moves from **etcd (raft, CFT)** to **BFT consensus**.
+- Get **instant finality** (committed = final) and drop today's `head - (N/2+1)` heuristic
+  (`metadium/admin.go:645`).
+- Guarantee safety (no forks) and liveness (blocks keep coming) while at most
+  `f = floor((N-1)/3)` nodes are Byzantine (equivocating proposals, false votes, silence).
+- Use the validator set defined by the governance contract as-is.
 
-| 항목 | 현재 구현 | 위치 |
+### 1.2 Non-goals
+- **Moving existing Metadium Mainnet/Testnet to PBFT** (hard-fork migration of a live chain)
+- Slashing / penalties (needs a governance-contract change — separate work). **Collecting equivocation evidence is in scope** (§7.1)
+- Dynamic validator weighting (stake weighting) — one node, one vote stays
+- Removing etcd itself (this design removes it **from the block-production path only**; the operations channel stays)
+- Light clients / checkpoint-sync optimisation
+
+---
+
+## 2. Baseline
+
+Code references are against `release/v1.1.4` (`e804c8fe4`, merged into master as `b716f5b03`).
+
+| Item | Current implementation | Location |
 |---|---|---|
-| 합의 상수 | `ConsensusPoW=1, PoA=2, ETCD=3, PBFT=4` | `params/protocol_params.go:240-244` |
-| CLI 검증 | `>= ConsensusETCD` 거부 → **3,4 사용 불가** | `cmd/utils/flags.go:2084` |
-| PBFT 참조 | 상수 정의 + `StartAdmin` 허용목록 **2곳뿐**, 로직 없음 | `metadium/admin.go:1293` |
-| 리더 선출 (pre-Bokbunja) | etcd raft leader → `IsMiner()` | `metadium/legacy.go:561` |
-| 리더 선출 (Bokbunja~) | etcd CAS 기반 mining token (TTL 10s) | 진입점 `metadium/miner/miner.go:104` → 구현 `metadium/sync.go:145` (연결 `admin.go:2383`), CAS `metadium/etcdutil.go:989` (`acquireTokenSync`, 트랜잭션 1024) |
-| 블록 서명 | 단일 서명 `MinerNodeId`/`MinerNodeSig` (**state root**에 대한 ECDSA) | `consensus/ethash/consensus.go:642-648` |
-| 블록 서명 검증 | `verifyBlockSig` — 거버넌스 enode 목록 대조 | `metadium/admin.go:1721` |
-| 제안자 제한 | 최근 `N/2` 블록 내 재등장 금지 (Pangyo~) | `metadium/miner_limit.go:205`, 호출 `admin.go:1765` |
-| 보상 계산 | 진입점 `calculateRewards` → 구현 메서드 | `metadium/admin.go:1610` → `1561` |
-| 보상 검증 | **`verifyRewards` 는 `return nil` 뿐인 빈 함수.** 실제 검증은 Finalize의 재계산 + state root 대조이며, 이때 `header.Rewards`/`Coinbase` 를 **재계산 값으로 덮어쓴다** | `metadium/admin.go:1618`, `consensus/ethash/consensus.go:741, 754` |
-| 타임스탬프 | `header.Time` 은 **초 단위 `uint64`**. PoA 경로에는 부모 대비 단조 증가 검사가 없다 (PoW에서만 `<=` 거부). 미래 허용치 15초 | `core/types/block.go:79`, `consensus/ethash/consensus.go:234, 238`, `miner/worker.go:1303` |
-| finality | `head - (N/2+1)` 휴리스틱 | `metadium/admin.go:645`, `core/blockchain_reader.go:79` |
-| 제안자 게이트 | `AcquireMiningToken` / `HasMiningToken` | `miner/worker.go:1671, 1781, 1833` |
-| 봉인 → 기록 | `Seal()` 직후 **동기적으로** `WriteBlockAndSetHead` | `miner/worker.go:1863, 1912` |
-| P2P | `meta/66, 68, 69`, 메시지 코드 최대 `0x18` | `eth/protocols/eth/protocol.go:50, 57, 92` |
+| Consensus constants | `ConsensusPoW=1, PoA=2, ETCD=3, PBFT=4` | `params/protocol_params.go:240-244` |
+| CLI check | rejects `>= ConsensusETCD` → **3 and 4 are unusable** | `cmd/utils/flags.go:2084` |
+| PBFT references | constant + `StartAdmin` allow-list, **2 places only**, no logic | `metadium/admin.go:1293` |
+| Leader election (pre-Bokbunja) | etcd raft leader → `IsMiner()` | `metadium/legacy.go:561` |
+| Leader election (Bokbunja~) | etcd CAS-based mining token (TTL 10s) | entry `metadium/miner/miner.go:104` → impl `metadium/sync.go:145` (wired at `admin.go:2383`), CAS `metadium/etcdutil.go:989` (`acquireTokenSync`, transaction at 1024) |
+| Block signature | single signature `MinerNodeId`/`MinerNodeSig` (ECDSA over the **state root**) | `consensus/ethash/consensus.go:642-648` |
+| Block signature check | `verifyBlockSig` — matched against the governance enode list | `metadium/admin.go:1721` |
+| Proposer limit | no reappearance within the last `N/2` blocks (Pangyo~) | `metadium/miner_limit.go:205`, called at `admin.go:1765` |
+| Reward calculation | entry `calculateRewards` → implementing method | `metadium/admin.go:1610` → `1561` |
+| Reward verification | **`verifyRewards` is an empty function that only returns `nil`.** The real check is the recomputation in Finalize plus the state-root comparison, and that step **overwrites `header.Rewards`/`Coinbase` with the recomputed values** | `metadium/admin.go:1618`, `consensus/ethash/consensus.go:741, 754` |
+| Timestamp | `header.Time` is a **`uint64` in seconds**. The PoA path has no monotonicity check against the parent (only PoW rejects `<=`). Future allowance 15s | `core/types/block.go:79`, `consensus/ethash/consensus.go:234, 238`, `miner/worker.go:1303` |
+| Finality | `head - (N/2+1)` heuristic | `metadium/admin.go:645`, `core/blockchain_reader.go:79` |
+| Proposer gate | `AcquireMiningToken` / `HasMiningToken` | `miner/worker.go:1671, 1781, 1833` |
+| Seal → write | `WriteBlockAndSetHead` **synchronously** right after `Seal()` | `miner/worker.go:1863, 1912` |
+| P2P | `meta/66, 68, 69`, highest message code `0x18` | `eth/protocols/eth/protocol.go:50, 57, 92` |
 
-**핵심 관찰 4가지**
+**Four key observations**
 
-1. **헤더는 이미 비표준이다.** `Header` 에 `Fees`, `Rewards`, `MinerNodeId`,
-   `MinerNodeSig` 가 이미 추가되어 있고 (`core/types/block.go:66`), RLP는
-   `headerRlp` 를 경유한다 (`core/types/block.go:104`, 인코딩 `:309`). commit seal 필드 추가는
-   **기존 전례를 따르는 변경**이다. 단 `headerRlp` 의 마지막 필드는 `BlobGasUsed` 이며,
-   `Header.ParentBeaconRoot` 는 `headerRlp` 에 **없어서 전송·해시에서 빠진다** (PoA 경로에서는 항상 nil).
-2. **`SealHash` 는 블록 해시와 덮는 범위가 다르다.** `SealHash`
-   (`consensus/ethash/consensus.go:664`)는 `Rewards`/`MinerNodeId`/`MinerNodeSig`/
-   `MixDigest`/`Nonce` 를 **제외**하지만, 블록 해시(`headerRlp`)에는 이들이 모두 들어간다.
-   따라서 **`SealHash` 는 PBFT 서명 대상으로 쓰면 안 된다** (§5.2).
-3. **보상 필드는 검증되지 않고 덮어써진다** (위 표). PBFT에서는 비교 검증으로 바꿔야 한다 (§7.5).
-4. **테스트넷이 3노드다.** `tests/private-net-poa/docker-compose.yml` 은 node1–node3.
-   `N=3` 이면 `f = 0` 으로 **비잔틴 내성이 0**이다. PBFT 검증을 하려면 최소 4노드,
-   권장 7노드(`f=2`)로 확장해야 한다.
+1. **The header is already non-standard.** `Header` already carries `Fees`, `Rewards`, `MinerNodeId`
+   and `MinerNodeSig` (`core/types/block.go:66`), and RLP goes through
+   `headerRlp` (`core/types/block.go:104`, encoding at `:309`). Adding commit-seal fields
+   **follows existing precedent**. Note that the last field of `headerRlp` is `BlobGasUsed`;
+   `Header.ParentBeaconRoot` is **not in `headerRlp`, so it is neither sent nor hashed** (it is always nil on the PoA path).
+2. **`SealHash` covers less than the block hash.** `SealHash`
+   (`consensus/ethash/consensus.go:664`) **excludes** `Rewards`/`MinerNodeId`/`MinerNodeSig`/
+   `MixDigest`/`Nonce`, but the block hash (`headerRlp`) includes all of them.
+   **`SealHash` therefore must not be the PBFT signing target** (§5.2).
+3. **Reward fields are overwritten, not verified** (table above). PBFT must compare instead (§7.5).
+4. **The test network has 3 nodes.** `tests/private-net-poa/docker-compose.yml` runs node1–node3.
+   With `N=3`, `f = 0`: **zero Byzantine tolerance**. Validating PBFT needs at least 4 nodes,
+   7 recommended (`f=2`).
 
 ---
 
-## 3. 프로토콜 선택: 순수 PBFT가 아니라 IBFT 2.0 계열
+## 3. Protocol choice: IBFT 2.0 family, not textbook PBFT
 
-Castro-Liskov PBFT(1999)는 **고정 replica 집합 + 클라이언트 응답 모델**을 전제한다.
-블록체인에 그대로 옮기면 다음이 어긋난다.
+Castro-Liskov PBFT (1999) assumes **a fixed replica set and a client/reply model**.
+Moved to a blockchain as-is, it mismatches here:
 
-| PBFT 원형 | 블록체인 부적합 지점 | 본 설계의 처리 |
+| Original PBFT | Mismatch with a blockchain | This design |
 |---|---|---|
-| 클라이언트가 요청 전송 → replica가 응답 | 요청 = 블록 제안, 응답 대상 없음 | 제안자가 mempool에서 블록 생성 |
-| checkpoint/garbage collection | 체인 자체가 로그, GC 불필요 | 제거 |
-| stable checkpoint 기반 view change | 체인 높이가 자연 시퀀스 | height 단위로 인스턴스 분리 |
-| replica 집합 정적 | 거버넌스로 validator 변경 | epoch(= `gov.modifiedBlock`) 경계에서 교체 |
-| 응답 f+1개 수집 | 블록에 증명 필요 | **commit seal 2f+1개를 헤더에 첨부** |
+| client sends request → replicas reply | request = block proposal, nobody to reply to | proposer builds the block from the mempool |
+| checkpoint / garbage collection | the chain itself is the log, no GC needed | dropped |
+| view change based on stable checkpoints | chain height is a natural sequence | one instance per height |
+| static replica set | validators change through governance | swapped at epoch (= `gov.modifiedBlock`) boundaries |
+| collect f+1 replies | the block needs a proof | **attach 2f+1 commit seals to the header** |
 
-따라서 **IBFT 2.0 (Besu) 계열**을 채택한다. 3-phase(PRE-PREPARE/PREPARE/COMMIT),
-`2f+1` 쿼럼, round change를 유지하되 블록체인에 맞게 정리한 변형이며,
-"PBFT 계열"이라는 기존 `ConsensusPBFT` 상수 의미와 일치한다.
+So this design adopts the **IBFT 2.0 (Besu) family**: 3 phases (PRE-PREPARE/PREPARE/COMMIT),
+a `2f+1` quorum and round changes, trimmed for a blockchain. That matches the meaning of the
+existing `ConsensusPBFT` constant ("PBFT family").
 
-> Tendermint 대비: Tendermint는 lock/unlock 규칙과 POL(proof-of-lock) round 처리가
-> 더 정교하지만 상태기계가 크고, `prevote/precommit` 2-phase + nil-vote 개념이
-> 기존 Metadium 블록 파이프라인과의 접합면을 더 많이 바꾼다. IBFT2가 이식 비용이 낮다.
-> 단 투표 상태 영속화(§6.1)는 Tendermint의 WAL·서명자 마지막 서명 상태 기록 방식을 따른다.
+> Versus Tendermint: Tendermint's lock/unlock rules and POL (proof-of-lock) round handling are
+> more refined, but its state machine is larger, and the `prevote/precommit` two-phase + nil-vote
+> model changes more of the interface with Metadium's existing block pipeline. IBFT2 is cheaper to port.
+> Vote persistence (§6.1), however, follows Tendermint's WAL and signer last-sign-state approach.
 
 ---
 
-## 4. 프로토콜 정의
+## 4. Protocol definition
 
-### 4.1 파라미터
+### 4.1 Parameters
 
 ```
-N         = validator 수 (거버넌스 getNodeLength)
+N         = number of validators (governance getNodeLength)
 f         = floor((N-1)/3)
 Quorum    = 2f+1 = ceil((2N+1)/3)   // N=4→3, N=7→5, N=10→7, N=13→9
 ```
 
-- `N < 4` 이면 `f=0` → BFT 무의미. **PBFT 전환 전제조건: `N >= 4`** (§9.3),
-  **전환 이후에도 `N >= 4` 를 블록 유효성 규칙으로 유지** (§9.3.1).
-- `N` 은 height `n` 기준 **부모 블록(n-1) 상태**의 거버넌스 값을 사용한다
-  (`verifyBlockSig` 가 이미 `height-1` 을 쓴다 — `metadium/admin.go:1729`).
+- With `N < 4`, `f=0` → BFT is meaningless. **Precondition for switching to PBFT: `N >= 4`** (§9.3),
+  **and `N >= 4` stays a block-validity rule after the switch** (§9.3.1).
+- `N` for height `n` is the governance value in the **parent (n-1) state**
+  (`verifyBlockSig` already uses `height-1` — `metadium/admin.go:1729`).
 
-### 4.2 Validator set과 epoch
+### 4.2 Validator set and epochs
 
-- 출처: `getMetaNodes` (`metadium/admin.go:462`) — 이미 `Name` 기준 정렬되어 있어
-  **모든 노드에서 동일한 인덱스**를 얻는다. 그대로 validator 순서로 사용한다.
-- 신원: enode 공개키 64바이트 (`metaNode.Enode`). 서명키 = 노드키.
-  기존 `VerifyBlockSig` 와 동일한 키 체계라 키 관리 변경이 없다.
-- 캐싱: `coinbaseEnodeCache` (`gov.modifiedBlock` 키)를 재사용한다
+- Source: `getMetaNodes` (`metadium/admin.go:462`) — already sorted by `Name`, so
+  **every node gets the same indices**. That order is the validator order.
+- Identity: the 64-byte enode public key (`metaNode.Enode`). Signing key = node key.
+  Same key scheme as the existing `VerifyBlockSig`, so key management does not change.
+- Caching: reuse `coinbaseEnodeCache` (keyed by `gov.modifiedBlock`)
   (`metadium/sync.go:58`).
-- **epoch 경계**: `gov.modifiedBlock` 이 바뀌는 블록에서 validator set이 바뀐다.
-  높이 `n` 의 합의는 `n-1` 상태 기준 set으로 수행하므로, set 변경 블록 자체도
-  이전 set이 합의한다. 별도 epoch 전환 프로토콜이 불필요하다.
+- **Epoch boundary**: the validator set changes at the block where `gov.modifiedBlock` changes.
+  Consensus for height `n` runs on the set from state `n-1`, so the block that changes the set is
+  itself agreed by the old set. No separate epoch-transition protocol is needed.
 
-### 4.3 제안자(proposer) 선출
+### 4.3 Proposer selection
 
 ```go
 proposer(height, round) = validators[(height + round) % N]
 ```
 
-- 결정적이고, round가 오를 때마다 다음 노드로 넘어가 liveness를 보장한다.
-- **기존 `isEligibleMiner` (최근 `N/2` 블록 내 재제안 금지)는 fork 이후 비활성화**한다.
-  round change 중에는 이 규칙을 만족시킬 수 없어 교착이 발생한다. 라운드로빈 자체가
-  더 강한 공정성을 보장하므로 대체 관계다.
-  → `metadium/admin.go:1762` 의 `isPangyo` 분기(`verifyMinerLimit` 호출 `:1765`) 옆에
-  `IsBft(height)` 분기를 추가하여 post-fork 높이에서는 `verifyMinerLimit` 을 건너뛴다.
+- Deterministic; each round moves to the next node, which gives liveness.
+- **The existing `isEligibleMiner` (no re-proposal within the last `N/2` blocks) is disabled after the fork.**
+  It cannot be satisfied during round changes and would deadlock. Round-robin already gives
+  stronger fairness, so it replaces the rule.
+  → Next to the `isPangyo` branch at `metadium/admin.go:1762` (`verifyMinerLimit` call at `:1765`), add an
+  `IsBft(height)` branch that skips `verifyMinerLimit` at post-fork heights.
 
-### 4.4 3-phase 상태기계
+### 4.4 Three-phase state machine
 
-높이 `n`, 라운드 `r` 인스턴스. **모든 서명 메시지는 WAL에 기록·fsync 한 뒤 전송한다** (§6.1).
+Instance for height `n`, round `r`. **Every signed message is written to the WAL and fsynced before it is sent** (§6.1).
 
 ```
 NEW_ROUND
-  ├─ 내가 proposer(n,r)  → (lock 있으면 그 블록, 없으면 신규 생성) → PRE-PREPARE 브로드캐스트
-  └─ 아니면              → PRE-PREPARE 수신 대기 (deadline(n,r) 타이머 가동, §4.5)
+  ├─ I am proposer(n,r)  → (the locked block if any, else a new one) → broadcast PRE-PREPARE
+  └─ otherwise           → wait for PRE-PREPARE (start deadline(n,r) timer, §4.5)
 
-PRE-PREPARE 수신 시 (from proposer(n,r), 서명 유효, 부모 = 로컬 head)
-  ├─ 블록 완전 검증 (§4.8): VerifyHeader + 타임스탬프 범위 + 바디 실행 + state root 대조
-  │                        + Rewards/Coinbase 비교 + 실행 후 N >= 4
-  ├─ 실패 → round change 트리거 (ROUND_CHANGE(r+1))
-  └─ 성공 → [WAL] PREPARE(n, r, digest) 브로드캐스트 → PRE_PREPARED
+On PRE-PREPARE (from proposer(n,r), valid signature, parent = local head)
+  ├─ full block validation (§4.8): VerifyHeader + timestamp bounds + execute body + state root
+  │                                + Rewards/Coinbase comparison + N >= 4 after execution
+  ├─ fail    → trigger round change (ROUND_CHANGE(r+1))
+  └─ success → [WAL] broadcast PREPARE(n, r, digest) → PRE_PREPARED
 
-PREPARE 를 Quorum-1 개 수집 (+ 자신) → PREPARED  ([WAL] lock = (r, digest, PREPARE 증명, 블록))
-  └─ [WAL] COMMIT(n, r, digest, commitSeal) 브로드캐스트
+Quorum-1 PREPAREs collected (+ own) → PREPARED  ([WAL] lock = (r, digest, PREPARE certificate, block))
+  └─ [WAL] broadcast COMMIT(n, r, digest, commitSeal)
 
-COMMIT 을 Quorum 개 수집 → COMMITTED
-  └─ 헤더에 BftRound=r, CommitSeals 첨부 → WriteBlockAndSetHead → WAL 정리 → 다음 높이 NEW_ROUND
+Quorum COMMITs collected → COMMITTED
+  └─ set BftRound=r and CommitSeals in the header → WriteBlockAndSetHead → prune WAL → NEW_ROUND for next height
 ```
 
-- **`digest = BlockHash(header)`** (§5.2). `SealHash` 가 아니다 — `SealHash` 는 블록 해시에
-  들어가는 필드 일부를 빼므로, 같은 digest에 서로 다른 블록 해시가 대응할 수 있다 (§2 관찰 2).
-- validator는 자신이 PREPARE를 보낸 (n,r,digest) 이외의 제안에 PREPARE를 보내지
-  않는다. 라운드 변경 후 새 제안을 받으면 §4.5의 lock 규칙을 따른다.
+- **`digest = BlockHash(header)`** (§5.2), not `SealHash` — `SealHash` leaves out some fields that
+  go into the block hash, so one digest could map to different block hashes (§2 observation 2).
+- A validator sends no PREPARE for any proposal other than the (n,r,digest) it already PREPAREd.
+  On a new proposal after a round change it follows the lock rule in §4.5.
 
 ### 4.5 Round change (view change)
 
-트리거:
-- `deadline(n, r)` 만료 (제안 미수신, 쿼럼 미달)
-- 제안 검증 실패 / 잘못된 제안자
-- `ROUND_CHANGE(r')` 를 `f+1` 개 수신하고 `r' > r` → 즉시 `r'` 로 점프
-  (Bracha amplification, 정직한 노드 1개 이상이 이미 넘어갔다는 증거)
+Triggers:
+- `deadline(n, r)` expires (no proposal, or no quorum)
+- proposal fails validation / wrong proposer
+- `f+1` `ROUND_CHANGE(r')` received with `r' > r` → jump to `r'` immediately
+  (Bracha amplification: evidence that at least one honest node has already moved on)
 
 ```
 ROUND_CHANGE(n, r+1, preparedRound, preparedBlock?, prepareCertificate?)
 ```
 
-- `ROUND_CHANGE` 를 `Quorum` 개 수집하면 라운드 `r+1` 진입.
-- 새 proposer는 수집한 `ROUND_CHANGE` 중 **`preparedRound` 가 가장 높은
-  `preparedBlock` 을 재제안**해야 한다 (없으면 신규 생성). 이것이 safety의 핵심:
-  이미 어떤 정직 노드가 PREPARED된 블록은 이후 라운드에서 뒤집히지 않는다.
-- **재제안 블록의 헤더는 한 바이트도 바꾸지 않는다.** `Coinbase`, `Time`, `MinerNodeId`,
-  `MinerNodeSig` 모두 원 제안자의 값을 그대로 쓴다. 바꾸면 `BlockHash` 가 달라져 lock이 깨진다.
-  `BftRound` 는 `BlockHash` 에서 제외되므로 커밋 시점에 커밋 라운드로 채운다 (§5.3).
-- 재제안 시 `ROUND_CHANGE` 증명 집합을 PRE-PREPARE에 동봉하여 수신자가
-  제안 정당성을 검증한다.
+- `Quorum` `ROUND_CHANGE`s collected → enter round `r+1`.
+- The new proposer **must re-propose the `preparedBlock` with the highest `preparedRound`**
+  among the collected `ROUND_CHANGE`s (or build a new one if there is none). This is the core of
+  safety: a block some honest node has PREPARED is never overturned in a later round.
+- **A re-proposed block's header is not changed by a single byte.** `Coinbase`, `Time`, `MinerNodeId`
+  and `MinerNodeSig` all keep the original proposer's values. Changing any of them changes `BlockHash`
+  and breaks the lock. `BftRound` is excluded from `BlockHash`, so it is filled with the commit round at commit time (§5.3).
+- A re-proposal carries the `ROUND_CHANGE` certificate in its PRE-PREPARE so receivers can check
+  that the proposal is justified.
 
-#### 블록 타이밍과 round timeout
+#### Block timing and round timeout
 
-현행 블록 타이밍 (`docs/enterprise-block-timing.md`):
+Current block timing (`docs/enterprise-block-timing.md`):
 
-| 네트워크 | 설정 | 동작 |
+| Network | Setting | Behaviour |
 |---|---|---|
-| Mainnet / Testnet | 거버넌스 `blockCreationTime = 2000` | 2초마다 블록 (트랜잭션 없어도 빈 블록) |
-| 프라이빗 (현행 운영 프로파일) | `blockCreationTime` 1–2초 + `--metadium.block.idleseal 100` + 빈 블록 5초 | 트랜잭션이 있으면 **~100ms** 안에 봉인, 없으면 **5초마다** 빈 블록 |
+| Mainnet / Testnet | governance `blockCreationTime = 2000` | a block every 2s (empty blocks when idle) |
+| Private (current operating profile) | `blockCreationTime` 1–2s + `--metadium.block.idleseal 100` + 5s empty blocks | sealed within **~100ms** when transactions arrive, an empty block **every 5s** when idle |
 
-- 블록 간격의 출처는 거버넌스 `EnvStorage.getBlockCreationTime` 이다.
-  `params.BlockInterval`(`--metadium.block.interval`)은 저장만 되고 읽히지 않으므로
-  타이머 계산에 쓰지 않는다.
-- PBFT가 이 프로파일을 유지해야 한다: **트랜잭션이 오면 즉시(100ms) 제안, 유휴 시 5초
-  빈 블록.** validator는 제안자의 mempool을 모르므로, 유휴 상태의 정상 대기(5초)를
-  장애로 오인하지 않는 타이머가 필요하다.
+- The block interval comes from governance `EnvStorage.getBlockCreationTime`.
+  `params.BlockInterval` (`--metadium.block.interval`) is stored but never read, so it is
+  not used for timers.
+- PBFT must keep this profile: **propose right away (100ms) when transactions arrive, 5s empty blocks
+  when idle.** Validators cannot see the proposer's mempool, so the timer must not mistake the
+  normal idle wait (5s) for a failure.
 
-**타이머는 헤더 시각이 아니라 로컬 시계로 잰다.** `header.Time` 은 초 단위라 100ms 블록이
-같은 값을 공유하고, 무엇보다 **제안자가 고르는 값**이다. 이를 타이머 기준으로 쓰면
-(rev.3 설계) 제안자가 `Time` 을 미래로 밀어 모든 validator의 타이머를 최대 15초 늦추거나,
-과거로 당겨 **다음 높이의 라운드 0을 즉시 만료**시킬 수 있다 (탐지되지 않는 liveness 공격).
+**Timers use the local clock, not the header time.** `header.Time` is in seconds, so 100ms blocks
+share values, and above all it is **chosen by the proposer**. Basing timers on it (the rev.3 design)
+lets a proposer push `Time` into the future to delay every validator's timer by up to 15s, or pull it
+into the past so that **round 0 of the next height expires immediately** (an undetected liveness attack).
 
 ```go
-// committedAt(n-1): 이 노드가 높이 n-1 을 커밋(COMMITTED)한 로컬 단조 시계 시각
-// roundStart(r):    이 노드가 라운드 r 에 진입한 로컬 단조 시계 시각
+// committedAt(n-1): local monotonic time when this node committed (COMMITTED) height n-1
+// roundStart(r):    local monotonic time when this node entered round r
 deadline(n, 0) = committedAt(n-1) + EmptyBlockInterval + BftBaseTimeout
 deadline(n, r) = roundStart(r)    + BftBaseTimeout * 2^min(r, BftMaxBackoffExp)   // r >= 1
 
-// 기본값 제안
-//   EmptyBlockInterval = 5s   (현행 프라이빗 운영 프로파일)
-//   BftBaseTimeout     = 2s   (블록 생성 + 3-phase 메시지 왕복 + 여유)
-//   BftMaxBackoffExp   = 5    (라운드 r>=1 상한 2s * 32 = 64s)
+// proposed defaults
+//   EmptyBlockInterval = 5s   (current private operating profile)
+//   BftBaseTimeout     = 2s   (block building + 3-phase round trips + margin)
+//   BftMaxBackoffExp   = 5    (rounds r>=1 capped at 2s * 32 = 64s)
 ```
 
-- 노드 간 `committedAt` 차이는 COMMIT 메시지 도착 시차(LAN에서 ms 수준)뿐이라
-  NTP 편차의 영향을 받지 않고, 공격자가 조작할 입력이 없다.
-- **이른 제안은 언제든 받는다.** 트랜잭션이 들어와 제안자가 100ms 만에 제안하면
-  validator는 즉시 PREPARE한다. 타이머는 "너무 늦은" 제안만 걸러낸다.
-- **`EmptyBlockInterval` 은 합의 파라미터가 된다.** 모든 validator의 타임아웃 계산에
-  들어가므로 **노드마다 달라지면 안 된다.** 제네시스 `bft.emptyBlockInterval` 로 고정한다 (§8.1).
-- `idleseal`(100ms)은 제안자 로컬 동작이라 합의와 무관하다. 기존 플래그를 그대로 쓴다.
-- 기동 시 `EmptyBlockInterval >= blockCreationTime` 인지 확인한다
-  (`emptyinterval` 이 온체인 간격보다 작으면 효과가 없다는 기존 제약과 같음).
+- `committedAt` differs between nodes only by COMMIT arrival skew (milliseconds on a LAN), so
+  NTP drift does not matter and an attacker has no input to manipulate.
+- **Early proposals are always accepted.** When transactions arrive and the proposer proposes after
+  100ms, validators PREPARE immediately. The timer only filters proposals that are too late.
+- **`EmptyBlockInterval` becomes a consensus parameter.** It enters every validator's timeout,
+  so **it must not differ between nodes.** It is fixed in the genesis as `bft.emptyBlockInterval` (§8.1).
+- `idleseal` (100ms) is local proposer behaviour, unrelated to consensus. The existing flag stays.
+- At startup, check `EmptyBlockInterval >= blockCreationTime` (same constraint as today: an
+  `emptyinterval` below the on-chain interval has no effect).
 
-#### 타임스탬프 규칙 (post-fork)
+#### Timestamp rules (post-fork)
 
-타이머에서 분리했더라도 `header.Time` 은 EVM `block.timestamp` 로 노출되므로 범위를 제한한다.
+Even with timers decoupled, `header.Time` is exposed to the EVM as `block.timestamp`, so it is bounded.
 
-| 규칙 | 적용 위치 | 목적 |
+| Rule | Where | Purpose |
 |---|---|---|
-| `header.Time >= parent.Time` | `VerifyHeader` (동기화 포함 항상) | 과거로 당기기 차단. 엄격한 `>` 는 초 단위에서 초당 1블록 상한이 되어 100ms 프로파일과 충돌하므로 쓰지 않는다 |
-| `\|header.Time − localNow\| <= BftTimeDrift` (기본 2s) | **PRE-PREPARE 검증에서만** | 미래·과거로 밀기 차단. 과거 블록 동기화 시에는 로컬 시계와 비교할 수 없으므로 적용하지 않고, commit seal로 검증한다 |
+| `header.Time >= parent.Time` | `VerifyHeader` (always, including sync) | blocks backdating. A strict `>` would cap seconds-resolution chains at one block per second and conflict with the 100ms profile, so it is not used |
+| `\|header.Time − localNow\| <= BftTimeDrift` (default 2s) | **PRE-PREPARE validation only** | blocks pushing the time forward or back. Not applied when syncing historical blocks, which cannot be compared with the local clock; those are verified by commit seals |
 
-- **해상도는 초 단위를 유지한다.** `Time` 을 ms로 바꾸면 EVM `block.timestamp` 의미가
-  바뀌어 컨트랙트·도구가 깨진다. 타이머를 헤더에서 분리했으므로 ms 해상도가 필요한 곳이 없다.
-  향후 ms가 필요해지면 `Time` 을 바꾸지 않고 별도 선택 필드를 추가한다.
+- **Resolution stays in seconds.** Moving `Time` to milliseconds would change the meaning of EVM
+  `block.timestamp` and break contracts and tooling. With timers decoupled from the header, nothing
+  needs millisecond resolution. If it is ever needed, add a separate optional field rather than changing `Time`.
 
-### 4.6 메시지 포맷과 서명
+### 4.6 Message format and signatures
 
 ```go
 type BftMsgType uint8
@@ -249,78 +249,78 @@ const (
     MsgRoundChange BftMsgType = 4
 )
 
-// 서명 대상: 봉투(envelope)의 RLP 해시
+// signed over: RLP hash of the envelope
 type BftMessage struct {
     Type      BftMsgType
     Height    *big.Int
     Round     uint64
-    ChainID   uint64        // 리플레이 방지: 체인 간 교차 서명 차단
-    Digest    common.Hash   // = BlockHash(제안 헤더), §5.2
-    Payload   []byte        // Preprepare: 블록 RLP + RC 증명 / RoundChange: 증명
-    CommitSeal []byte       // Commit 에만: sign(commitDigest)
-    Signature []byte        // sign(keccak(rlp(위 필드들, Signature 제외)))
+    ChainID   uint64        // replay protection: no cross-chain signature reuse
+    Digest    common.Hash   // = BlockHash(proposed header), §5.2
+    Payload   []byte        // Preprepare: block RLP + RC certificate / RoundChange: certificate
+    CommitSeal []byte       // Commit only: sign(commitDigest)
+    Signature []byte        // sign(keccak(rlp(fields above, without Signature)))
 }
 
-// commit seal 서명 대상 (헤더에 영구 보존되는 증명)
+// commit seal is signed over this (a proof kept in the header permanently)
 commitDigest = keccak256(rlp([BlockHash(header), Round, ChainID, byte(0x02)]))
 ```
 
-- `0x02` 도메인 구분자: 메시지 서명과 commit seal 서명이 절대 교차 사용되지 않도록.
-- `ChainID` 포함: 다른 네트워크(고객사·환경)의 서명이 재사용되는 것을 차단 (§9.5).
-- 서명자 = `ecrecover` → enode 공개키 → validator 인덱스. 미등록 키는 즉시 폐기.
+- `0x02` domain separator: message signatures and commit-seal signatures can never be used for each other.
+- `ChainID` included: signatures from another network (customer or environment) cannot be reused (§9.5).
+- Signer = `ecrecover` → enode public key → validator index. Unregistered keys are dropped immediately.
 
-### 4.7 안전성 논증 요약
+### 4.7 Safety argument (summary)
 
-전제: (a) digest가 블록 해시 전체를 덮는다 (§5.2), (b) 정직 노드는 재시작해도 이전 투표와
-lock을 잃지 않는다 (§6.1), (c) 같은 노드키가 두 곳에서 동시에 서명하지 않는다 (§6.1 운영 규칙).
+Assumptions: (a) the digest covers the whole block hash (§5.2), (b) honest nodes do not lose their
+previous votes or lock across restarts (§6.1), (c) the same node key never signs from two places at once (§6.1 operating rules).
 
-- **Agreement:** 두 블록이 같은 높이에서 각각 `2f+1` commit을 모으려면 두 쿼럼이
-  최소 `f+1` 노드에서 겹치고, 그중 최소 1개는 정직 노드다. 정직 노드는 한 라운드에
-  한 digest만 COMMIT하므로 모순. 라운드 간에는 §4.5의 재제안 규칙이 보장한다.
-  전제 (b)가 없으면 재시작한 정직 노드가 사실상 비잔틴 노드가 되어 이 논증이 무너진다.
-- **Validity:** 모든 정직 노드가 PREPARE 전에 블록을 완전 실행·검증한다 (§4.8).
-- **Termination:** `f+1` amplification + 지수 백오프로, GST 이후 정직한 proposer가
-  걸리는 라운드에서 종료. 타이머가 헤더 시각에 의존하지 않으므로 제안자가 이를 방해할 수 없다.
+- **Agreement:** for two blocks at the same height to each gather `2f+1` commits, the two quorums
+  overlap in at least `f+1` nodes, at least one of them honest. An honest node COMMITs only one digest
+  per round — contradiction. Across rounds, the re-proposal rule in §4.5 guarantees it.
+  Without assumption (b), an honest node that restarted is effectively Byzantine and the argument fails.
+- **Validity:** every honest node fully executes and validates the block before PREPARE (§4.8).
+- **Termination:** `f+1` amplification plus exponential backoff end the height in the round where,
+  after GST, an honest proposer is selected. Timers do not depend on header time, so the proposer cannot interfere.
 
-### 4.8 PRE-PREPARE 검증 목록
+### 4.8 PRE-PREPARE validation checklist
 
-PREPARE를 보내기 전에 모두 통과해야 한다.
+All of these must pass before sending PREPARE.
 
-1. 발신자 = `proposer(n, r)`, 메시지 서명 유효, 부모 = 로컬 head
-2. 재제안이면: 동봉된 ROUND_CHANGE 증명이 유효하고, 블록이 최고 `preparedRound` 의 블록과 **`BlockHash` 가 같음**
-3. `VerifyHeader` (post-fork 규칙 포함, §5.3) + 타임스탬프 범위 (§4.5)
-4. 바디 실행 → state root 일치
-5. **`Rewards`·`Coinbase` 를 재계산해 헤더 값과 비교, 다르면 거부** (덮어쓰지 않음, §7.5)
-6. **실행 후 상태의 거버넌스 노드 수 `N >= 4`** (§9.3.1)
+1. Sender = `proposer(n, r)`, valid message signature, parent = local head
+2. For a re-proposal: the attached ROUND_CHANGE certificate is valid and the block has **the same `BlockHash`** as the block of the highest `preparedRound`
+3. `VerifyHeader` (including post-fork rules, §5.3) + timestamp bounds (§4.5)
+4. Execute the body → state root matches
+5. **Recompute `Rewards` and `Coinbase` and compare with the header; reject on mismatch** (do not overwrite, §7.5)
+6. **Governance node count `N >= 4` in the post-execution state** (§9.3.1)
 
 ---
 
-## 5. 헤더 변경과 블록 해시
+## 5. Header changes and block hash
 
-### 5.1 추가 필드
+### 5.1 New fields
 
 ```go
-// core/types/block.go — Header 및 headerRlp 양쪽에, headerRlp 의 BlobGasUsed 바로 뒤(맨 끝)에 추가
-    // BFT fork: 커밋된 라운드와 2f+1 commit seal. BlockHash 에서는 제외된다.
+// core/types/block.go — in both Header and headerRlp, right after headerRlp's BlobGasUsed (at the very end)
+    // BFT fork: committed round and 2f+1 commit seals. Excluded from BlockHash.
     BftRound    uint64   `json:"bftRound"    rlp:"optional"`
     CommitSeals [][]byte `json:"commitSeals" rlp:"optional"`
 ```
 
-- `rlp:"optional"` 은 **꼬리에서만** 생략 가능하므로 두 필드는 `headerRlp` 의 맨 뒤에 둔다.
-  `headerToHeaderRlp` / `headerRlpToHeader` (`block.go:187, 216`) 변환에도 추가한다.
-- 뒤쪽 선택 필드가 채워지면 앞쪽의 nil 선택 필드는 0으로 인코딩되어 디코딩 시 nil이 아닌 0이 된다
-  (`BaseFee` nil ↔ 0 의미 변화). 따라서 **`IsBft` 이면 `IsCamellia` 여야 한다**를 chain config
-  검증에 넣는다 — Camellia 이후 헤더는 앞쪽 선택 필드가 모두 채워져 있다.
-- PBFT 블록은 `ParentBeaconRoot == nil` 이어야 한다 (`headerRlp` 에 없어 전송되지 않는 필드).
+- `rlp:"optional"` fields can be omitted **only at the tail**, so both fields go at the very end of `headerRlp`.
+  Add them to the `headerToHeaderRlp` / `headerRlpToHeader` conversions too (`block.go:187, 216`).
+- When a later optional field is set, earlier nil optional fields are encoded as zero and decode as zero,
+  not nil (`BaseFee` nil ↔ 0 changes meaning). The chain-config check therefore requires
+  **`IsBft` implies `IsCamellia`** — headers after Camellia have every earlier optional field set.
+- PBFT blocks must have `ParentBeaconRoot == nil` (a field missing from `headerRlp`, so it is never sent).
 
-### 5.2 `BlockHash` — 블록 해시와 서명 대상의 통일
+### 5.2 `BlockHash` — one hash for the block and for signing
 
-`Header.Hash()` 는 `rlpHash(h)` 로, `EncodeRLP` → `headerRlp` 를 거친다 (`core/types/block.go:295, 309`).
-commit seal을 그대로 포함하면 노드마다 **수집한 seal 집합이 달라** 동일 블록이
-다른 해시를 갖게 되어 체인이 갈라진다. 따라서 해시에서 `BftRound`/`CommitSeals` 를 뺀다.
+`Header.Hash()` is `rlpHash(h)`, which goes through `EncodeRLP` → `headerRlp` (`core/types/block.go:295, 309`).
+If commit seals were included, **each node would collect a different set of seals**, the same block
+would get different hashes, and the chain would split. So the hash leaves out `BftRound`/`CommitSeals`.
 
 ```go
-// BlockHash: 블록 해시 = PBFT 서명 대상(digest). BftRound/CommitSeals 만 제외한다.
+// BlockHash: the block hash = the PBFT signing target (digest). Only BftRound/CommitSeals are excluded.
 func (h *Header) Hash() common.Hash {
     if h == nil { return common.Hash{} }
     if metaminer.IsPoW() { return rlpHash(HeaderToHeaderLegacy(h)) }
@@ -328,269 +328,270 @@ func (h *Header) Hash() common.Hash {
         cpy := CopyHeader(h)
         cpy.CommitSeals = nil
         cpy.BftRound = 0
-        return rlpHash(cpy)   // 꼬리 선택 필드가 비면 pre-fork 인코딩과 동일
+        return rlpHash(cpy)   // with the optional tail empty, identical to the pre-fork encoding
     }
     return rlpHash(h)
 }
 ```
 
-- **PBFT digest는 이 해시(`BlockHash`)다.** `SealHash` 는 `Rewards`/`MixDigest`/`Nonce`/
-  `MinerNodeId`/`MinerNodeSig` 를 빼므로, 이를 digest로 쓰면 2f+1이 커밋한 digest 하나에
-  이 필드들만 다른 **여러 블록 해시**가 대응한다. 노드마다 다른 해시를 저장하면 다음 블록의
-  `ParentHash` 가 갈라진다 — 합의는 됐는데 체인이 갈라지는 결함이다.
-- **seal이 해시에 없으면 제거/위조가 가능하지 않은가?** — 가능하지만 무의미하다.
-  post-fork `VerifyHeader` 가 `len(valid seals) >= Quorum` 을 강제하므로,
-  seal을 떼어낸 블록은 어떤 정직 노드도 받아들이지 않는다.
-- **pre-fork 블록에 seal을 붙이는 경우** — `Hash()` 는 높이가 아니라 필드 존재로 분기하므로
-  (Header는 chain config를 모른다) pre-fork 블록에 임의의 seal을 붙여도 해시가 같아,
-  같은 해시에 RLP가 둘 존재하게 된다. **`!IsBft(number)` 이면 `CommitSeals == nil && BftRound == 0`
-  을 `VerifyHeader` 에서 강제**해 닫는다 (§5.3). 이 규칙은 "라운드 0 + seal 없음" 인코딩이
-  pre-fork와 구분되지 않는 문제도 함께 닫는다 — post-fork 블록은 항상 seal이 Quorum 이상이다.
+- **The PBFT digest is this hash (`BlockHash`).** `SealHash` leaves out `Rewards`/`MixDigest`/`Nonce`/
+  `MinerNodeId`/`MinerNodeSig`; used as the digest, the single digest that 2f+1 validators committed
+  would map to **several block hashes** differing only in those fields. Nodes storing different hashes
+  would disagree on the next block's `ParentHash` — the chain splits even though consensus succeeded.
+- **Can seals be stripped or forged if they are not in the hash?** — Yes, but it is pointless.
+  Post-fork `VerifyHeader` requires `len(valid seals) >= Quorum`, so no honest node accepts a block
+  whose seals were removed.
+- **Seals attached to a pre-fork block** — `Hash()` branches on field presence rather than height
+  (the Header cannot see the chain config), so attaching arbitrary seals to a pre-fork block keeps its
+  hash and yields two RLPs for one hash. **`VerifyHeader` requires `CommitSeals == nil && BftRound == 0`
+  when `!IsBft(number)`**, which closes this (§5.3). The same rule also closes the case where
+  "round 0 + no seals" is indistinguishable from a pre-fork encoding — post-fork blocks always carry at least Quorum seals.
 
-### 5.3 헤더 검증 규칙과 `BftRound` 정의
+### 5.3 Header validation rules and the meaning of `BftRound`
 
-**`BftRound` = 커밋된 라운드.** commitDigest의 `Round` 와 같아야 seal을 검증할 수 있다.
-블록이 처음 제안된 라운드는 기록하지 않는다 (안전성에 불필요, §4.5 재제안 규칙으로 헤더 불변).
+**`BftRound` = the committed round.** It must equal `Round` in commitDigest so the seals can be verified.
+The round in which the block was first proposed is not recorded (not needed for safety; §4.5 keeps the header unchanged on re-proposal).
 
-| 높이 | 규칙 |
+| Heights | Rule |
 |---|---|
 | pre-fork (`!IsBft`) | `CommitSeals == nil`, `BftRound == 0` |
 | post-fork (`IsBft`) | `IsCamellia`, `ParentBeaconRoot == nil`, `Time >= parent.Time` |
-| post-fork | `MinerNodeSig` 가 **높이 `n-1` validator set 중 한 명의 서명**인가 (기존 `verifyBlockSig` 로직) |
-| post-fork | `CommitSeals` 가 `Quorum` 개 이상, 전부 서로 다른 validator, 전부 `commitDigest(BlockHash, BftRound, ChainID)` 에 대해 유효 |
+| post-fork | `MinerNodeSig` is **a signature by one of the validators of height `n-1`** (existing `verifyBlockSig` logic) |
+| post-fork | at least `Quorum` `CommitSeals`, all from distinct validators, all valid for `commitDigest(BlockHash, BftRound, ChainID)` |
 
-- rev.3의 "`MinerNodeSig` 가 `proposer(height, BftRound)` 의 키와 일치" 규칙은 **삭제**한다.
-  round change 후 재제안된 블록은 원 제안자의 `MinerNodeSig` 를 그대로 가지므로, 커밋 라운드의
-  proposer와 다르다. 커밋 라운드의 제안 자격은 합의 중 ROUND_CHANGE 증명으로 확인했고,
-  import 시점에는 2f+1 seal이 그 결과를 증명한다.
-- `MinerNodeSig` 는 기존대로 **블록을 만든 노드의 신원 증명**으로 유지한다
+- The rev.3 rule "`MinerNodeSig` matches the key of `proposer(height, BftRound)`" is **removed**.
+  A block re-proposed after a round change keeps the original proposer's `MinerNodeSig`, which differs
+  from the commit round's proposer. The commit-round proposer's right to propose was checked during
+  consensus through the ROUND_CHANGE certificate, and at import time the 2f+1 seals prove the outcome.
+- `MinerNodeSig` stays as **the identity proof of the node that built the block**
   (`consensus/ethash/consensus.go:642-648`).
 
 ### 5.4 Difficulty / fork choice
 
-- `header.Difficulty` 는 고정값(현행 `params.FixedDifficulty=1`) 유지 — 하위 호환.
-- **fork choice는 총 난이도가 아니라 finality로 결정**한다. `insertChain` 경로에서
-  `blockNumber <= finalizedNumber` 인 재구성(reorg) 요청은 거부한다. committed
-  블록은 최종이므로 정상 동작에서 발생할 수 없고, 발생하면 공격 또는 버그다.
+- `header.Difficulty` keeps its fixed value (currently `params.FixedDifficulty=1`) — backward compatible.
+- **Fork choice is decided by finality, not total difficulty.** On the `insertChain` path, reorg requests
+  with `blockNumber <= finalizedNumber` are rejected. Committed blocks are final, so this cannot happen
+  in normal operation; if it does, it is an attack or a bug.
 
 ---
 
-## 6. 코드 구조
+## 6. Code layout
 
 ```
 consensus/metabft/
-    engine.go        // consensus.Engine 구현 (Prepare/Finalize/Seal/VerifyHeader/SealHash)
-    core.go          // 상태기계: 라운드 진행, 메시지 처리
-    backend.go       // 체인/miner/p2p 연결 어댑터 (core 는 체인을 직접 모르게)
-    validators.go    // validator set, proposer 선출, 쿼럼 계산
-    messages.go      // BftMessage RLP, 서명/검증, 도메인 구분자
-    roundstate.go    // (height, round) 별 수집 상태, PREPARED lock (메모리)
-    wal.go           // 투표·lock 영속화 (§6.1) — 서명 전송 전 fsync
-    evidence.go      // 이중 서명 증거 저장 (§7.1)
-    roundchange.go   // round change 수집과 증명 검증
-    timer.go         // 로컬 단조 시계 기반 deadline (§4.5)
-    snapshot.go      // epoch 별 validator set 캐시
+    engine.go        // consensus.Engine (Prepare/Finalize/Seal/VerifyHeader/SealHash)
+    core.go          // state machine: round progression, message handling
+    backend.go       // adapter to chain/miner/p2p (core never sees the chain directly)
+    validators.go    // validator set, proposer selection, quorum
+    messages.go      // BftMessage RLP, sign/verify, domain separators
+    roundstate.go    // per-(height, round) collection state, PREPARED lock (in memory)
+    wal.go           // vote/lock persistence (§6.1) — fsync before sending signatures
+    evidence.go      // equivocation evidence storage (§7.1)
+    roundchange.go   // round-change collection and certificate checks
+    timer.go         // deadlines on the local monotonic clock (§4.5)
+    snapshot.go      // per-epoch validator-set cache
     api.go           // RPC: metabft_getValidators, _getRoundState, _status, _readiness, _getEvidence
 
 eth/protocols/metabft/
-    protocol.go      // 서브프로토콜 "metabft/1" 정의
-    handler.go       // 메시지 수신/브로드캐스트, 중복 억제 + 이중 서명 탐지 (§7.1)
+    protocol.go      // "metabft/1" sub-protocol definition
+    handler.go       // receive/broadcast, dedup + equivocation detection (§7.1)
     peer.go
 ```
 
-**핵심 원칙:** `core.go` 의 상태기계는 `backend` 인터페이스만 의존하여
-체인/네트워크 없이 단위 테스트가 가능해야 한다 (결정적 시뮬레이션 테스트가
-이 프로젝트의 검증 핵심이다). WAL과 시계도 인터페이스로 주입해, 시뮬레이션에서
-"크래시 → 재시작"과 시각 조작을 재현한다.
+**Core principle:** the state machine in `core.go` depends only on the `backend` interface, so it can
+be unit-tested without a chain or network (deterministic simulation is the backbone of verification
+for this project). The WAL and the clock are injected as interfaces too, so simulations can replay
+"crash → restart" and clock manipulation.
 
-### 6.1 투표 상태 영속화 (WAL)
+### 6.1 Vote persistence (WAL)
 
-§4.5의 lock과 "한 라운드에 한 digest만 투표" 규칙은 **재시작 후에도 유지되어야** 한다.
-메모리에만 두면 PREPARE/COMMIT을 보낸 뒤 크래시 → 재시작한 노드가 같은 높이의 다른 digest에
-투표할 수 있고, 이런 노드가 `f` 를 넘으면 §4.7의 쿼럼 겹침 논증이 무너진다.
-BP 롤링 재시작이 일상인 운영 환경에서 이는 실제 위험이다.
+The §4.5 lock and the "one digest per round" rule **must survive restarts.** Kept only in memory,
+a node that crashes after sending PREPARE/COMMIT can restart and vote for a different digest at the same
+height; once such nodes exceed `f`, the quorum-overlap argument of §4.7 fails.
+With rolling BP restarts as routine operations, this is a real risk.
 
-**기록 내용과 순서**
-- PREPARE·COMMIT·ROUND_CHANGE를 **보내기 전에** `(height, round, type, digest)` 를 기록하고
-  **fsync 완료 후** 전송한다. 순서가 바뀌면 영속화의 의미가 없다.
-- PREPARED 진입 시 lock `(preparedRound, preparedDigest, PREPARE 쿼럼 증명, 블록 RLP)` 를 기록한다.
-  재시작 후 ROUND_CHANGE의 근거와 재제안 블록을 복원하는 데 필요하다.
-- 높이가 커밋되면 그 이전 기록을 정리한다 (파일 크기는 높이 1~2개 분량으로 유지).
+**What is written, and in which order**
+- **Before sending** PREPARE, COMMIT or ROUND_CHANGE, write `(height, round, type, digest)` and send
+  **only after the fsync completes.** Reversing the order defeats the purpose.
+- On entering PREPARED, write the lock `(preparedRound, preparedDigest, PREPARE quorum certificate, block RLP)`.
+  After a restart this restores the justification for ROUND_CHANGE and the block to re-propose.
+- Once a height commits, prune earlier records (the file stays at one to two heights' worth).
 
-**저장 위치:** chaindata와 분리된 추가 기록 파일(`<datadir>/metabft/wal`).
-chaindata 쓰기는 배치되어 fsync 시점을 보장할 수 없다.
+**Location:** an append-only file separate from chaindata (`<datadir>/metabft/wal`).
+Chaindata writes are batched, so the fsync point cannot be guaranteed there.
 
-**재시작 규칙**
-- WAL의 마지막 서명보다 이전이거나 같은 `(height, round)` 에서 **다른 digest에 서명하지 않는다.**
-  복원한 lock은 §4.5 규칙대로 따른다.
-- **WAL이 없거나 손상된 경우**(디스크 교체, 스냅샷 복원, 재설치)에는 관찰 모드로 시작해,
-  체인이 로컬 head보다 한 높이 이상 커밋되는 것을 확인한 뒤 투표에 참여한다.
+**Restart rules**
+- Never sign a different digest at a `(height, round)` at or below the last signature recorded in the WAL.
+  A restored lock is followed per §4.5.
+- **If the WAL is missing or corrupt** (disk replacement, snapshot restore, reinstall), start in observer
+  mode and only vote after seeing the chain commit at least one height past the local head.
 
-**운영 규칙**
-- **같은 노드키를 두 서버에서 동시에 운영하지 않는다** (active-active, 상시 기동 대기 서버 금지).
-  서버가 둘이면 WAL도 둘이라 이중 서명을 막을 수 없다.
-- 장애 조치(failover)는 "원 서버 완전 중지 확인 → WAL 이전 → 대기 서버 기동" 순서로 한다.
+**Operating rules**
+- **Never run the same node key on two servers at once** (no active-active, no hot standby).
+  Two servers mean two WALs, which cannot prevent double signing.
+- Failover order: "confirm the original server is fully stopped → move the WAL → start the standby".
 
-**성능:** 블록당 fsync 3회 안팎(PREPARE, lock, COMMIT). 100ms 블록이면 초당 약 30회로 SSD에서는
-부담이 작으나, §11.3 지연 측정에 포함한다.
+**Performance:** about three fsyncs per block (PREPARE, lock, COMMIT). With 100ms blocks that is about
+30 per second — small on SSDs, but included in the §11.3 latency measurements.
 
 ---
 
-## 7. 통합 지점 (정확한 위치)
+## 7. Integration points
 
-### 7.1 P2P: `meta` 확장이 아닌 **별도 서브프로토콜**
+### 7.1 P2P: a **separate sub-protocol**, not a `meta` extension
 
-합의 메시지를 `meta` 에 넣으면 `meta` 버전 범프가 필요하고
-(`docs/meta69-blob-replay-design.md` 참고), 합의에 참여하지 않는 비-validator 노드까지
-메시지 코드 길이 협상에 얽힌다. PBFT를 켜지 않은 네트워크의 `meta` 프로토콜도
-그대로 두는 편이 안전하다.
+Putting consensus messages into `meta` would need another `meta` version bump
+(see `docs/meta69-blob-replay-design.md`) and would drag non-validator nodes, which take no part in
+consensus, into message-code-length negotiation. Leaving the `meta` protocol untouched for networks
+without PBFT is also safer.
 
-→ **`metabft/1` 을 독립 devp2p 서브프로토콜로 추가**한다.
+→ **Add `metabft/1` as an independent devp2p sub-protocol.**
 - `p2p.Protocol{Name: "metabft", Version: 1, Length: 8}`
-- validator만 이 capability를 광고한다 (비-validator는 협상 자체를 안 함).
-- 등록: `eth/backend.go` 의 `Protocols()` 에서 `metabft.MakeProtocols(...)` 를 append.
-- 메시지 코드: `0x00 PreprepareMsg`, `0x01 PrepareMsg`, `0x02 CommitMsg`,
+- Only validators advertise this capability (non-validators do not negotiate it at all).
+- Registration: append `metabft.MakeProtocols(...)` in `Protocols()` in `eth/backend.go`.
+- Message codes: `0x00 PreprepareMsg`, `0x01 PrepareMsg`, `0x02 CommitMsg`,
   `0x03 RoundChangeMsg`, `0x04 SyncRequestMsg`, `0x05 SyncReplyMsg`.
-- 리플레이 방지: `BftMessage` 자체가 `(Height, Round, ChainID, Signature)` 를
-  담으므로 meta/69의 nonce+timestamp 방식(`eth/protocols/eth/metadium_replay.go`)은 불필요.
-- validator 간 **full mesh**를 전제한다. 거버넌스 노드는 이미
-  `metadium/admin.go:1359 addPeer` 로 상호 연결되므로 추가 작업이 적다.
+- Replay protection: `BftMessage` itself carries `(Height, Round, ChainID, Signature)`, so
+  meta/69's nonce+timestamp scheme (`eth/protocols/eth/metadium_replay.go`) is not needed.
+- A **full mesh** between validators is assumed. Governance nodes already connect to each other
+  through `metadium/admin.go:1359 addPeer`, so little extra work is needed.
 
-**중복 억제와 이중 서명 탐지**
+**Deduplication and equivocation detection**
 
-처리 순서: **① 메시지 서명 검증 → ② 발신자가 해당 높이 validator인지 확인 → ③ 캐시 조회.**
-서명 검증을 캐시보다 먼저 해야, 다른 노드를 발신자로 적은 위조 메시지가 캐시를 선점해
-진짜 메시지를 "중복"으로 버리게 하거나 정직한 노드를 이중 서명자로 오인하게 만들 수 없다.
+Order: **① verify the message signature → ② check the sender is a validator at that height → ③ look up the cache.**
+Verifying before the cache lookup prevents a forged message naming another node as sender from taking
+the cache slot first — which would make the genuine message be dropped as a "duplicate", or make an
+honest node look like an equivocator.
 
-| 캐시 키 | 캐시 값 |
+| Cache key | Cache value |
 |---|---|
-| `(sender, height, round, type)` | 처음 받은 메시지의 `digest` + 서명된 원본 |
+| `(sender, height, round, type)` | `digest` of the first message received + the signed original |
 
-- 같은 키, **같은 digest** → 중복, 버린다.
-- 같은 키, **다른 digest** → 버리지 않고 **두 서명 메시지를 증거로 디스크에 저장 + 알람**.
-  합의 집계에는 **처음 받은 메시지만** 계속 쓴다.
-- 네 가지 메시지 모두 적용한다. ROUND_CHANGE도 한 노드가 한 라운드에 보내는 내용이 하나로
-  정해지므로, 내용이 다르면 이중 서명이다. go-ethereum 서명은 결정적이라 같은 digest의
-  COMMIT seal이 다르게 나오는 정상 경우는 없다.
-- 증거는 서명과 ChainID가 붙어 있어 **제3자가 독립 검증 가능**하다. `metabft_getEvidence` 로 조회하며,
-  §12 "거버넌스 수동 제명"의 판단 근거가 된다. 다른 노드로의 증거 전파는 후속 과제.
-- 캐시는 해당 높이 커밋 시 정리한다 (크기 제한). 증거는 이중 서명 발생 시에만 생긴다.
+- Same key, **same digest** → duplicate, dropped.
+- Same key, **different digest** → not dropped: **both signed messages are stored on disk as evidence and an alarm is raised.**
+  Only **the first message received** keeps counting toward consensus.
+- Applies to all four message types. ROUND_CHANGE also has exactly one valid content per node per round,
+  so differing content is equivocation. go-ethereum signatures are deterministic, so there is no
+  legitimate case of two different COMMIT seals for the same digest.
+- The evidence carries signatures and the ChainID, so **third parties can verify it independently.** It is
+  queried with `metabft_getEvidence` and is the basis for the "manual removal via governance" in §12.
+  Gossiping evidence to other nodes is follow-up work.
+- The cache is pruned when the height commits (bounded size). Evidence only appears when someone equivocates.
 
-### 7.2 `consensus.Engine` 교체
+### 7.2 Replacing `consensus.Engine`
 
-`eth/ethconfig/config.go:175` `CreateConsensusEngine` 의 분기(`:187`)에, chain config에
-`BftBlock` 이 설정되어 있으면 PBFT 래퍼 엔진을 만드는 경로를 추가한다 (§8.1: 합의 방식은
-제네시스가 결정).
+In the branch (`:187`) of `CreateConsensusEngine` in `eth/ethconfig/config.go:175`, add a path that
+builds the PBFT wrapper engine when the chain config sets `BftBlock` (§8.1: the genesis decides the
+consensus).
 
-주의: B안에서는 한 체인 안에 **PoA 부트스트랩 구간(`< BftBlock`)과 PBFT 구간이
-공존**하므로, 하나의 바이너리가 두 구간을 모두 검증해야 한다 (신규 노드의 전체 동기화).
-따라서 엔진은 래퍼로 만든다.
+Note: under option B, **a PoA bootstrap segment (`< BftBlock`) and a PBFT segment coexist** in one chain,
+so a single binary must validate both (full sync of new nodes). The engine is therefore a wrapper.
 
 ```go
-// VerifyHeader 등 모든 메서드에서
+// in every method, VerifyHeader and so on
 if !chain.Config().IsBft(header.Number) {
-    // 기존 ethash(PoA) 경로 + pre-fork 추가 규칙: CommitSeals == nil && BftRound == 0 (§5.3)
+    // existing ethash (PoA) path + extra pre-fork rule: CommitSeals == nil && BftRound == 0 (§5.3)
     return e.legacy.VerifyHeader(chain, header)
 }
-// BFT 경로 (§5.3 post-fork 규칙)
+// BFT path (§5.3 post-fork rules)
 ```
 
-### 7.3 `miner/worker.go` — 가장 큰 수술
+### 7.3 `miner/worker.go` — the biggest change
 
-현재: `commitEx` → `Seal()` → **`sealedBlock = <-resultCh` 동기 수신**
+Today: `commitEx` → `Seal()` → **`sealedBlock = <-resultCh` received synchronously**
 (`miner/worker.go:1866`) → `WriteBlockAndSetHead` (`:1912`).
 
-PBFT에서는 Seal이 수 초에서 수 라운드 걸릴 수 있고, **결과가 나 아닌 다른 노드의
-제안일 수도** 있다. 따라서:
+Under PBFT, sealing can take seconds or several rounds, and **the result may be another node's
+proposal.** Therefore:
 
-**1) 제안자 게이트 교체** (`miner/worker.go:1666-1681`):
+**1) Replace the proposer gate** (`miner/worker.go:1666-1681`):
 ```go
 if w.chain.Config().IsBft(height) {
     if !metaminer.IsBftProposer(height) { w.refreshPending(true); return }
 } else if IsBokbunja { ... AcquireMiningToken ... }
 else { ... IsMiner() ... }
 ```
-   `IsBftProposer` 는 `metadium/miner` 의 함수 포인터 패턴
-   (`metadium/miner/miner.go:44`)을 그대로 따라 추가한다 — 기존 구조와 일관.
-   lock이 있는 라운드에서는 worker가 새 블록을 만들지 않고 BFT core가 lock 블록을 재제안한다.
+   `IsBftProposer` follows the function-pointer pattern of `metadium/miner`
+   (`metadium/miner/miner.go:44`) — consistent with the existing structure.
+   In a round with a lock, the worker does not build a new block; the BFT core re-proposes the locked block.
 
-**2) 블록 기록 책임 이전**: post-fork에서는 worker가 `WriteBlockAndSetHead` 를
-   호출하지 않는다. `Seal()` 은 블록을 BFT core에 넘기고 즉시 반환하며,
-   **커밋 완료 시 BFT backend가** seal을 붙여 `WriteBlockAndSetHead` 를 수행한다.
-   worker의 `resultCh` 동기 대기는 `IsBft` 분기로 우회한다.
+**2) Move the write responsibility**: post-fork, the worker does not call `WriteBlockAndSetHead`.
+   `Seal()` hands the block to the BFT core and returns immediately; **on commit, the BFT backend**
+   attaches the seals and calls `WriteBlockAndSetHead`. The worker's synchronous `resultCh` wait is
+   bypassed with an `IsBft` branch.
 
-**3) `LogBlock` / `ReleaseMiningToken` 제거** (`miner/worker.go:1901-1910`):
-   post-fork에서는 etcd work 로깅이 불필요하다. `IsBft` 분기로 건너뛴다.
-   (2026-05-26 `failed to log latest block` 포스트모템의 원인 경로가 통째로 사라진다.)
+**3) Remove `LogBlock` / `ReleaseMiningToken`** (`miner/worker.go:1901-1910`):
+   post-fork, etcd work logging is not needed. Skipped with an `IsBft` branch.
+   (The code path behind the 2026-05-26 `failed to log latest block` post-mortem disappears entirely.)
 
-**4) 비-제안자도 블록을 실행해야 한다.** 현재 비-제안자는 `refreshPending` 후
-   즉시 반환한다. PBFT에서는 PRE-PREPARE 수신 시 블록을 실행·검증해야 하므로 (§4.8),
-   그 경로는 worker가 아니라 BFT backend가 `core.BlockChain` 의 검증 API를
-   직접 호출한다 (`ValidateBody` + `Process` + `ValidateState`). worker는 건드리지 않는다.
+**4) Non-proposers must execute blocks too.** Today a non-proposer calls `refreshPending` and returns.
+   Under PBFT it must execute and validate the block on PRE-PREPARE (§4.8), so that path does not go
+   through the worker: the BFT backend calls the validation API of `core.BlockChain` directly
+   (`ValidateBody` + `Process` + `ValidateState`). The worker is not touched.
 
-**5) 타임스탬프**: post-fork에서 제안자는 `max(parent.Time, now)` 를 쓴다 (`timeIt` 의
-   블록 간격 보정은 PBFT 구간에서 쓰지 않는다 — §4.5 타임스탬프 규칙과 충돌할 수 있다).
+**5) Timestamp**: post-fork, the proposer uses `max(parent.Time, now)` (`timeIt`'s block-interval
+   adjustment is not used in the PBFT segment — it can conflict with the §4.5 timestamp rules).
 
 ### 7.4 Finality
 
-- `metadium/admin.go:645 getFinalizedBlockNumber` 를 fork 분기:
+- Fork-branch `getFinalizedBlockNumber` in `metadium/admin.go:645`:
   ```go
   if chainConfig.IsBft(headNum) { return new(big.Int).Set(headNum) }  // committed = final
   ```
-- `core/blockchain_reader.go:83 metaFinalHeader` 는 그대로 동작한다
-  (이미 이 함수를 경유한다).
-- 이로써 `CurrentSafeBlock`/`CurrentFinalBlock`, blob limbo 정리
-  (`core/txpool/blobpool`), `eth_getBlockByNumber("finalized")` 가 모두 정확해진다.
+- `metaFinalHeader` in `core/blockchain_reader.go:83` keeps working as is
+  (it already goes through this function).
+- This makes `CurrentSafeBlock`/`CurrentFinalBlock`, blob limbo cleanup
+  (`core/txpool/blobpool`) and `eth_getBlockByNumber("finalized")` all exact.
 
-### 7.5 보상 (rewards)
+### 7.5 Rewards
 
-**현행 동작** (§2): 등록된 `verifyRewards` (`metadium/admin.go:1618`)는 `return nil` 뿐이고 호출처도 없다.
-블록 처리 시 `accumulateRewards` (`consensus/ethash/consensus.go:741`)가 보상을 재계산해 state에
-반영하고, **`header.Rewards` 와 `header.Coinbase` 를 재계산 값으로 덮어쓴다** (`:754`).
-따라서 제안자가 넣은 값은 비교되지 않고, 잘못된 보상은 state root 불일치로만 잡힌다.
+**Current behaviour** (§2): the registered `verifyRewards` (`metadium/admin.go:1618`) only returns `nil` and has no callers.
+When a block is processed, `accumulateRewards` (`consensus/ethash/consensus.go:741`) recomputes the rewards,
+applies them to state and **overwrites `header.Rewards` and `header.Coinbase` with the recomputed values** (`:754`).
+The proposer's values are therefore never compared, and a wrong reward is only caught as a state-root mismatch.
 
-**PBFT 구간 변경**
-- `calculateRewards` (진입점 `metadium/admin.go:1610` → 구현 `:1561`)는
-  `(num, blockReward, fees)` 의 결정적 함수이므로 계산 로직은 **변경 불필요**.
-- validator는 PREPARE 전에 재계산한 `Rewards`·`Coinbase` 를 **헤더 값과 비교하고, 다르면 거부**한다.
-  이 필드들은 `BlockHash`(=digest)에 포함되므로 (§5.2), 덮어쓰면 노드마다 해시가 달라질 수 있다.
-- 비교 검증은 post-fork에만 적용한다. pre-fork 동작은 바꾸지 않는다.
-- **개선점:** 현재는 잘못된 보상이 이미 블록이 전파된 뒤 state root 불일치로만 잡힌다.
-  PBFT에서는 PREPARE 전에 걸러지므로 **블록 자체가 커밋되지 않는다**
-  (block-18 사건류의 노출 창이 사라진다 — `docs/block18-reward-race-known-issue.md`).
+**Changes in the PBFT segment**
+- `calculateRewards` (entry `metadium/admin.go:1610` → implementation `:1561`) is a deterministic
+  function of `(num, blockReward, fees)`, so the calculation itself **does not change**.
+- Before PREPARE, a validator **compares the recomputed `Rewards` and `Coinbase` with the header and rejects on mismatch.**
+  These fields are part of `BlockHash` (= the digest, §5.2); overwriting them could give nodes different hashes.
+- The comparison applies post-fork only. Pre-fork behaviour is unchanged.
+- **Improvement:** today a wrong reward is only caught as a state-root mismatch after the block has already
+  propagated. Under PBFT it is filtered out before PREPARE, so **the block never commits**
+  (the exposure window of the block-18 class of incidents disappears — `docs/block18-reward-race-known-issue.md`).
 
 ### 7.6 etcd
 
-| etcd 용도 | PBFT 이후 |
+| etcd use | After PBFT |
 |---|---|
-| mining token (`metaTokenKey`) | **제거** — 합의가 대체 |
-| work log (`metaWorkKey`) | **제거** |
-| leader 선출 | **제거** |
-| 클러스터 멤버십 관리 RPC (`EtcdAddMember` 등) | 유지 (운영 도구) |
-| `admin.update()` 거버넌스 폴링 | 유지 (etcd 무관) |
+| mining token (`metaTokenKey`) | **removed** — replaced by consensus |
+| work log (`metaWorkKey`) | **removed** |
+| leader election | **removed** |
+| cluster-membership RPCs (`EtcdAddMember` etc.) | kept (operations tooling) |
+| `admin.update()` governance polling | kept (unrelated to etcd) |
 
-fork 이후 `acquireMiningToken`/`releaseMiningToken`/`hasMiningToken` 호출 경로는
-`IsBft` 분기로 사용되지 않는다. **etcd 서버 자체의 제거는 후속 릴리스**로 미룬다
-(운영 RPC 의존성과 롤백 경로 보존).
+After the fork, the `acquireMiningToken`/`releaseMiningToken`/`hasMiningToken` paths are not used,
+thanks to the `IsBft` branches. **Removing the etcd server itself is deferred to a later release**
+(to keep the operations RPC dependencies and a rollback path).
 
-### 7.7 동기화 (sync)
+### 7.7 Sync
 
-- **신규/재동기 노드**: 헤더에 붙은 commit seal이 자체 증명이므로, 일반
-  헤더/바디 동기화만으로 검증 가능하다. 별도 합의 재생이 불필요하다.
-- `acceptUnverifiableBlock` (`metadium/admin.go:1708`)의 snap-sync 우회 경로는
-  post-fork 높이에서 **금지**해야 한다. validator set 조회 실패 시에는 블록을 받지 않고 대기한다.
-  (여기서 타협하면 BFT 보장이 무의미해진다.)
-- **뒤처진 validator**: `SyncRequestMsg`/`SyncReplyMsg` 로 현재 (height, round)와
-  최신 커밋 블록을 요청하여 따라잡는다.
+- **New / resyncing nodes**: the commit seals in the header are self-proving, so ordinary header/body
+  sync is enough to validate. No consensus replay is needed.
+- The snap-sync bypass in `acceptUnverifiableBlock` (`metadium/admin.go:1708`) must be **forbidden** at
+  post-fork heights. If the validator set cannot be read, the node waits instead of accepting the block.
+  (Compromising here makes the BFT guarantees meaningless.)
+- **Lagging validators**: use `SyncRequestMsg`/`SyncReplyMsg` to request the current (height, round) and
+  the latest committed block and catch up.
 
 ---
 
-## 8. 설정 파라미터
+## 8. Configuration
 
-### 8.1 합의 방식은 제네시스가 결정한다
+### 8.1 The genesis decides the consensus
 
-합의 방식은 모든 노드가 같아야 하므로 **CLI 플래그가 아니라 제네시스 chain config**
-로 정한다. 노드마다 플래그를 다르게 주는 실수가 원천 차단된다.
+Every node must run the same consensus, so it is set in the **genesis chain config, not by a CLI flag.**
+This rules out nodes being started with different flags.
 
 ```json
 "config": {
@@ -602,383 +603,384 @@ fork 이후 `acquireMiningToken`/`releaseMiningToken`/`hasMiningToken` 호출 �
 }
 ```
 
-- `bftBlock` 이 없으면(nil) 영구 PoA — 기존 네트워크와 동작 동일.
-- `bftBlock` 은 **0보다 커야 한다** (B안: 부트스트랩 구간 필수, §9.2). 0이면 `init` 거부.
-- **`bftBlock` 이 있으면 `camelliaBlock <= bftBlock` 이어야 한다** (§5.1). 위반 시 `init` 거부.
-- `bft.*` 는 **모든 validator의 타이머·검증에 들어가는 값이므로 제네시스에 고정**한다 (§4.5).
-  노드별로 달라도 되는 운영 값만 플래그로 둔다.
-- PBFT 구간에서는 `--metadium.block.emptyinterval` 대신 `bft.emptyBlockInterval` 을 쓴다.
-  둘이 다르게 주어지면 경고하고 제네시스 값을 따른다.
+- Without `bftBlock` (nil): PoA forever — same behaviour as existing networks.
+- `bftBlock` **must be greater than 0** (option B: the bootstrap segment is required, §9.2). `init` rejects 0.
+- **If `bftBlock` is set, `camelliaBlock <= bftBlock` is required** (§5.1). `init` rejects a violation.
+- `bft.*` **enters every validator's timers and checks, so it is fixed in the genesis** (§4.5).
+  Only operational values that may differ between nodes are flags.
+- In the PBFT segment, `bft.emptyBlockInterval` replaces `--metadium.block.emptyinterval`.
+  If both are given and differ, warn and use the genesis value.
 
-`params/config.go` 에 `BftBlock *big.Int`, `Bft *BftConfig` 추가 + `IsBft(num)` +
-배너 출력(`config.go:551` 패턴) + `checkCompatible` 목록(`config.go:790`) 등록.
+In `params/config.go`, add `BftBlock *big.Int`, `Bft *BftConfig`, `IsBft(num)`, the banner line
+(pattern at `config.go:551`) and the `checkCompatible` entry (`config.go:790`).
 
-### 8.2 CLI 플래그
+### 8.2 CLI flags
 
 ```
---metadium.block.idleseal 100            # 기존 플래그 유지 (제안자 로컬 동작)
---bft.requestsyncinterval <초, 기본 10>   # 노드별 운영 값
+--metadium.block.idleseal 100               # existing flag, unchanged (local proposer behaviour)
+--bft.requestsyncinterval <sec, default 10>  # per-node operational value
 ```
 
-`--consensusmethod` 는 PBFT 선택 용도로 쓰지 않는다. `4`(PBFT)가 주어졌는데 제네시스에
-`bftBlock` 이 없거나, 반대로 `bftBlock` 이 있는데 다른 값이 명시되면 기동 시 `Fatalf`
-한다 (`cmd/utils/flags.go:2084` 검증부에 추가).
+`--consensusmethod` is not used to select PBFT. If `4` (PBFT) is given without `bftBlock` in the genesis,
+or `bftBlock` is set and a different value is given explicitly, startup fails with `Fatalf`
+(added to the check at `cmd/utils/flags.go:2084`).
 
 ---
 
-## 9. 네트워크 구성 절차 (B안: PoA 부트스트랩 → PBFT 전환)
+## 9. Network setup (option B: PoA bootstrap → PBFT)
 
-### 9.1 왜 부트스트랩 구간이 필요한가
+### 9.1 Why a bootstrap segment is needed
 
-validator set은 거버넌스 컨트랙트에서 읽는다 (§4.2). 그런데 현재 네트워크 구성 절차
-(`tests/private-net-poa/setup.sh`)는 **node1이 거버넌스 없이 혼자 블록을 만들면서
-거버넌스 컨트랙트를 나중에 배포**한다. 블록 0부터 PBFT를 쓰면 validator set이 없어
-첫 블록을 합의할 수 없다.
+The validator set is read from the governance contract (§4.2). But today's setup procedure
+(`tests/private-net-poa/setup.sh`) has **node1 produce blocks alone, without governance, and deploy the
+governance contract afterwards.** With PBFT from block 0 there would be no validator set to agree on
+the first block.
 
-→ **B안**: `BftBlock` 이전은 기존 PoA로 부트스트랩하고, 거버넌스 배포와 노드 등록을
-마친 뒤 `BftBlock` 에서 PBFT로 전환한다. 로컬 프라이빗 네트워크(`setup.sh`)에서
-Camellia를 블록 100에 활성화하는 것과 같은 구조라 기존 코드 경로를 재사용한다.
+→ **Option B**: before `BftBlock`, bootstrap on the existing PoA; after governance is deployed and nodes
+are registered, switch to PBFT at `BftBlock`. It has the same shape as activating Camellia at block 100
+on the local private network (`setup.sh`), so existing code paths are reused.
 
-(검토했던 A안 — 제네시스에 초기 validator 목록을 넣어 블록 0부터 PBFT — 은 제네시스
-형식을 새로 정의해야 하고 거버넌스 컨트랙트와 목록이 이중화되어 채택하지 않았다.)
+(Option A, considered and rejected — putting an initial validator list in the genesis and running PBFT
+from block 0 — would need a new genesis format and would duplicate the list held by the governance contract.)
 
-### 9.2 구성 순서
+### 9.2 Setup steps
 
-| 단계 | 합의 | 작업 |
+| Step | Consensus | Work |
 |---|---|---|
-| 0. 제네시스 작성 | — | 고객사 체인 ID(§9.5), `bftBlock`, `bft.*` 값 확정. **이후 변경 불가** |
-| 1. 부트스트랩 시작 | PoA (node1 단독) | 기존 `setup.sh` Phase 1과 동일 |
-| 2. 거버넌스 구성 | PoA | 거버넌스 배포(`blockCreationTime` 포함), validator 노드 등록 (**N >= 4, 운영 권장 N = 7**, §9.6), full mesh 확인, 전 노드 NTP 동기화 확인 |
-| 3. 전환 준비 점검 | PoA | `metabft_readiness` RPC로 전 노드 확인 (§9.3) |
-| 4. `BftBlock` 도달 | **PBFT** | 자동 전환. 첫 제안자 = `validators[(BftBlock + 0) % N]` |
+| 0. Write the genesis | — | fix the customer chain ID (§9.5), `bftBlock` and `bft.*`. **Cannot change afterwards** |
+| 1. Start bootstrap | PoA (node1 alone) | same as Phase 1 of the existing `setup.sh` |
+| 2. Set up governance | PoA | deploy governance (including `blockCreationTime`), register validator nodes (**N >= 4, N = 7 recommended for production**, §9.6), confirm the full mesh, confirm NTP sync on every node |
+| 3. Readiness check | PoA | check every node with the `metabft_readiness` RPC (§9.3) |
+| 4. Reach `BftBlock` | **PBFT** | automatic switch. First proposer = `validators[(BftBlock + 0) % N]` |
 
-- `bftBlock` 은 **2단계를 마치기에 충분히 크게** 잡는다. 부트스트랩 구간은 대부분 유휴
-  상태라 블록이 빈 블록 간격(현행 프로파일 5초)마다 생기므로 `17280` ≈ 하루다 (거버넌스 배포
-  트랜잭션이 몰리는 동안에는 더 빨리 진행된다). 부트스트랩이 빨리 끝나도 `BftBlock`
-  까지는 PoA로 계속 간다.
-- **부트스트랩 구간에는 BFT 보장이 없다.** 이 구간에는 거버넌스 구성 외의
-  업무 트랜잭션을 올리지 않는 것을 운영 원칙으로 한다.
-- **전환 블록의 부모는 PoA 블록**이므로 commit seal이 없다. 제안 검증에서 부모의
-  seal을 요구하지 않도록 `IsBft(parent.Number)` 로 분기한다. 전환 블록의 `committedAt(n-1)` 은
-  부모 블록을 import한 로컬 시각으로 대신한다 (§4.5).
-- 전환 직후 몇 라운드는 round change가 날 수 있다 (노드 간 기동 시차). 정상이며
-  수 라운드 내 수렴한다.
+- Choose `bftBlock` **large enough to finish step 2.** The bootstrap segment is mostly idle, so blocks
+  arrive at the empty-block interval (5s in the current profile) and `17280` ≈ one day (faster while
+  governance-deployment transactions are flowing). Even if bootstrap finishes early, the chain stays on
+  PoA until `BftBlock`.
+- **The bootstrap segment has no BFT guarantee.** As an operating rule, no business transactions other
+  than governance setup go into it.
+- **The transition block's parent is a PoA block**, so it has no commit seals. Proposal validation
+  branches on `IsBft(parent.Number)` so it does not require the parent's seals. For the transition block,
+  `committedAt(n-1)` is replaced by the local time at which the parent block was imported (§4.5).
+- A few round changes right after the switch are likely (nodes starting at slightly different times).
+  That is normal; it converges within a few rounds.
 
-### 9.3 전환 조건과 실패 처리
+### 9.3 Transition conditions and failure handling
 
-`BftBlock` 의 부모 상태(`BftBlock-1`)에서 다음을 만족하지 않으면 **PoA로 계속 가지
-않고 블록 생성을 멈춘다** (명확한 에러 로그와 함께). 조용히 PoA를 이어가면 운영자가
-BFT로 동작한다고 착각하게 된다.
+If any of the following fails in the parent state of `BftBlock` (`BftBlock-1`), the chain **stops
+producing blocks instead of continuing on PoA** (with a clear error log). Silently continuing on PoA
+would let operators believe they are running BFT.
 
-1. 거버넌스 컨트랙트가 배포되어 있다
-2. 거버넌스 노드 수 `N >= 4`
-3. 모든 validator가 `metabft/1` capability를 광고하고 있다 (노드 로컬 점검, 경고만)
+1. The governance contract is deployed
+2. Governance node count `N >= 4`
+3. Every validator advertises the `metabft/1` capability (local check on each node, warning only)
 
-멈췄을 때의 복구: 부트스트랩 구간에는 업무 데이터가 없으므로 **제네시스를 다시 만들어
-재구성**하는 것이 원칙이다. 이 때문에 §9.2의 운영 원칙이 중요하다.
+Recovery after such a stop: the bootstrap segment holds no business data, so the rule is to
+**rebuild with a new genesis.** This is why the operating rule in §9.2 matters.
 
-`metabft_readiness` RPC는 위 조건과 현재 높이, `BftBlock` 까지 남은 블록 수를 돌려준다.
+The `metabft_readiness` RPC returns the conditions above, the current height and the number of blocks left to `BftBlock`.
 
-#### 9.3.1 전환 이후의 `N >= 4` 유지 — 정지가 아니라 거부
+#### 9.3.1 Keeping `N >= 4` after the switch — reject, don't halt
 
-§9.3의 게이트는 `BftBlock` 시점만 본다. 전환 뒤 거버넌스로 노드를 빼서 `N` 이 3이 되면
-`f=0` 이 되어 쿼럼 논증이 무너진다.
+The §9.3 gate only looks at `BftBlock`. If nodes are removed through governance after the switch and `N`
+drops to 3, `f=0` and the quorum argument fails.
 
-**규칙: 실행 후 상태의 거버넌스 노드 수가 4 미만이 되는 블록은 무효다.**
-- 제안자는 그런 결과를 내는 트랜잭션을 블록에서 뺀다 (후보 블록 실행 후 확인).
-- validator는 그런 블록에 PREPARE하지 않는다 (§4.8 6번). 동기화 노드도 `VerifyHeader` 후
-  상태 검증 단계에서 거부한다.
-- 결과: `N` 을 3 이하로 줄이는 거버넌스 트랜잭션은 확정되지 않고, **체인은 계속 진행**한다.
-  거부 시마다 에러 로그와 `metabft_status` 에 사유를 남긴다.
+**Rule: a block whose post-execution state has fewer than 4 governance nodes is invalid.**
+- The proposer leaves out transactions that would produce such a state (checked after executing the candidate block).
+- Validators do not PREPARE such a block (§4.8 item 6). Syncing nodes also reject it in the state-validation
+  step after `VerifyHeader`.
+- Result: a governance transaction that would reduce `N` to 3 or less never commits, and **the chain keeps
+  going.** Every rejection leaves an error log and a reason in `metabft_status`.
 
-**정지를 택하지 않는 이유:** §9.3의 정지는 부트스트랩 구간이라 제네시스 재구성으로 복구할 수 있었다.
-전환 이후에 정지하면 노드를 다시 추가하는 거버넌스 트랜잭션도 블록에 담을 수 없어 **복구 경로가 없다**
-(하드포크나 체인 재구성뿐이고, 업무 데이터가 쌓인 체인이라 둘 다 쓸 수 없다).
+**Why not halt:** halting in §9.3 is recoverable because the bootstrap segment can be rebuilt from a new genesis.
+Halting after the switch leaves **no recovery path**: the governance transaction that would add nodes back
+cannot be put in a block either (only a hard fork or a chain rebuild remains, and neither is acceptable
+for a chain holding business data).
 
-**후속 과제:** 거버넌스 컨트랙트에서 `N >= 4` 를 직접 강제하는 것이 가장 깔끔하나,
-컨트랙트 변경은 범위 밖이다 (§1.2).
+**Follow-up:** enforcing `N >= 4` in the governance contract itself would be cleanest, but contract
+changes are out of scope (§1.2).
 
-### 9.4 롤백
+### 9.4 Rollback
 
-- **`BftBlock` 이전**: 제네시스 재구성으로 되돌릴 수 있다.
-- **`BftBlock` 이후**: 헤더 포맷이 다르므로 PoA로 되돌리려면 체인 되감기가 필요하다.
-  → 고객사 운영 투입 전에 동일 구성으로 스테이징 네트워크를 먼저 전환해 본다.
+- **Before `BftBlock`**: can be undone by rebuilding with a new genesis.
+- **After `BftBlock`**: the header format differs, so returning to PoA needs a chain rewind.
+  → Before a customer network goes into production, switch a staging network with the same setup first.
 
-### 9.5 체인 ID 할당 (고객사별)
+### 9.5 Chain ID allocation (per customer)
 
-**전제.** go-metadium은 Metadium 메인넷/테스트넷을 체인 ID가 아니라 **제네시스 해시**로
-식별한다 (`core/genesis.go:411`, `eth/backend.go:112`). 따라서 프라이빗 네트워크의
-체인 ID는 자유롭게 정할 수 있고, 역할은 두 가지다:
-EIP-155 트랜잭션 서명 재사용 차단, 그리고 PBFT `commitDigest` 도메인 분리 (§4.6).
-두 역할 모두 **네트워크마다 값이 달라야** 의미가 있다.
+**Premise.** go-metadium identifies Metadium Mainnet/Testnet by **genesis hash**, not chain ID
+(`core/genesis.go:411`, `eth/backend.go:112`). A private network's chain ID can therefore be chosen
+freely, and it does two jobs: preventing EIP-155 transaction-signature reuse, and domain-separating the
+PBFT `commitDigest` (§4.6). Both only work if **every network has a different value.**
 
-**번호 체계: `6382 CCCC E` (9자리)**
+**Numbering: `6382 CCCC E` (9 digits)**
 
 ```
-chainId = 638200000 + (고객사번호 * 10) + 환경코드
+chainId = 638200000 + (customer number * 10) + environment code
 
-  6382  고정 접두어 (전화 키패드 M-E-T-A)
-  CCCC  고객사 번호 0001–9999 (0000 = 사내용)
-  E     환경 코드
+  6382  fixed prefix (M-E-T-A on a phone keypad)
+  CCCC  customer number 0001–9999 (0000 = internal)
+  E     environment code
 ```
 
-| E | 환경 |
+| E | Environment |
 |---|---|
-| 0 | 예약 (사용 안 함) |
-| 1 | 운영 (production) |
-| 2 | 스테이징 |
-| 3 | 개발 / QA |
-| 4 | DR / 재해복구 |
-| 5–9 | 예비 (고객사별 추가 네트워크) |
+| 0 | reserved (unused) |
+| 1 | production |
+| 2 | staging |
+| 3 | development / QA |
+| 4 | DR / disaster recovery |
+| 5–9 | spare (additional networks per customer) |
 
-예시: 고객사 42번 운영 = `638200421`, 스테이징 = `638200422`. 사내 개발 = `638200003`.
+Example: customer 42 production = `638200421`, staging = `638200422`. Internal development = `638200003`.
 
-**이 체계를 고른 이유**
-- **충돌 없음**: 2026-09-23 기준 chainid.network 레지스트리(2,764개 체인)에서
-  `638200000–638299999` 구간에 등록된 체인이 없다.
-- **규칙만 알면 역산 가능**: 체인 ID만 보고 고객사와 환경을 알 수 있어, 지갑 설정이나
-  장애 대응 때 네트워크를 혼동하지 않는다.
-- **호환 범위**: 최댓값 `638299999` 는 2^31−1 미만이라 JS(2^53), 32비트 정수를 쓰는
-  도구, 하드웨어 지갑 모두에서 안전하다.
-- **메인넷 서명 재사용 차단**: `11`/`12`/`1337` 과 겹치지 않는다.
+**Why this scheme**
+- **No collisions**: as of 2026-09-23 the chainid.network registry (2,764 chains) has no chain in
+  `638200000–638299999`.
+- **Decodable from the rule alone**: the chain ID alone tells the customer and environment, so networks
+  are not confused in wallet setup or incident response.
+- **Compatible range**: the maximum `638299999` is below 2^31−1, safe for JS (2^53), tools using
+  32-bit integers and hardware wallets.
+- **No mainnet signature reuse**: does not overlap `11`/`12`/`1337`.
 
-**운영 규칙**
-1. **할당 대장은 사내 비공개 문서로 관리한다.** 고객사 이름과 번호의 대응은 이 저장소
-   (공개)에 넣지 않는다.
-2. **번호는 재사용하지 않는다.** 계약이 끝난 고객사 번호도 폐기 처리만 한다.
-3. **`--networkid` 는 체인 ID와 같게** 맞춘다.
-4. **공개 등록은 선택.** 운영 네트워크를 chainlist(`ethereum-lists/chains`)에 등록하면
-   외부와의 충돌을 확실히 막지만, 고객사 존재가 공개된다. 고객사 동의가 있을 때만
-   등록하고, 그 외에는 네트워크 구성 시점에 레지스트리를 다시 조회해 충돌을 확인한다.
-5. **`init` 단계 검증**: 체인 ID가 `11`, `12` 이거나 공개 레지스트리의 알려진 값이면
-   경고한다. 특히 `metadium/scripts/genesis-template.json` 은 현재
-   `"chainId": 11` (메인넷)을 기본값으로 갖고 있으므로, 템플릿을 자리표시자로 바꾸고
-   값이 채워지지 않으면 `init` 을 거부한다.
+**Operating rules**
+1. **Keep the allocation register in an internal, non-public document.** The mapping from customer names
+   to numbers does not go into this (public) repository.
+2. **Never reuse numbers.** A former customer's number is retired, not reassigned.
+3. **Set `--networkid` equal to the chain ID.**
+4. **Public registration is optional.** Registering a production network on chainlist
+   (`ethereum-lists/chains`) rules out outside collisions but makes the customer's existence public.
+   Register only with the customer's consent; otherwise re-check the registry for collisions when the
+   network is set up.
+5. **Check at `init`**: warn when the chain ID is `11`, `12` or a known value from the public registry.
+   In particular, `metadium/scripts/genesis-template.json` currently defaults to `"chainId": 11`
+   (mainnet); turn the template into a placeholder and have `init` refuse it until the value is filled in.
 
-### 9.6 validator 수와 가용성
+### 9.6 Validator count and availability
 
-**공식.** 장애 노드 `f` 대까지 버티려면 `N = 3f + 1`, 블록 확정에는 `2f + 1` 대(쿼럼)가
-살아 있어야 한다. `f` 는 꺼진 노드와 악의적 노드의 **합**이다 (7대에서 1대가 꺼져 있으면
-악의적 노드는 1대까지만 버틴다).
+**Formula.** Tolerating `f` faulty nodes needs `N = 3f + 1`, and committing a block needs `2f + 1`
+live nodes (the quorum). `f` is the **sum** of stopped and malicious nodes (with 7 nodes and one stopped,
+only one malicious node can be tolerated).
 
-| N | 버티는 장애 f | 쿼럼 | 비고 |
+| N | Faults tolerated f | Quorum | Notes |
 |---|---|---|---|
-| 3 이하 | 0 | — | BFT 의미 없음. 전환 거부 (§9.3), 전환 후 감소 거부 (§9.3.1) |
-| **4** | 1 | 3 | 최소 구성 |
-| 5, 6 | 1 | 4, 5 | 4대와 버티는 장애 수가 같고 쿼럼만 커진다 → **비권장** |
-| **7** | 2 | 5 | 운영 권장 |
+| 3 or fewer | 0 | — | BFT meaningless. Switch refused (§9.3), reduction after the switch rejected (§9.3.1) |
+| **4** | 1 | 3 | minimum |
+| 5, 6 | 1 | 4, 5 | same tolerance as 4 with a larger quorum → **not recommended** |
+| **7** | 2 | 5 | recommended for production |
 | **10** | 3 | 7 | |
 | 13 | 4 | 9 | |
 
-효율적인 구성은 **4, 7, 10, 13** 이다.
+Efficient sizes are **4, 7, 10, 13**.
 
-**현행(etcd/raft)과 비교**
+**Compared with the current etcd/raft**
 
-| | raft (현행) | PBFT |
+| | raft (current) | PBFT |
 |---|---|---|
-| 필요 노드 | `N = 2f + 1` (과반) | `N = 3f + 1` (2/3 초과) |
-| 장애 1대 허용 | 3대 | 4대 |
-| 장애 2대 허용 | 5대 | 7대 |
-| 악의적 노드 | 방어 불가 | `f` 대까지 방어 |
+| Nodes needed | `N = 2f + 1` (majority) | `N = 3f + 1` (more than 2/3) |
+| Tolerate 1 fault | 3 | 4 |
+| Tolerate 2 faults | 5 | 7 |
+| Malicious nodes | not defended | up to `f` |
 
-노드별 가용률 99%, 장애가 서로 독립이라고 가정한 **연간 블록 생성 중단 기댓값**:
+**Expected yearly block-production downtime**, assuming 99% availability per node and independent failures:
 
-| 구성 | 연간 중단 기댓값 |
+| Setup | Expected downtime per year |
 |---|---|
-| raft 3대 | 약 157분 |
-| PBFT 4대 | 약 311분 |
-| raft 5대 | 약 5분 |
-| PBFT 7대 | 약 18분 |
-| PBFT 10대 | 약 1분 |
+| raft, 3 nodes | about 157 min |
+| PBFT, 4 nodes | about 311 min |
+| raft, 5 nodes | about 5 min |
+| PBFT, 7 nodes | about 18 min |
+| PBFT, 10 nodes | about 1 min |
 
-같은 규모에서 PBFT는 raft보다 가용성이 낮다. 가용성 일부를 내주고 "포크 불가"
-안전성을 얻는 구조다.
+At the same size PBFT is less available than raft: it gives up some availability in exchange for
+"no forks" safety.
 
-**운영상 유의점**
-1. **4대는 점검 여유가 없다.** 1대를 업그레이드 등으로 내리면 장애 허용치(`f=1`)를
-   다 쓴 상태가 되어, 다른 1대만 문제가 생겨도 블록 생성이 멈춘다. 7대면 1대 점검 중
-   1대 고장까지 버틴다. 롤링 재시작은 WAL(§6.1)이 있어야 안전하다.
-2. **멈춰도 포크는 없다.** 쿼럼이 모자라면 생성만 멈추고, 노드가 복구되면 자동으로
-   재개된다 (§11.2 시나리오 3).
-3. **분할 시 양쪽 모두 멈출 수 있다.** 7대가 4:3으로 나뉘면 어느 쪽도 쿼럼 5를 채우지
-   못한다 (§11.2 시나리오 6). 따라서 **한 장애 도메인(데이터센터·가용 영역)에 `f` 대를
-   넘게 두지 않는다.** 7대(`f=2`)는 영역 3곳(3/2/2)으로는 3대 영역이 빠질 때 멈추므로
-   **4곳 이상(예: 2/2/2/1)** 에 나눈다.
-4. **RPC·풀노드는 합의 노드 수에 들어가지 않는다.** 블록 생성 가용성과 조회(RPC)
-   가용성은 따로 설계한다.
+**Operational notes**
+1. **4 nodes leave no maintenance headroom.** Taking one node down, for an upgrade for example, uses up
+   the whole fault budget (`f=1`); one more problem on any other node stops block production. 7 nodes
+   survive one node in maintenance plus one failure. Rolling restarts are only safe with the WAL (§6.1).
+2. **A stop does not fork.** Without a quorum only production stops; it resumes automatically once nodes
+   recover (§11.2 scenario 3).
+3. **A partition can stop both sides.** 7 nodes split 4:3 leave neither side with the quorum of 5
+   (§11.2 scenario 6). So **never put more than `f` nodes in one failure domain (data centre, availability zone).**
+   7 nodes (`f=2`) over 3 zones (3/2/2) stop when the 3-node zone is lost, so spread them over
+   **4 or more zones (e.g. 2/2/2/1).**
+4. **RPC and full nodes do not count toward consensus.** Design block-production availability and query (RPC)
+   availability separately.
 
-**권장 구성**
+**Recommended setups**
 
-| 환경 | validator 수 | 배치 |
+| Environment | Validators | Placement |
 |---|---|---|
-| 개발 / QA | 4 | 단일 영역 가능 |
-| 스테이징 | 7 | 운영과 동일 배치 (전환 리허설용, §9.4) |
-| 운영 | 7 (고가용 요구 시 10) | 장애 도메인 4곳 이상, 도메인당 `f` 대 이하 |
+| Development / QA | 4 | a single zone is fine |
+| Staging | 7 | same placement as production (for transition rehearsal, §9.4) |
+| Production | 7 (10 for high availability) | 4+ failure domains, at most `f` per domain |
 
 ---
 
-## 10. 구현 단계
+## 10. Implementation phases
 
-| 단계 | 내용 | 산출물 / 검증 |
+| Phase | Content | Deliverable / check |
 |---|---|---|
-| **P0** | 제네시스 `bftBlock`/`bft` 설정, `IsBft()`, `camelliaBlock <= bftBlock` 검사, 플래그 정합성 검사, 체인 ID `init` 검증, `genesis-template.json` 자리표시자화 | `params` 단위테스트, `init` 거부 케이스 테스트 |
-| **P1** | 헤더 필드 추가(`headerRlp` 끝) + `BlockHash` 제외 규칙 + pre-fork seal 금지 + RLP 왕복 | `core/types` 왕복 테스트, pre/post-fork 해시 불변 테스트, **pre-fork 블록 + 임의 seal 거부 테스트** |
-| **P2** | `consensus/metabft` validator set / proposer / 쿼럼 / 메시지 서명 / WAL / 증거 저장 | 순수 단위테스트 (체인 불필요), WAL 크래시 지점 주입 테스트 |
-| **P3** | 상태기계 `core.go` + round change + 재제안 헤더 불변, backend·시계·WAL은 mock | **결정적 시뮬레이션**: N=4/7/10, 지연·유실·비잔틴·**크래시 재시작·타임스탬프 조작** 주입 |
-| **P4** | `metabft/1` P2P 서브프로토콜 + 중복 억제·이중 서명 탐지 | 2노드 메시지 왕복, 위조 서명 거부, 이중 서명 증거 생성 |
-| **P5** | 엔진/worker/finality/etcd/보상 비교 검증/`N>=4` 유효성 분기 통합 | 로컬 4노드 실제 블록 생성 |
-| **P6** | 장애 주입 + 성능 + 부트스트랩→전환 리허설 (§9.2, 전환 실패 §9.3 포함) | 아래 테스트 계획 |
+| **P0** | genesis `bftBlock`/`bft`, `IsBft()`, `camelliaBlock <= bftBlock` check, flag consistency check, chain-ID `init` check, `genesis-template.json` placeholder | `params` unit tests, `init` rejection tests |
+| **P1** | header fields (end of `headerRlp`) + `BlockHash` exclusion rule + no seals pre-fork + RLP round trip | `core/types` round-trip tests, pre/post-fork hash stability tests, **test rejecting a pre-fork block with arbitrary seals** |
+| **P2** | `consensus/metabft` validator set / proposer / quorum / message signing / WAL / evidence storage | pure unit tests (no chain), WAL crash-point injection tests |
+| **P3** | state machine `core.go` + round change + byte-identical re-proposal, with mocked backend, clock and WAL | **deterministic simulation**: N=4/7/10, injecting delay, loss, Byzantine behaviour, **crash-restart and clock manipulation** |
+| **P4** | `metabft/1` P2P sub-protocol + dedup and equivocation detection | two-node message round trip, forged-signature rejection, equivocation evidence |
+| **P5** | integrate engine / worker / finality / etcd / reward comparison / `N>=4` validity branches | real block production on 4 local nodes |
+| **P6** | fault injection + performance + bootstrap → transition rehearsal (§9.2, including the §9.3 failure case) | test plan below |
 
-P3가 프로젝트의 무게중심이다. **상태기계를 네트워크 없이 결정적으로 테스트할 수
-있게 설계하지 않으면 이후 단계에서 디버깅이 불가능해진다.** 일정은 P3 완료 후 다시 산정한다.
+P3 is the centre of gravity. **If the state machine is not designed to be tested deterministically
+without a network, later phases become impossible to debug.** The schedule is re-estimated once P3 is done.
 
 ---
 
-## 11. 테스트 계획
+## 11. Test plan
 
-### 11.1 테스트넷 확장 (선행 작업)
+### 11.1 Extend the test network (prerequisite)
 
-`tests/private-net-poa` 를 **3노드 → 7노드**로 확장한다 (`f=2`).
-- `docker-compose.yml` node4–node7 추가, 포트 8548–8551
-- `setup.sh` 의 거버넌스 초기 노드 등록 확장
-- 기존 `camellia-test.sh`, `blob-tx-e2e`, `mixed-tx-e2e` 가 그대로 통과하는지 먼저 확인
-  (PBFT 작업 전 baseline 확보)
+Extend `tests/private-net-poa` from **3 to 7 nodes** (`f=2`).
+- add node4–node7 to `docker-compose.yml`, ports 8548–8551
+- extend the initial governance node registration in `setup.sh`
+- first confirm the existing `camellia-test.sh`, `blob-tx-e2e` and `mixed-tx-e2e` still pass
+  (baseline before PBFT work)
 
-### 11.2 장애 주입 시나리오 (N=7, f=2)
+### 11.2 Fault-injection scenarios (N=7, f=2)
 
-| # | 시나리오 | 기대 결과 |
+| # | Scenario | Expected result |
 |---|---|---|
-| 1 | validator 1개 정지 | 블록 생성 지속, 해당 노드 차례에 1 round change |
-| 2 | validator 2개 정지 (= f) | 블록 생성 지속 (느려짐) |
-| 3 | validator 3개 정지 (> f) | **블록 생성 정지**, 복구 시 자동 재개, 포크 없음 |
-| 4 | 제안자가 서로 다른 두 블록을 두 그룹에 제안 (equivocation) | 커밋 안 됨, round change, 포크 없음, **증거 2건 저장·`metabft_getEvidence` 조회·알람** |
-| 5 | 제안자가 잘못된 state root / 잘못된 Rewards·Coinbase 제안 | PREPARE 거부 → round change |
-| 6 | 네트워크 분할 4:3 | 4 그룹만 진행(4 < Quorum=5 이므로 **양쪽 다 정지**), 치유 시 재개·포크 없음 |
-| 7 | 시계 왜곡 (한 노드 +5분) | 블록 생성 유지 (해당 노드는 타임스탬프 범위 검사로 제안이 거부될 수 있음) |
-| 8 | 거버넌스로 validator 추가/제거 | epoch 경계에서 무중단 전환 |
-| 9 | 새 노드 snap sync 후 참여 | commit seal 검증 통과, 합의 참여 |
-| 10 | commit seal 제거/위조 블록 주입 | import 거부 |
-| 11 | **PREPARE 직후 / COMMIT 직후 강제 종료 → 재시작** | 같은 높이에서 다른 digest에 투표하지 않음, lock 복원 |
-| 12 | **WAL 삭제 후 재시작** | 관찰 모드 → 한 높이 커밋 확인 후 참여 |
-| 13 | **같은 노드키로 두 서버 기동** | 이중 서명 증거 생성·알람 |
-| 14 | **제안자가 `Time` 을 과거(부모 이전) / 미래(+10s)로 설정** | `VerifyHeader`·범위 검사로 거부, 다음 높이 라운드 0 정상 |
-| 15 | **거버넌스로 노드 제거해 N=3 시도** | 해당 트랜잭션 미확정, 체인 계속 진행, 거부 사유 기록 |
-| 16 | **round change 후 재제안 블록 커밋** | 원 제안자 `MinerNodeSig` 유지, `BftRound`=커밋 라운드, import 검증 통과 |
-| 17 | **pre-fork 블록에 임의 `CommitSeals` 부착 주입** | import 거부 |
+| 1 | stop 1 validator | production continues, one round change on that node's turn |
+| 2 | stop 2 validators (= f) | production continues (slower) |
+| 3 | stop 3 validators (> f) | **production stops**, resumes automatically on recovery, no fork |
+| 4 | proposer sends two different blocks to two groups (equivocation) | no commit, round change, no fork, **2 pieces of evidence stored, queryable via `metabft_getEvidence`, alarm raised** |
+| 5 | proposer proposes a wrong state root / wrong Rewards or Coinbase | PREPARE refused → round change |
+| 6 | 4:3 network partition | the group of 4 cannot proceed either (4 < Quorum=5, so **both sides stop**); resumes on healing, no fork |
+| 7 | clock skew (one node +5 min) | production continues (that node's proposals may be rejected by the timestamp bound) |
+| 8 | add/remove a validator through governance | switch at the epoch boundary without interruption |
+| 9 | new node joins after snap sync | commit seals verify, joins consensus |
+| 10 | inject a block with commit seals removed or forged | import rejected |
+| 11 | **kill right after PREPARE / right after COMMIT → restart** | never votes for a different digest at the same height, lock restored |
+| 12 | **restart with the WAL deleted** | observer mode → joins after seeing one height commit |
+| 13 | **start two servers with the same node key** | equivocation evidence and alarm |
+| 14 | **proposer sets `Time` in the past (before the parent) / future (+10s)** | rejected by `VerifyHeader` / the bound check; round 0 of the next height is normal |
+| 15 | **try to remove nodes through governance down to N=3** | the transaction never commits, the chain continues, the reason is recorded |
+| 16 | **commit a block re-proposed after a round change** | original proposer's `MinerNodeSig` kept, `BftRound` = commit round, import check passes |
+| 17 | **inject a pre-fork block with arbitrary `CommitSeals` attached** | import rejected |
 
-> 시나리오 6은 직관과 다르므로 명시: `Quorum = 2f+1 = 5` 이므로 4:3 분할에서는
-> **어느 쪽도 진행하지 못한다.** 이것이 CFT(raft, 과반 4로 진행)와의 결정적 차이이며,
-> "안전성을 위해 가용성을 포기"하는 PBFT의 의도된 동작이다. 운영팀이 이를
-> 이해하고 수용해야 한다.
+> Scenario 6 is counter-intuitive, so to be explicit: with `Quorum = 2f+1 = 5`, a 4:3 split leaves
+> **neither side able to proceed.** This is the decisive difference from CFT (raft proceeds with a
+> majority of 4) and is PBFT's intended behaviour of "giving up availability for safety". The operations
+> team needs to understand and accept this.
 
-### 11.3 성능 측정
+### 11.3 Performance measurements
 
-- **트랜잭션 확정 지연** (`eth_sendTransaction` → receipt): 현행 PoA `idleseal=100` 기준
-  p50 118ms / p99 130ms (`docs/enterprise-block-timing.md`). PBFT는 3-phase 왕복,
-  validator 블록 실행, **WAL fsync**가 더해진다. 목표는 N=7 LAN에서 **p99 < 300ms** 로 두고 실측으로 확정한다.
-- 유휴 빈 블록 간격 (목표: `EmptyBlockInterval` ± 10%, **유휴 중 round change 0건**)
-- **부하 중 round change 수** (초당 여러 블록 구간에서 0건 목표 — rev.3 타이머의 결함 재발 확인)
-- 고정 간격 프로파일(`blockCreationTime = 2000`, idleseal 없음 — 공개망과 같은 설정) 비교: 블록 간격 2.0s 유지 여부
-- 메시지 복잡도: 라운드당 `O(N²)` — N=7이면 블록당 약 98 메시지. N이 30을 넘으면
-  대역폭 검토 필요 (`O(N²)` 이므로 900 메시지).
-- TPS 회귀: `scripts/rpc-test-full.sh`, `mixed-tx-e2e` 로 Camellia 대비 비교.
+- **Transaction confirmation latency** (`eth_sendTransaction` → receipt): current PoA with `idleseal=100`
+  is p50 118ms / p99 130ms (`docs/enterprise-block-timing.md`). PBFT adds three-phase round trips,
+  validator block execution and **WAL fsyncs**. The target is **p99 < 300ms** for N=7 on a LAN, to be confirmed by measurement.
+- Idle empty-block interval (target: `EmptyBlockInterval` ± 10%, **zero round changes while idle**)
+- **Round changes under load** (target: zero while several blocks per second are produced — checks that the rev.3 timer flaw does not come back)
+- Comparison with the fixed-interval profile (`blockCreationTime = 2000`, no idleseal — the public-network setting): whether the 2.0s interval holds
+- Message complexity: `O(N²)` per round — about 98 messages per block for N=7. Above N=30,
+  review bandwidth (900 messages, since it is `O(N²)`).
+- TPS regression: compare against Camellia with `scripts/rpc-test-full.sh` and `mixed-tx-e2e`.
 
 ---
 
-## 12. 리스크와 미해결 과제
+## 12. Risks and open issues
 
-| 리스크 | 영향 | 완화 |
+| Risk | Impact | Mitigation |
 |---|---|---|
-| **가용성 하락** | raft는 과반(N/2+1)으로 진행, PBFT는 2f+1 필요. N=7이면 4 vs 5. 같은 규모에서 연간 중단 기댓값이 raft보다 크다 (§9.6) | 운영 7대 이상, 장애 도메인 4곳 이상 분산, 도메인당 f대 이하. 운영팀 합의 필요 |
-| **4대 구성의 점검 여유 없음** | 1대 점검 중 1대 추가 장애 시 블록 생성 정지 | 4대는 개발/QA 한정. 운영·스테이징은 7대 (§9.6) |
-| **재시작 시 투표 상태 소실** | 재시작 노드가 다른 digest에 투표 → 쿼럼 논증 붕괴 | WAL (§6.1), 시나리오 11·12 |
-| **노드키 이중 운영** | 두 서버가 같은 키로 서명 → WAL로도 이중 서명 방지 불가 | active-active 금지, failover 절차 (§6.1), 증거 탐지 (§7.1) |
-| **타임스탬프 조작** | 제안자가 `Time` 으로 타이머·EVM 시각 조작 | 타이머 로컬 시계화 (§4.5), `Time >= parent.Time` + PRE-PREPARE 범위 검사 |
-| **`N²` 메시지 복잡도** | validator 수 확장 제약 | 현 규모에서는 문제없음. 30+ 시 서명 집계(BLS) 검토 |
-| **슬래싱 부재** | 이중 서명을 **탐지·증거 보존**할 수 있으나 처벌 불가 | 증거(§7.1) 기반 거버넌스 수동 제명. 온체인 처벌은 범위 밖 |
-| **헤더 포맷 변경** | 해당 프라이빗 네트워크의 익스플로러/인덱서가 영향 (기존 Mainnet/Testnet은 무관) | `internal/ethapi/api.go:1383` 에 필드 노출 추가, 고객사 도구에 사전 공유 |
-| **전환 후 롤백 불가** | `BftBlock` 이후에는 PoA로 되돌릴 수 없음 | 전환 전에는 제네시스 재구성 가능 (§9.4). 스테이징에서 동일 구성 선행 전환 |
-| **부트스트랩 구간 BFT 미보장** | `BftBlock` 이전 블록은 PoA 단독 생성 | 이 구간에는 거버넌스 구성 외 업무 트랜잭션 금지 (§9.2) |
-| **체인 ID 충돌·오설정** | 메인넷(`11`) 기본값 템플릿 사용 시 서명 재사용 위험 | `6382CCCCE` 체계 (§9.5), `init` 검증, 템플릿 자리표시자화 |
-| **blob sidecar 가용성** | 커밋 시점에 sidecar가 없는 validator | meta/69 `GetBlobSidecarsMsg` 로 PREPARE 전 확보. 미확보 시 PREPARE 보류 |
-| **`snap sync` + BFT 검증 충돌** | `acceptUnverifiableBlock` 우회로가 BFT 보장을 무력화 | post-fork 높이에서 해당 경로 차단 (§7.7) |
-| **`BftBlock` 도달 시 N < 4** | 블록 생성 정지 (§9.3) | `metabft_readiness` RPC로 전환 전 점검. `bftBlock` 을 넉넉히 설정 |
-| **전환 후 N < 4 시도** | 쿼럼 논증 붕괴 | 해당 블록 무효 처리 — 정지가 아니라 거부 (§9.3.1) |
-| **일정 압박** | 짧은 일정에 전면 도입을 무리하면 safety 항목(§4.5·§5.2·§6.1·§7.1)이 검증 없이 들어간다 | 일정이 부족하면 §13 대안으로 범위를 줄이고, 보장하는 것과 보장하지 않는 것을 명시 |
+| **Lower availability** | raft proceeds with a majority (N/2+1), PBFT needs 2f+1 — for N=7, 4 vs 5. Expected yearly downtime is higher than raft at the same size (§9.6) | 7+ nodes in production, spread over 4+ failure domains, at most f per domain. Needs operations sign-off |
+| **No maintenance headroom with 4 nodes** | one node in maintenance plus one more failure stops production | 4 nodes only for development/QA; 7 for production and staging (§9.6) |
+| **Vote state lost on restart** | a restarted node votes for another digest → quorum argument fails | WAL (§6.1), scenarios 11 and 12 |
+| **Same node key on two servers** | both servers sign with the same key → the WAL cannot prevent double signing | no active-active, failover procedure (§6.1), evidence detection (§7.1) |
+| **Timestamp manipulation** | proposer uses `Time` to skew timers or EVM time | timers on the local clock (§4.5), `Time >= parent.Time` + PRE-PREPARE bound check |
+| **`N²` message complexity** | limits validator count | no problem at current sizes. Consider signature aggregation (BLS) at 30+ |
+| **No slashing** | equivocation can be **detected and evidenced** but not punished | manual removal through governance based on evidence (§7.1). On-chain punishment is out of scope |
+| **Header format change** | affects that private network's explorers/indexers (existing Mainnet/Testnet unaffected) | expose the fields in `internal/ethapi/api.go:1383`, share with customer tooling in advance |
+| **No rollback after the switch** | cannot return to PoA after `BftBlock` | rebuild from a new genesis before the switch (§9.4). Switch staging with the same setup first |
+| **No BFT guarantee during bootstrap** | blocks before `BftBlock` are produced by PoA alone | no business transactions other than governance setup in that segment (§9.2) |
+| **Chain ID collision / misconfiguration** | reusing the template's mainnet (`11`) default risks signature reuse | `6382CCCCE` scheme (§9.5), `init` check, template placeholder |
+| **Blob sidecar availability** | a validator without the sidecar at commit time | fetch via meta/69 `GetBlobSidecarsMsg` before PREPARE; hold PREPARE until available |
+| **`snap sync` vs BFT validation** | the `acceptUnverifiableBlock` bypass defeats the BFT guarantees | block that path at post-fork heights (§7.7) |
+| **N < 4 when `BftBlock` is reached** | block production stops (§9.3) | check with the `metabft_readiness` RPC before the switch; choose a generous `bftBlock` |
+| **Attempt to go below N = 4 after the switch** | quorum argument fails | such blocks are invalid — reject, don't halt (§9.3.1) |
+| **Schedule pressure** | forcing a full rollout on a short schedule lets safety items (§4.5, §5.2, §6.1, §7.1) in without verification | if time is short, reduce scope with a §13 alternative and state explicitly what is and is not guaranteed |
 
 ---
 
-## 13. 대안 — 더 가벼운 선택지
+## 13. Alternatives — lighter options
 
-PBFT 전면 도입이 과하거나 일정상 불가능할 때의 중간 단계. **병행이 아니라 택일**이다.
-rev.3의 비용 비율(25%/10%)은 검증되지 않은 어림값이라 삭제하고, 필요 작업을 본문 절 기준으로 적는다.
+Intermediate steps for when a full PBFT rollout is too much or does not fit the schedule. **Pick one, not several.**
+The cost ratios in rev.3 (25%/10%) were unverified estimates and are removed; the work needed is listed by section instead.
 
-### 대안 1: commit seal만 추가 (합의는 현행 유지)
-etcd token으로 제안자를 정하되, 블록 전파 후 validator들이 commit seal을 모아
-**후속 블록의 헤더에 이전 블록의 seal을 실어 나른다**.
-- 얻는 것: 1블록 지연된 **검증 가능한 finality 증명** (현재의 휴리스틱 대체)
-- 못 얻는 것: 비잔틴 제안자 방어 (잘못된 블록이 일단 전파됨)
-- **필요 작업**: 헤더 필드와 해시 규칙(§5 전체), seal 수집 P2P(§7.1 일부), 서명 규칙(§4.6),
-  **"같은 높이에 두 블록 서명 금지" 규칙과 WAL(§6.1)**, **seal 붙은 블록 아래로 reorg 금지(§5.4)**.
-  마지막 두 가지를 빼면 증명처럼 보이지만 실제로는 뒤집힐 수 있는 증적이 된다.
-  → 짧은 일정 안에 검증까지 마치기는 어렵다.
+### Alternative 1: add commit seals only (keep the current consensus)
+The etcd token still picks the proposer; after a block propagates, validators collect commit seals and
+**carry them in the header of a later block.**
+- Gains: a **verifiable finality proof**, one block late (replacing today's heuristic)
+- Does not gain: defence against a Byzantine proposer (a bad block still propagates first)
+- **Work needed**: header fields and hash rules (all of §5), seal-collection P2P (part of §7.1), signing rules (§4.6),
+  **the "never sign two blocks at one height" rule and the WAL (§6.1)**, and **no reorg below a sealed block (§5.4).**
+  Without the last two, the result looks like a proof but can still be overturned.
+  → Hard to finish, verification included, on a short schedule.
 
-### 대안 2: 온체인 서명 기록 (합의·헤더 변경 없음) — rev.4 추가
-각 validator가 주기적으로 `(높이, 블록 해시)` 에 서명해 전용 컨트랙트에 트랜잭션으로 기록한다.
-2f+1 서명이 모인 높이가 증적이 된다.
-- 얻는 것: 제3자가 검증 가능한 다자 서명 증적. 헤더·P2P·합의 코드를 바꾸지 않아 기존 체인 영향 없음
-- 못 얻는 것: 실시간 비잔틴 방어. reorg가 없다는 보장은 현행 etcd/raft에 의존한다
-- 차이: 한계를 **숨기지 않고 증적과 함께 명시**할 수 있다. 짧은 일정에서 가장 현실적인 증적 수단
+### Alternative 2: on-chain signature records (no consensus or header change) — added in rev.4
+Each validator periodically signs `(height, block hash)` and records it in a dedicated contract as a
+transaction. A height with 2f+1 signatures becomes the evidence.
+- Gains: multi-party signed evidence that third parties can verify. No changes to the header, P2P or consensus code, so existing chains are unaffected
+- Does not gain: real-time Byzantine defence. The guarantee that there is no reorg still rests on the current etcd/raft
+- Difference: the limitation can be **stated openly alongside the evidence** instead of hidden. The most realistic evidence option on a short schedule
 
-### 대안 3: etcd 유지 + equivocation 탐지
-현행 구조를 두고, validator가 서로의 블록 서명을 감시하여 동일 높이 이중 서명을
-탐지·알람한다.
-- 얻는 것: 사후 탐지, 운영 가시성
-- 못 얻는 것: 실시간 방어, finality 보장
+### Alternative 3: keep etcd + detect equivocation
+Keep the current structure; validators watch each other's block signatures and detect and alarm on
+double signing at the same height.
+- Gains: after-the-fact detection, operational visibility
+- Does not gain: real-time defence, a finality guarantee
 
-### 판단 기준
-- 네트워크가 **신뢰된 컨소시엄**(모든 validator를 한 조직/계약이 통제)이면
-  raft(CFT)로 충분하며 대안 3으로 충분하다.
-- **상호 불신 주체**가 validator를 운영하거나, 규제·감사 요건상 "포크 불가능"을
-  증명해야 하면 PBFT 전면 도입이 정당화된다.
-
----
-
-## 14. 요약
-
-- 현재 `ConsensusPBFT` 는 상수와 CLI 문구만 있는 **빈 껍데기**다 (참조 2곳).
-- 구현은 **IBFT 2.0 계열**로, 신규 패키지 `consensus/metabft` + 독립 서브프로토콜
-  `metabft/1` + 헤더 commit seal 필드로 구성된다.
-- 적용 대상은 **신규 프라이빗 네트워크**이며, 제네시스의 `bftBlock` 으로 PBFT를 선택한다.
-  `BftBlock` 이전은 PoA로 부트스트랩(거버넌스 배포·노드 등록)하고 이후 PBFT로 전환한다 (B안).
-- 체인 ID는 고객사·환경별로 `6382 CCCC E` 체계로 할당한다 (§9.5).
-- safety의 핵심 전제: **digest = 블록 해시 전체** (§5.2), **투표 상태 WAL** (§6.1),
-  **타이머는 로컬 시계** (§4.5), **전환 후에도 N >= 4** (§9.3.1).
-- 가장 큰 수술은 `miner/worker.go` 의 **동기 봉인 → 비동기 커밋** 전환이다.
-- 착수 전 반드시 선행: **테스트넷 7노드 확장**, **고객사 네트워크의 validator 수 N>=4 (운영 권장 7, §9.6) 확보**,
-  **4:3 분할 시 정지한다는 가용성 트레이드오프에 대한 운영팀 합의**.
+### Decision criteria
+- If the network is a **trusted consortium** (one organisation or contract controls every validator),
+  raft (CFT) is enough and alternative 3 is enough.
+- If **mutually distrusting parties** run validators, or regulation or audit requires proving that
+  "forks are impossible", a full PBFT rollout is justified.
 
 ---
 
-## 15. 개정 이력
+## 14. Summary
 
-| 판 | 내용 |
+- Today `ConsensusPBFT` is an **empty shell**: a constant and CLI text only (2 references).
+- The implementation is **IBFT 2.0 family**: a new `consensus/metabft` package + an independent
+  `metabft/1` sub-protocol + commit-seal fields in the header.
+- It targets **new private networks**; PBFT is selected with `bftBlock` in the genesis.
+  Before `BftBlock` the chain bootstraps on PoA (governance deployment, node registration), then switches to PBFT (option B).
+- Chain IDs are allocated per customer and environment with the `6382 CCCC E` scheme (§9.5).
+- Core safety assumptions: **digest = the whole block hash** (§5.2), **a vote WAL** (§6.1),
+  **timers on the local clock** (§4.5), **N >= 4 after the switch too** (§9.3.1).
+- The biggest change is moving `miner/worker.go` from **synchronous sealing to asynchronous commit.**
+- Prerequisites before work starts: **extend the test network to 7 nodes**, **secure N>=4 validators
+  (7 recommended for production, §9.6) for customer networks**, and **operations sign-off on the
+  availability trade-off that a 4:3 split halts the chain.**
+
+---
+
+## 15. Revision history
+
+| Rev | Content |
 |---|---|
-| rev.1 | 초안 (기존 체인 하드포크 전제) |
-| rev.2 | 적용 대상을 신규 프라이빗 네트워크로 변경, B안(PoA 부트스트랩 → 전환), 체인 ID 체계, 블록 타이밍 |
-| rev.3 | validator 수와 가용성 (§9.6) |
-| rev.4 | 리뷰 1~8 반영 (아래) |
+| rev.1 | first draft (assumed a hard fork of existing chains) |
+| rev.2 | scope changed to new private networks, option B (PoA bootstrap → switch), chain ID scheme, block timing |
+| rev.3 | validator count and availability (§9.6) |
+| rev.4 | first review round (below) |
 
-**rev.4 리뷰 반영 내역**
+**rev.4 review changes**
 
-| 리뷰 | 지적 | 반영 |
+| Review | Finding | Change |
 |---|---|---|
-| 1 | deadline이 제안자가 고르는 초 단위 `parent.Time` 에 의존 → 부하 시 round change 폭주, 타임스탬프 조작 | 타이머를 로컬 단조 시계 기준으로 변경, `Time >= parent.Time` + PRE-PREPARE 범위 검사, 초 단위 유지 (§4.5). 엄격한 `>` 는 100ms 프로파일과 충돌해 채택하지 않음 |
-| 2 | PREPARED lock 영속화 부재 → 재시작 후 이중 투표 | WAL 추가, 재시작·관찰 모드 규칙, 노드키 이중 운영 금지 (§6.1) |
-| 3 | 중복 억제 캐시가 이중 서명을 조용히 버림 → §12 완화책과 모순 | digest를 값으로 보관, 다른 digest는 증거 저장·알람. 서명 검증을 캐시보다 먼저 (§7.1) |
-| 4 | pre-fork 블록에 seal을 붙여도 해시 불변 | pre-fork `CommitSeals == nil && BftRound == 0` 강제, 필드는 `headerRlp` 끝, `IsBft ⇒ IsCamellia` (§5.1–5.3) |
-| 5 | 전환 후 N < 4 규칙 부재 | 실행 후 N < 4 블록 무효 — 리뷰 제안(정지) 대신 **거부** 채택, 복구 경로가 없기 때문 (§9.3.1) |
-| 6 | `MinerNodeSig` 검증과 재제안 규칙 모순, `BftRound` 정의 모호 | `BftRound` = 커밋 라운드, 재제안 헤더 불변, `MinerNodeSig` 는 validator 소속만 검증 (§4.5, §5.3) |
-| 7 | 코드 인용 라인 불일치 | §2 표와 본문 정정. `etcdutil.go:989` 는 `acquireTokenSync` 선언이 맞아 유지 (CAS 1024 병기) |
-| 8 | 짧은 일정에 전면 도입은 불가, 대안 비용 재검토 필요 | §13 비용 비율 삭제·필요 작업 명시, 대안 2(온체인 서명 기록) 추가, §12 일정 압박 리스크 |
-| 추가 | 리뷰 대조 중 발견: `SealHash` 를 digest로 쓰면 같은 digest에 여러 블록 해시 대응, `verifyRewards` 빈 함수·보상 필드 덮어쓰기 | digest = `BlockHash` (§4.4, §4.6, §5.2), 보상 비교 검증 (§7.5, §4.8) |
+| 1 | the deadline depended on the proposer-chosen, seconds-resolution `parent.Time` → round-change storms under load, timestamp manipulation | timers moved to the local monotonic clock, `Time >= parent.Time` + PRE-PREPARE bound check, resolution kept in seconds (§4.5). A strict `>` was not adopted because it conflicts with the 100ms profile |
+| 2 | no persistence of the PREPARED lock → double voting after restart | WAL, restart and observer-mode rules, no same node key on two servers (§6.1) |
+| 3 | the dedup cache silently dropped equivocations → contradicted the §12 mitigation | keep the digest as the cache value; a different digest is stored as evidence with an alarm. Signature check before the cache lookup (§7.1) |
+| 4 | seals attached to a pre-fork block left its hash unchanged | pre-fork `CommitSeals == nil && BftRound == 0` enforced, fields at the end of `headerRlp`, `IsBft ⇒ IsCamellia` (§5.1–5.3) |
+| 5 | no rule for N < 4 after the switch | a block leaving N < 4 after execution is invalid — **reject** chosen over the suggested halt, because a halt has no recovery path (§9.3.1) |
+| 6 | the `MinerNodeSig` check contradicted the re-proposal rule, `BftRound` was ambiguous | `BftRound` = committed round, re-proposed header unchanged, `MinerNodeSig` only checked for validator membership (§4.5, §5.3) |
+| 7 | code-reference line numbers off | §2 table and body corrected. `etcdutil.go:989` kept since it is the `acquireTokenSync` declaration (CAS at 1024 added) |
+| 8 | a full rollout does not fit a short schedule; alternative costs need a second look | §13 cost ratios removed and work listed, alternative 2 (on-chain signature records) added, schedule-pressure risk in §12 |
+| extra | found while checking the reviews against the code: `SealHash` as the digest maps one digest to several block hashes; `verifyRewards` is empty and reward fields are overwritten | digest = `BlockHash` (§4.4, §4.6, §5.2), reward comparison (§7.5, §4.8) |
