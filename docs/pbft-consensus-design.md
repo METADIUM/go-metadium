@@ -1,6 +1,6 @@
 # PBFT consensus design (go-metadium)
 
-- **Date:** 2026-09-23 (rev.4 — first review round folded in, §15)
+- **Date:** 2026-09-24 (rev.5 — first review round and PR #143 review folded in, §15)
 - **Status:** Design (pre-implementation) — to be reviewed before work starts
 - **Scope:** initial configuration of **new private networks**. Existing Metadium Mainnet/Testnet are out of scope
 - **Transition:** bootstrap on PoA → switch to PBFT at the `BftBlock` height set in the genesis (§9, option B)
@@ -204,7 +204,8 @@ lets a proposer push `Time` into the future to delay every validator's timer by 
 into the past so that **round 0 of the next height expires immediately** (an undetected liveness attack).
 
 ```go
-// committedAt(n-1): local monotonic time when this node committed (COMMITTED) height n-1
+// committedAt(n-1): local monotonic time at which height n-1 became this node's head —
+//                   through its own consensus commit or through block import (sync, restart)
 // roundStart(r):    local monotonic time when this node entered round r
 deadline(n, 0) = committedAt(n-1) + EmptyBlockInterval + BftBaseTimeout
 deadline(n, r) = roundStart(r)    + BftBaseTimeout * 2^min(r, BftMaxBackoffExp)   // r >= 1
@@ -217,6 +218,9 @@ deadline(n, r) = roundStart(r)    + BftBaseTimeout * 2^min(r, BftMaxBackoffExp) 
 
 - `committedAt` differs between nodes only by COMMIT arrival skew (milliseconds on a LAN), so
   NTP drift does not matter and an attacker has no input to manipulate.
+- It is defined by "became head", not "committed through consensus", because a node that received
+  n-1 by import — after a restart, while lagging, or at the PoA→PBFT transition (§9.2) — never ran
+  consensus for it. One definition covers every case.
 - **Early proposals are always accepted.** When transactions arrive and the proposer proposes after
   100ms, validators PREPARE immediately. The timer only filters proposals that are too late.
 - **`EmptyBlockInterval` becomes a consensus parameter.** It enters every validator's timeout,
@@ -425,6 +429,10 @@ Chaindata writes are batched, so the fsync point cannot be guaranteed there.
   A restored lock is followed per §4.5.
 - **If the WAL is missing or corrupt** (disk replacement, snapshot restore, reinstall), start in observer
   mode and only vote after seeing the chain commit at least one height past the local head.
+- **Why one height is enough — and must not be relaxed below it.** A block is written at COMMITTED, and a
+  PRE-PREPARE is only accepted when its parent is the local head. So any vote that was in flight when the
+  node crashed can only be at `chaindata head + 1`. Once the other validators commit that height, a lost
+  vote has nothing left to conflict with. One height is the exact lower bound, not a safety margin.
 
 **Operating rules**
 - **Never run the same node key on two servers at once** (no active-active, no hot standby).
@@ -660,8 +668,8 @@ from block 0 — would need a new genesis format and would duplicate the list he
 - **The bootstrap segment has no BFT guarantee.** As an operating rule, no business transactions other
   than governance setup go into it.
 - **The transition block's parent is a PoA block**, so it has no commit seals. Proposal validation
-  branches on `IsBft(parent.Number)` so it does not require the parent's seals. For the transition block,
-  `committedAt(n-1)` is replaced by the local time at which the parent block was imported (§4.5).
+  branches on `IsBft(parent.Number)` so it does not require the parent's seals. The transition block's
+  deadline needs no special case: `committedAt(n-1)` is the time the PoA parent became head (§4.5).
 - A few round changes right after the switch are likely (nodes starting at slightly different times).
   That is normal; it converges within a few rounds.
 
@@ -938,10 +946,23 @@ double signing at the same height.
 - Does not gain: real-time defence, a finality guarantee
 
 ### Decision criteria
+
+**When an external requirement drives the choice**, what it actually asks for decides the option,
+so confirm its wording first:
+
+| The requirement asks for | Options that qualify |
+|---|---|
+| a BFT-family consensus protocol itself | full PBFT or alternative 1 — **alternative 2 does not qualify**, since block production stays on etcd/raft |
+| finality that a third party can verify | alternative 2 is sufficient |
+| nothing specific (the direction is our own) | keep the current architecture; PBFT becomes separate work |
+
+**Otherwise**, decide by who runs the validators:
 - If the network is a **trusted consortium** (one organisation or contract controls every validator),
   raft (CFT) is enough and alternative 3 is enough.
 - If **mutually distrusting parties** run validators, or regulation or audit requires proving that
   "forks are impossible", a full PBFT rollout is justified.
+
+The design body (§3–§12) holds whichever branch is chosen.
 
 ---
 
@@ -970,6 +991,7 @@ double signing at the same height.
 | rev.2 | scope changed to new private networks, option B (PoA bootstrap → switch), chain ID scheme, block timing |
 | rev.3 | validator count and availability (§9.6) |
 | rev.4 | first review round (below) |
+| rev.5 | PR #143 review: `committedAt` defined as "became head" (§4.5, §9.2), why observer mode waits exactly one height (§6.1), requirement-driven decision criteria for the alternatives (§13) |
 
 **rev.4 review changes**
 
