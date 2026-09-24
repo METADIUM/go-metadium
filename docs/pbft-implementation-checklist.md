@@ -4,7 +4,7 @@
 > it implements; the design is the source of truth, this file only tracks status.
 > Status: `[ ]` not started · `[~]` in progress · `[x]` done · `N/A` with a reason.
 
-> Last updated: 2026-09-24. All items not started. Branch: `feature/pbft-consensus`.
+> Last updated: 2026-09-24. P0: 5 done (P0a), 2 moved to P5, 2 in P0b. Branch: `feature/pbft-consensus`.
 
 ---
 
@@ -26,17 +26,22 @@ start before it if the schedule needs them.
 
 | ID | Item | Design | Status |
 |----|------|--------|--------|
-| P0-01 | `BftBlock *big.Int` and `Bft *BftConfig` (`emptyBlockInterval`, `baseTimeout`, `maxBackoffExp`, `timeDrift`) in `params/config.go` | §8.1 | [ ] |
-| P0-02 | `IsBft(num)`, banner line (pattern at `config.go:551`), `checkCompatible` entry (`config.go:790`) | §8.1 | [ ] |
-| P0-03 | Config check: `bftBlock > 0` | §8.1, §9.2 | [ ] |
-| P0-04 | Config check: `camelliaBlock <= bftBlock` (`IsBft ⇒ IsCamellia`) | §5.1, §8.1 | [ ] |
-| P0-05 | Startup check: `EmptyBlockInterval >= blockCreationTime` | §4.5 | [ ] |
-| P0-06 | `--consensusmethod` consistency with `bftBlock` (`Fatalf` on mismatch, `cmd/utils/flags.go:2084`) | §8.2 | [ ] |
-| P0-07 | `--metadium.block.emptyinterval` vs `bft.emptyBlockInterval`: warn, genesis wins | §8.1 | [ ] |
-| P0-08 | `init` warns on chain ID `11`, `12` or a known public-registry value | §9.5 | [ ] |
-| P0-09 | `metadium/scripts/genesis-template.json`: `chainId` becomes a placeholder; `init` refuses it unfilled | §9.5 | [ ] |
+| P0-01 | `BftBlock *big.Int` and `Bft *BftConfig` (`emptyBlockInterval`, `baseTimeout`, `maxBackoffExp`, `timeDrift`) in `params/config.go` | §8.1 | [x] |
+| P0-02 | `IsBft(num)`, banner line, `checkCompatible` for the switch block and, once past it, the parameters | §8.1 | [x] |
+| P0-03 | Config check (`CheckConfigForkOrder` → `checkBft`): `bftBlock > 0`, `bft` present iff `bftBlock`, positive durations, `maxBackoffExp <= 10` | §8.1, §9.2 | [x] |
+| P0-04 | Config check: `camelliaBlock <= bftBlock` (`IsBft ⇒ IsCamellia`) | §5.1, §8.1 | [x] |
+| P0-05 | Startup check: `EmptyBlockInterval >= blockCreationTime` | §4.5 | moved to P5-21 — `blockCreationTime` is read from governance at runtime |
+| P0-06 | A chain config with `bftBlock` refuses to start unless the node runs `ConsensusPoA` (`eth/bft_guard.go`); the CLI keeps rejecting 3 and 4 | §8.2 | [x] |
+| P0-07 | `--metadium.block.emptyinterval` vs `bft.emptyBlockInterval`: warn, genesis wins | §8.1 | moved to P5-22 — only meaningful once the engine reads the value |
+| P0-08 | `init` warns on chain ID `11`, `12` or a known public-registry value | §9.5 | [ ] P0b |
+| P0-09 | `metadium/scripts/genesis-template.json`: `chainId` becomes a placeholder; `init` refuses it unfilled | §9.5 | [ ] P0b |
 
-**Tests:** `params` unit tests for every check above, including each `init` rejection case.
+**Guard until P5:** a chain config with `bftBlock` refuses to start (`errBftNotImplemented` in
+`eth/bft_guard.go`), so no build keeps sealing PoA past the switch block (§9.3). Removed by P5-00.
+
+**Tests:** `params/bft_config_test.go` (every `checkBft` case, `IsBft`, compatibility, JSON and banner),
+public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
+(`core/genesis_bft_test.go`), startup guard (`eth/bft_guard_test.go`). [x]
 
 ---
 
@@ -142,6 +147,7 @@ start before it if the schedule needs them.
 
 | ID | Item | Design | Status |
 |----|------|--------|--------|
+| P5-00 | Remove the `errBftNotImplemented` startup guard (`eth/bft_guard.go`) in the same change that lands P5-01 | §9.3 | [ ] |
 | P5-01 | Wrapper engine in `CreateConsensusEngine` (`eth/ethconfig/config.go:175, 187`) | §7.2 | [ ] |
 | P5-02 | `VerifyHeader` pre-fork: `CommitSeals == nil && BftRound == 0` | §5.2, §5.3 | [ ] |
 | P5-03 | `VerifyHeader` post-fork: `IsCamellia`, `ParentBeaconRoot == nil`, `Time >= parent.Time` | §5.3 | [ ] |
@@ -162,6 +168,8 @@ start before it if the schedule needs them.
 | P5-18 | Transition: halt at `BftBlock` if governance missing or `N < 4` | §9.3 | [ ] |
 | P5-19 | Blob sidecar fetched before PREPARE; PREPARE held until available | §12 | [ ] |
 | P5-20 | RPCs: `metabft_getValidators`, `_getRoundState`, `_status`, `_readiness`, `_getEvidence` | §6, §7.1, §9.3 | [ ] |
+| P5-21 | Startup check: `EmptyBlockInterval >= blockCreationTime` (from P0-05) | §4.5 | [ ] |
+| P5-22 | Warn when `--metadium.block.emptyinterval` differs from `bft.emptyBlockInterval`; genesis wins (from P0-07) | §8.1 | [ ] |
 
 **Check:** real block production on 4 local nodes, PoA → PBFT transition included.
 
