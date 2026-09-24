@@ -1,6 +1,9 @@
 package metabft
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // Config holds the genesis PBFT parameters as durations (params.BftConfig).
 type Config struct {
@@ -26,5 +29,18 @@ func (c Config) deadline(round uint64, committedAt, roundStart time.Duration) ti
 	if exp > c.MaxBackoffExp {
 		exp = c.MaxBackoffExp
 	}
-	return roundStart + c.BaseTimeout<<exp
+	// The genesis caps MaxBackoffExp (params.checkBft), but the core does not
+	// rely on that: the timeout saturates instead of wrapping, which would put
+	// the deadline in the past and fire a round change on every tick.
+	timeout := c.BaseTimeout
+	for i := uint64(0); i < exp && timeout < maxTimeout/2; i++ {
+		timeout *= 2
+	}
+	if timeout > maxTimeout-roundStart {
+		return maxTimeout
+	}
+	return roundStart + timeout
 }
+
+// maxTimeout keeps deadline arithmetic far from overflowing time.Duration.
+const maxTimeout = time.Duration(math.MaxInt64 / 4)

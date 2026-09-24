@@ -54,6 +54,7 @@ const (
 	honest      behaviour = iota
 	badProposer           // proposes blocks that fail verification
 	equivocator           // proposes two blocks and votes for both, to disjoint halves
+	liar                  // lies in its ROUND-CHANGEs, differently to each peer, and re-proposes stale blocks
 )
 
 type simEvent struct {
@@ -91,6 +92,9 @@ type simNode struct {
 	kind  behaviour
 	chain []*simBlock // committed blocks, index = height-1
 	seals map[uint64][][]byte
+
+	// liar: every prepared state its core reached, oldest first, per height.
+	preparedSeen map[uint64][]*preparedState
 }
 
 type sim struct {
@@ -243,8 +247,12 @@ func (nd *simNode) RequestProposal(height, round uint64) {
 
 func (nd *simNode) Broadcast(m *Message) {
 	s := nd.sim
-	if nd.kind == equivocator {
+	switch nd.kind {
+	case equivocator:
 		nd.broadcastEquivocating(m)
+		return
+	case liar:
+		nd.broadcastLying(m)
 		return
 	}
 	for _, peer := range s.nodes {
@@ -714,5 +722,120 @@ func TestSimAmnesiaAfterCommit(t *testing.T) {
 			s.noSyncUntil = s.now + time.Minute
 		}
 		s.reach(target+5, s.now+6*time.Hour, nil)
+	}
+}
+
+// notePrepared remembers each prepared state a liar's core reaches, so it
+// can later offer an older one than it holds.
+func (nd *simNode) notePrepared() {
+	p := nd.core.prepared
+	if p == nil {
+		return
+	}
+	if nd.preparedSeen == nil {
+		nd.preparedSeen = map[uint64][]*preparedState{}
+	}
+	seen := nd.preparedSeen[nd.core.Height()]
+	if len(seen) == 0 || seen[len(seen)-1].round != p.round {
+		nd.preparedSeen[nd.core.Height()] = append(seen, p)
+	}
+}
+
+// staleFor returns a prepared state older than the one the liar holds.
+func (nd *simNode) staleFor(height uint64) *preparedState {
+	seen := nd.preparedSeen[height]
+	if len(seen) < 2 {
+		return nil
+	}
+	return seen[0]
+}
+
+func (nd *simNode) signedRoundChange(height, round uint64, p *preparedState, withEvidence bool) *Message {
+	m := &Message{Type: MsgRoundChange, Height: height, Round: round, ChainID: testChainID}
+	claim := &roundChangeClaim{}
+	if p != nil {
+		claim.Prepared, claim.PreparedRound = true, p.round
+		m.Digest = p.proposal.Hash()
+		if withEvidence {
+			data, _ := p.proposal.Encode()
+			m.SetExtra(encodePayload(&roundChangeExtra{Block: data, Prepares: p.cert}))
+		}
+	}
+	m.Payload = encodePayload(claim)
+	m.Sign(nd.key)
+	return m
+}
+
+// broadcastLying sends each peer one of: the truth, a claim of having
+// prepared nothing, an older genuine prepared state, or an invented claim
+// with no evidence. As proposer it offers the oldest block it prepared, with
+// that round's genuine PREPARE quorum, instead of the one it should.
+func (nd *simNode) broadcastLying(m *Message) {
+	s := nd.sim
+	nd.notePrepared()
+	for _, peer := range s.nodes {
+		if peer == nd {
+			continue
+		}
+		out := m
+		switch {
+		case m.Type == MsgRoundChange:
+			switch s.rng.Intn(4) {
+			case 1:
+				out = nd.signedRoundChange(m.Height, m.Round, nil, false)
+			case 2:
+				if stale := nd.staleFor(m.Height); stale != nil && stale.round < m.Round {
+					out = nd.signedRoundChange(m.Height, m.Round, stale, true)
+				}
+			case 3:
+				if m.Round > 0 {
+					fake := &simBlock{H: m.Height, Parent: nd.headHash(), Builder: uint64(nd.idx), Nonce: s.rng.Uint64()}
+					out = nd.signedRoundChange(m.Height, m.Round, &preparedState{round: m.Round - 1, proposal: fake}, false)
+				}
+			}
+		case m.Type == MsgPreprepare && m.Round > 0:
+			if stale := nd.staleFor(m.Height); stale != nil && stale.proposal.Hash() != m.Digest {
+				body := new(preprepareBody)
+				rlp.DecodeBytes(m.Payload, body)
+				data, _ := stale.proposal.Encode()
+				forged := &Message{Type: MsgPreprepare, Height: m.Height, Round: m.Round, ChainID: testChainID,
+					Digest:  stale.proposal.Hash(),
+					Payload: encodePayload(&preprepareBody{Block: data, RoundChanges: body.RoundChanges, Prepares: stale.cert})}
+				forged.Sign(nd.key)
+				out = forged
+			}
+		}
+		s.send(nd.idx, peer, out)
+	}
+}
+
+// TestSimLiars is P3-S9 (review on #148): up to f validators lie in their
+// ROUND-CHANGEs and re-propose stale blocks, while lost COMMITs keep blocks
+// prepared-but-undecided so the lies matter. Nothing forks and the chain
+// keeps going.
+func TestSimLiars(t *testing.T) {
+	for _, n := range simSizes {
+		for seed := int64(1); seed <= 6; seed++ {
+			s := newSim(t, n, 600+seed)
+			for i := 0; i < s.set.F(); i++ {
+				s.nodes[(int(seed)+i)%n].kind = liar
+			}
+			// Lost PREPAREs and COMMITs leave different validators prepared on
+			// different blocks at one height, which is when a stale claim or a
+			// stale re-proposal could do damage. The loss stops after 20
+			// minutes: liveness is only promised once the network behaves
+			// (design §4.7, "after GST"), and devp2p runs over TCP, so random
+			// loss of every fifth message forever is not a network we must
+			// survive, only one we must not fork on.
+			s.filter = func(from, to int, m *Message) bool {
+				if s.now > 20*time.Minute {
+					return false
+				}
+				return (m.Type == MsgCommit && s.rng.Float64() < 0.3) || (m.Type == MsgPrepare && s.rng.Float64() < 0.2)
+			}
+			s.noSyncUntil = 10 * time.Minute
+			s.start()
+			s.reach(10, 12*time.Hour, s.honest)
+		}
 	}
 }

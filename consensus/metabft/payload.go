@@ -70,7 +70,7 @@ func certificate(msgs []Message, typ MsgType, height, round uint64, digest commo
 			return fmt.Errorf("%w: message %d is %v h%d r%d, want %v h%d r%d", errBadCertificate,
 				i, m.Type, m.Height, m.Round, typ, height, round)
 		}
-		idx, err := m.Verify(chainID, set)
+		idx, err := m.VerifyAs(Quoted, chainID, set)
 		if err != nil {
 			return fmt.Errorf("%w: message %d: %v", errBadCertificate, i, err)
 		}
@@ -90,7 +90,7 @@ func decodeRoundChange(m *Message) (*roundChangeClaim, *roundChangeExtra, error)
 		return nil, nil, fmt.Errorf("%w: %v", errBadPayload, err)
 	}
 	if !claim.Prepared {
-		if m.Digest != (common.Hash{}) || claim.PreparedRound != 0 {
+		if m.Digest != (common.Hash{}) || claim.PreparedRound != 0 || m.ExtraHash != (common.Hash{}) {
 			return nil, nil, errEmptyPreparedHas
 		}
 		return claim, nil, nil
