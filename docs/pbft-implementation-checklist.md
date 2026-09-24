@@ -100,6 +100,8 @@ start before it if the schedule needs them.
 | P3-08 | Restart: resume at the WAL's highest round, restore the lock, never re-propose in a round already proposed in | §6.1 | [x] |
 | P3-09 | Observer mode exits after one height commits past the local head | §6.1 | [x] |
 | P3-11 | `OpenNodeWAL`: WAL created during bootstrap (`head + 1 < bftBlock`); missing later or corrupt → observer until head+1 commits (calling it at startup is P5) | §6.1 | [x] |
+| P3-12 | `Message.ExtraHash` signed; a message received directly must carry exactly the `Extra` it names, a quoted one none, a non-ROUND-CHANGE never — so a relay cannot alter or strip an attachment and still pass `Verify` (review on #148) | §7.1 | [x] |
+| P3-13 | One `RequestProposal` per round; timeouts saturate instead of wrapping; messages kept only up to 64 rounds ahead; WAL pruned every 16 heights (review on #148) | §4.5, §6.1 | [x] |
 | P3-10 | Simulator with injected backend, clock and WAL (`sim_test.go`) | §6 | [x] |
 
 **Simulation runs** (N = 4, 7, 10)
@@ -114,7 +116,8 @@ start before it if the schedule needs them.
 | P3-S6 | 100ms proposals and 5s idle waits: zero round changes | [x] |
 | P3-S7 | Safety invariant checked on every commit of every node; seals checked to prove the decision | [x] |
 | P3-S8 | COMMITs withheld from all but one node (sync off), and 30% COMMIT loss: the prepared block is re-proposed and decided again | [x] |
-| P3-M | Mutation checks: disabling re-proposal → fork caught by P3-S8; disabling the WAL → fork caught by the amnesia scenario | [x] |
+| P3-S9 | Liars (f): per peer, truthful / hides its prepared block / offers an older genuine one / invents one without evidence; as proposer, re-proposes its oldest prepared block. PREPARE and COMMIT loss for 20 minutes, then none | [x] |
+| P3-M | Mutation checks: re-proposal off → fork (P3-S8); WAL off → fork (amnesia); prepared claims accepted without evidence → crash (P3-S9); `justify` taking the lowest prepared round → stall (P3-S9) | [x] |
 
 ---
 

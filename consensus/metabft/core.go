@@ -65,6 +65,7 @@ type Core struct {
 
 	proposals      map[uint64]Proposal // accepted proposal per round
 	sentPreprepare map[uint64]bool
+	requested      map[uint64]bool // RequestProposal already asked for this round
 	sentPrepare    map[uint64]bool
 	sentCommit     map[uint64]bool
 	sentRC         map[uint64]bool
@@ -85,8 +86,19 @@ type preparedState struct {
 	cert     []Message // the PREPARE quorum
 }
 
-// maxFuture bounds buffered next-height messages.
-const maxFuture = 4096
+const (
+	// maxFuture bounds buffered next-height messages.
+	maxFuture = 4096
+
+	// maxRoundsAhead bounds how far past the current round messages are kept,
+	// so one validator cannot grow a map per round for the whole height.
+	// f+1 amplification needs only a round other validators actually reached.
+	maxRoundsAhead = 64
+
+	// walPruneEvery prunes the WAL every this many heights rather than on
+	// every decision: a prune rewrites the file and syncs it and its directory.
+	walPruneEvery = 16
+)
 
 // NewCore creates a core. observerUntil > 0 starts it as an observer that
 // signs nothing until that height is committed (design §6.1, OpenNodeWAL).
@@ -125,6 +137,7 @@ func (c *Core) NewHeight(height uint64, now time.Duration) {
 	c.height, c.committedAt, c.decided = height, now, false
 	c.proposals = make(map[uint64]Proposal)
 	c.sentPreprepare = make(map[uint64]bool)
+	c.requested = make(map[uint64]bool)
 	c.sentPrepare = make(map[uint64]bool)
 	c.sentCommit = make(map[uint64]bool)
 	c.sentRC = make(map[uint64]bool)
@@ -239,7 +252,7 @@ func (c *Core) proposeIfProposer() {
 		return
 	}
 	if r == 0 {
-		c.backend.RequestProposal(c.height, 0)
+		c.requestProposal(0)
 		return
 	}
 	rcCert, highest := c.roundChangeCertificate(r)
@@ -247,11 +260,21 @@ func (c *Core) proposeIfProposer() {
 		return // not enough round changes yet
 	}
 	if highest == nil {
-		c.backend.RequestProposal(c.height, r)
+		c.requestProposal(r)
 		return
 	}
 	c.stats.Reproposals++
 	c.sendPreprepare(r, highest.proposal, rcCert, highest.cert)
+}
+
+// requestProposal asks the backend for a block once per round; every
+// ROUND-CHANGE that arrives re-runs proposeIfProposer.
+func (c *Core) requestProposal(round uint64) {
+	if c.requested[round] {
+		return
+	}
+	c.requested[round] = true
+	c.backend.RequestProposal(c.height, round)
 }
 
 // Propose supplies the block requested with RequestProposal.
@@ -351,7 +374,8 @@ func (c *Core) sendRoundChange(round uint64) {
 		extra = encodePayload(&roundChangeExtra{Block: data, Prepares: p.cert})
 	}
 	m := &Message{Type: MsgRoundChange, Height: c.height, Round: round, ChainID: c.backend.ChainID(), Digest: digest,
-		Payload: encodePayload(claim), Extra: extra}
+		Payload: encodePayload(claim)}
+	m.SetExtra(extra)
 	if err := c.wal.RecordRoundChange(m); err != nil {
 		c.log.Error("WAL refused ROUND-CHANGE", "height", c.height, "round", round, "err", err)
 		return
@@ -384,6 +408,9 @@ func (c *Core) HandleMessage(m *Message, now time.Duration) error {
 		}
 		return nil
 	case m.Height != c.height || c.set == nil:
+		return nil
+	}
+	if m.Round > c.round+maxRoundsAhead {
 		return nil
 	}
 	idx, err := m.Verify(c.backend.ChainID(), c.set)
@@ -487,7 +514,7 @@ func (c *Core) justify(round uint64, body *preprepareBody, digest common.Hash) e
 		if rc.Type != MsgRoundChange || rc.Height != c.height || rc.Round != round {
 			return fmt.Errorf("%w: entry %d is not a ROUND-CHANGE for this round", errUnjustified, i)
 		}
-		idx, err := rc.Verify(chainID, c.set)
+		idx, err := rc.VerifyAs(Quoted, chainID, c.set)
 		if err != nil {
 			return fmt.Errorf("%w: entry %d: %v", errUnjustified, i, err)
 		}
@@ -624,7 +651,7 @@ func (c *Core) checkCommitted() {
 		}
 		c.decided = true
 		c.stats.Commits++
-		if c.height > 0 {
+		if c.height > 0 && c.height%walPruneEvery == 0 {
 			if err := c.wal.Prune(c.height - 1); err != nil {
 				c.log.Warn("WAL prune failed", "err", err)
 			}

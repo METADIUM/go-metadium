@@ -50,15 +50,31 @@ type Message struct {
 	Digest     common.Hash
 	Payload    []byte // PRE-PREPARE: block RLP + RC certificate; ROUND-CHANGE: certificate
 	CommitSeal []byte // COMMIT only
-	Signature  []byte
+	// ExtraHash is keccak256(Extra) for a ROUND-CHANGE that attaches evidence,
+	// zero otherwise. It is signed, so Extra is committed to without being
+	// carried: a quoted ROUND-CHANGE keeps it and drops Extra.
+	ExtraHash common.Hash
+	Signature []byte
 
-	// Extra travels with the message but is not signed. It may only carry
-	// data that verifies itself: a ROUND-CHANGE attaches its prepared block
-	// (checked against Digest) and PREPARE quorum (signed messages). Keeping
-	// it out of the signature lets a proposer quote round changes in its
-	// justification without their blocks.
+	// Extra travels outside the signature, bound to it by ExtraHash. Only a
+	// ROUND-CHANGE uses it, for its prepared block and PREPARE quorum. A
+	// message received directly must carry exactly the Extra its ExtraHash
+	// names, so a relay can neither alter nor strip it and still pass
+	// verification; a message quoted inside another must carry none.
 	Extra []byte
 }
+
+// VerifyMode says where a message was found.
+type VerifyMode int
+
+const (
+	// Direct: received on its own. Extra must match ExtraHash exactly.
+	Direct VerifyMode = iota
+	// Quoted: inside another message's certificate. Extra must be empty.
+	Quoted
+	// Stored: either of the above, as kept in evidence.
+	Stored
+)
 
 // signedFields is everything the message signature covers.
 type signedFields struct {
@@ -69,6 +85,7 @@ type signedFields struct {
 	Digest     common.Hash
 	Payload    []byte
 	CommitSeal []byte
+	ExtraHash  common.Hash
 }
 
 var (
@@ -81,11 +98,13 @@ var (
 	errNonCanonicalSig  = errors.New("non-canonical signature (high s)")
 	errSealWrongSigner  = errors.New("commit seal is not by the message signer")
 	errBadSignatureSize = fmt.Errorf("signature must be %d bytes", crypto.SignatureLength)
+	errUnexpectedExtra  = errors.New("unsigned attachment on a message that takes none")
+	errExtraMismatch    = errors.New("attachment does not match its signed hash")
 )
 
 // SigningHash is the hash the message signature is over.
 func (m *Message) SigningHash() common.Hash {
-	enc, err := rlp.EncodeToBytes(&signedFields{m.Type, m.Height, m.Round, m.ChainID, m.Digest, m.Payload, m.CommitSeal})
+	enc, err := rlp.EncodeToBytes(&signedFields{m.Type, m.Height, m.Round, m.ChainID, m.Digest, m.Payload, m.CommitSeal, m.ExtraHash})
 	if err != nil {
 		panic(err) // only fixed-size fields and byte slices: cannot fail
 	}
@@ -121,17 +140,55 @@ func (m *Message) checkShape() error {
 	return nil
 }
 
+// SetExtra attaches extra and commits to it in the signed fields. Call it
+// before Sign.
+func (m *Message) SetExtra(extra []byte) {
+	m.Extra = extra
+	if len(extra) == 0 {
+		m.ExtraHash = common.Hash{}
+	} else {
+		m.ExtraHash = crypto.Keccak256Hash(extra)
+	}
+}
+
+// checkExtra enforces where an attachment may appear (see VerifyMode).
+func (m *Message) checkExtra(mode VerifyMode) error {
+	if m.Type != MsgRoundChange {
+		if len(m.Extra) != 0 || m.ExtraHash != (common.Hash{}) {
+			return errUnexpectedExtra
+		}
+		return nil
+	}
+	switch {
+	case mode == Quoted && len(m.Extra) != 0:
+		return errUnexpectedExtra
+	case len(m.Extra) != 0 && crypto.Keccak256Hash(m.Extra) != m.ExtraHash:
+		return errExtraMismatch
+	case mode == Direct && len(m.Extra) == 0 && m.ExtraHash != (common.Hash{}):
+		return fmt.Errorf("%w: attachment missing", errExtraMismatch)
+	}
+	return nil
+}
+
 // Signer recovers the public key that signed the message.
 func (m *Message) Signer() ([]byte, error) {
 	return recoverPubKey(m.SigningHash(), m.Signature)
 }
 
-// Verify checks the message's shape, chain ID and signature, and that the
-// signer is in the set (design §7.1: before any cache lookup). For COMMIT it
-// also checks that the seal is by the same validator. It returns the
-// signer's index.
+// Verify checks a message received on its own; see VerifyAs.
 func (m *Message) Verify(chainID uint64, set *ValidatorSet) (int, error) {
+	return m.VerifyAs(Direct, chainID, set)
+}
+
+// VerifyAs checks the message's shape and attachment for where it was found,
+// its chain ID and signature, and that the signer is in the set (design
+// §7.1: before any cache lookup). For COMMIT it also checks that the seal is
+// by the same validator. It returns the signer's index.
+func (m *Message) VerifyAs(mode VerifyMode, chainID uint64, set *ValidatorSet) (int, error) {
 	if err := m.checkShape(); err != nil {
+		return 0, err
+	}
+	if err := m.checkExtra(mode); err != nil {
 		return 0, err
 	}
 	if m.ChainID != chainID {

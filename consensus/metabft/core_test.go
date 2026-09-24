@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 func TestDeadline(t *testing.T) {
@@ -28,6 +29,33 @@ func TestDeadline(t *testing.T) {
 		if got := c.deadline(tt.round, committed, start); got != tt.want {
 			t.Errorf("round %d: deadline %v, want %v", tt.round, got, tt.want)
 		}
+	}
+	// A config that bypassed the genesis cap: the deadline saturates in the
+	// future instead of wrapping into the past (review on #148).
+	wild := Config{BaseTimeout: 2 * time.Second, MaxBackoffExp: 200}
+	prev := time.Duration(0)
+	for _, r := range []uint64{1, 32, 33, 34, 63, 64, 200, 1 << 40} {
+		d := wild.deadline(r, 0, start)
+		if d <= start || d < prev {
+			t.Errorf("round %d: deadline %v not after the round start %v / previous %v", r, d, start, prev)
+		}
+		prev = d
+	}
+}
+
+// TestRequestProposalOnce: the proposer asks the backend for one block per
+// round, however many ROUND-CHANGEs arrive (review on #148).
+func TestRequestProposalOnce(t *testing.T) {
+	net := newTestNet(t, 4)
+	// The proposer of (10, 1) is validator (10+1)%4 = 3.
+	c, b := newStubCore(t, net, 3)
+	c.NewHeight(10, 0)
+	c.Tick(100 * time.Second) // into round 1, sends its own ROUND-CHANGE
+	for i := 0; i < 3; i++ {
+		must(t, c.HandleMessage(net.roundChange(t, i, 10, 1, nil, 0), 100*time.Second))
+	}
+	if b.requested != 1 {
+		t.Errorf("RequestProposal called %d times for one round, want 1", b.requested)
 	}
 }
 
@@ -110,7 +138,7 @@ func (net *testNet) roundChange(t *testing.T, i int, height, round uint64, block
 		claim.Prepared, claim.PreparedRound = true, preparedRound
 		m.Digest = block.Hash()
 		data, _ := block.Encode()
-		m.Extra = encodePayload(&roundChangeExtra{Block: data, Prepares: net.prepareCert(t, height, preparedRound, block.Hash(), net.set.Quorum())})
+		m.SetExtra(encodePayload(&roundChangeExtra{Block: data, Prepares: net.prepareCert(t, height, preparedRound, block.Hash(), net.set.Quorum())}))
 	}
 	m.Payload = encodePayload(claim)
 	must(t, m.Sign(net.keys[i]))
@@ -188,14 +216,19 @@ func TestRoundChangeEvidenceRequired(t *testing.T) {
 	if err := c.HandleMessage(good, 0); err != nil {
 		t.Fatalf("valid prepared round change: %v", err)
 	}
-	noEvidence := net.roundChange(t, 2, 10, 1, block, 0)
-	noEvidence.Extra = nil
+	// A prepared claim signed without any attachment.
+	noEvidence := &Message{Type: MsgRoundChange, Height: 10, Round: 1, ChainID: testChainID, Digest: block.Hash(),
+		Payload: encodePayload(&roundChangeClaim{Prepared: true})}
+	must(t, noEvidence.Sign(net.keys[2]))
 	if err := c.HandleMessage(noEvidence, 0); !errors.Is(err, errBadCertificate) {
 		t.Errorf("claim without evidence: %v", err)
 	}
-	shortCert := net.roundChange(t, 3, 10, 1, block, 0)
+	// A claim signed with a quorum one short.
+	shortCert := &Message{Type: MsgRoundChange, Height: 10, Round: 1, ChainID: testChainID, Digest: block.Hash(),
+		Payload: encodePayload(&roundChangeClaim{Prepared: true})}
 	data, _ := block.Encode()
-	shortCert.Extra = encodePayload(&roundChangeExtra{Block: data, Prepares: net.prepareCert(t, 10, 0, block.Hash(), 2)})
+	shortCert.SetExtra(encodePayload(&roundChangeExtra{Block: data, Prepares: net.prepareCert(t, 10, 0, block.Hash(), 2)}))
+	must(t, shortCert.Sign(net.keys[3]))
 	if err := c.HandleMessage(shortCert, 0); !errors.Is(err, errBadCertificate) {
 		t.Errorf("claim with a short quorum: %v", err)
 	}
@@ -234,5 +267,78 @@ func TestLateProposalStillCommits(t *testing.T) {
 		if m.Type == MsgPrepare && m.Round == 0 {
 			t.Error("voted in a round it had already left")
 		}
+	}
+}
+
+// TestRelayedRoundChangeCopies covers the relay attack from the review on
+// #148: a copy of an honest ROUND-CHANGE with its attachment altered or
+// stripped keeps the signing hash, so without ExtraHash it passed Verify
+// and could win the dedup slot (design §7.1) ahead of the genuine message.
+// Every such copy now fails Verify, before any cache could see it.
+func TestRelayedRoundChangeCopies(t *testing.T) {
+	net := newTestNet(t, 4)
+	block := &simBlock{H: 10, Nonce: 9}
+	genuine := net.roundChange(t, 1, 10, 1, block, 0)
+	if _, err := genuine.Verify(testChainID, net.set); err != nil {
+		t.Fatalf("genuine: %v", err)
+	}
+
+	extra := new(roundChangeExtra)
+	must(t, rlp.DecodeBytes(genuine.Extra, extra))
+	flippedBlock := *extra
+	flippedBlock.Block = append([]byte(nil), extra.Block...)
+	flippedBlock.Block[len(flippedBlock.Block)-1] ^= 1
+	flippedSig := *extra
+	flippedSig.Prepares = append([]Message(nil), extra.Prepares...)
+	flippedSig.Prepares[0].Signature = append([]byte(nil), flippedSig.Prepares[0].Signature...)
+	flippedSig.Prepares[0].Signature[5] ^= 1
+
+	for name, extraBytes := range map[string][]byte{
+		"block byte flipped":        encodePayload(&flippedBlock),
+		"PREPARE signature flipped": encodePayload(&flippedSig),
+		"attachment stripped":       nil,
+		"attachment replaced":       []byte{0xc0},
+	} {
+		cpy := *genuine
+		cpy.Extra = extraBytes
+		if cpy.SigningHash() != genuine.SigningHash() {
+			t.Fatalf("%s: the copy changed the signing hash; the test no longer models a relay", name)
+		}
+		if _, err := cpy.Verify(testChainID, net.set); !errors.Is(err, errExtraMismatch) {
+			t.Errorf("%s: Verify = %v, want errExtraMismatch", name, err)
+		}
+	}
+	// Quoted in a certificate, the stripped form is the valid one.
+	quoted := *genuine
+	quoted.Extra = nil
+	if _, err := quoted.VerifyAs(Quoted, testChainID, net.set); err != nil {
+		t.Errorf("stripped copy as a quote: %v", err)
+	}
+	if _, err := genuine.VerifyAs(Quoted, testChainID, net.set); !errors.Is(err, errUnexpectedExtra) {
+		t.Errorf("unstripped quote: %v", err)
+	}
+}
+
+// TestNestedExtraRejected: an attachment on a PREPARE, whether received
+// directly or inside a certificate, is refused, so junk one node adds cannot
+// be re-broadcast under the next proposer's signature (review on #148).
+func TestNestedExtraRejected(t *testing.T) {
+	net := newTestNet(t, 4)
+	digest := common.HexToHash("0x42")
+	junk := net.signed(t, 0, MsgPrepare, 10, 0, digest)
+	junk.Extra = make([]byte, 100<<10)
+	if _, err := junk.Verify(testChainID, net.set); !errors.Is(err, errUnexpectedExtra) {
+		t.Errorf("PREPARE with an attachment: %v", err)
+	}
+	cert := net.prepareCert(t, 10, 0, digest, 3)
+	cert[1].Extra = []byte{1, 2, 3}
+	if err := certificate(cert, MsgPrepare, 10, 0, digest, testChainID, net.set); !errors.Is(err, errBadCertificate) {
+		t.Errorf("certificate with an attachment on a member: %v", err)
+	}
+	hashed := net.signed(t, 0, MsgPrepare, 10, 0, digest)
+	hashed.ExtraHash = common.HexToHash("0x01")
+	must(t, hashed.Sign(net.keys[0]))
+	if _, err := hashed.Verify(testChainID, net.set); !errors.Is(err, errUnexpectedExtra) {
+		t.Errorf("PREPARE with an ExtraHash: %v", err)
 	}
 }
