@@ -79,7 +79,7 @@ func TestWALVoteRules(t *testing.T) {
 
 	// Moving to a higher round with a different digest is allowed.
 	must(t, w.RecordVote(5, 0, MsgPrepare, digestA))
-	must(t, w.RecordVote(5, 1, MsgRoundChange, digestA))
+	must(t, w.RecordRoundChange(&Message{Type: MsgRoundChange, Height: 5, Round: 1, ChainID: testChainID, Digest: digestA}))
 	must(t, w.RecordVote(5, 1, MsgPrepare, digestB))
 	// Going back is not.
 	if err := w.RecordVote(5, 0, MsgCommit, digestA); !errors.Is(err, ErrPastRound) {
@@ -252,5 +252,48 @@ func TestWALConcurrent(t *testing.T) {
 	_, rep := openTestWAL(t, path, false)
 	if rep.Records != heights || rep.TornTail {
 		t.Errorf("reopened with %d records (torn %v), want %d", rep.Records, rep.TornTail, heights)
+	}
+}
+
+// TestWALRoundChangeContent: a second ROUND-CHANGE for one round with the
+// same prepared digest but different content is refused, because the
+// evidence rule would count the pair as an equivocation (review on #147).
+func TestWALRoundChangeContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wal")
+	w, _ := openTestWAL(t, path, true)
+	rc := &Message{Type: MsgRoundChange, Height: 9, Round: 2, ChainID: testChainID, Digest: digestA, Payload: []byte{1}}
+	must(t, w.RecordRoundChange(rc))
+	must(t, w.RecordRoundChange(rc)) // resend of the same message
+
+	bigger := *rc
+	bigger.Payload = []byte{1, 2}
+	if err := w.RecordRoundChange(&bigger); !errors.Is(err, ErrConflictingVote) {
+		t.Errorf("same digest, different content: %v", err)
+	}
+	if err := w.RecordVote(9, 3, MsgRoundChange, digestA); err == nil {
+		t.Error("RecordVote accepted a ROUND-CHANGE without its content")
+	}
+	w.Close()
+	w2, _ := openTestWAL(t, path, false)
+	if err := w2.RecordRoundChange(&bigger); !errors.Is(err, ErrConflictingVote) {
+		t.Errorf("after restart: %v", err)
+	}
+	if err := w2.RecordRoundChange(rc); err != nil {
+		t.Errorf("resend after restart: %v", err)
+	}
+}
+
+// TestWALLockConflict: a lock contradicting this node's own PREPARE or COMMIT
+// in that round is a caller bug and is refused (review on #147).
+func TestWALLockConflict(t *testing.T) {
+	w, _ := openTestWAL(t, filepath.Join(t.TempDir(), "wal"), true)
+	must(t, w.RecordVote(4, 1, MsgPrepare, digestA))
+	if err := w.RecordLock(4, 1, digestB, nil, nil); !errors.Is(err, ErrLockConflict) {
+		t.Errorf("lock on another digest than PREPAREd: %v", err)
+	}
+	must(t, w.RecordLock(4, 1, digestA, nil, nil))
+	must(t, w.RecordLock(4, 2, digestB, nil, nil)) // a later round may lock another block
+	if _, ok := w.Lock(4); !ok {
+		t.Error("lock missing")
 	}
 }
