@@ -39,6 +39,10 @@ type Record struct {
 	Round  uint64 // vote round; for a lock, the prepared round
 	Type   MsgType
 	Digest common.Hash
+	// Content is the SigningHash of a ROUND-CHANGE. One node sends one
+	// ROUND-CHANGE per round with fixed content; the evidence rule treats any
+	// other as equivocation, so the WAL must refuse it too.
+	Content common.Hash
 	// Lock only: the PREPARE quorum certificate (RLP-encoded messages) and
 	// the block RLP, needed to justify and re-propose after a restart.
 	Certificate [][]byte
@@ -59,6 +63,9 @@ var (
 
 	// ErrPastRound refuses a vote below the highest round already voted in at that height.
 	ErrPastRound = errors.New("metabft: round is below one already voted in")
+
+	// ErrLockConflict refuses a lock that contradicts a recorded vote.
+	ErrLockConflict = errors.New("metabft: lock conflicts with a recorded vote")
 )
 
 const (
@@ -101,6 +108,9 @@ func OpenWAL(path string, create bool) (*WAL, *OpenReport, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, nil, err
 		}
+		// O_EXCL, not just O_CREATE: if two processes start on the same
+		// datadir, only one gets the WAL. Two writers would be two nodes
+		// signing with one key (design §6.1).
 		flags |= os.O_CREATE | os.O_EXCL
 		report.Created = true
 	} else if err != nil {
@@ -205,21 +215,47 @@ func (w *WAL) RecordVote(height, round uint64, typ MsgType, digest common.Hash) 
 	switch typ {
 	// A proposer records its PRE-PREPARE too: after a restart it must not
 	// propose a different block in a round it already proposed in.
-	case MsgPreprepare, MsgPrepare, MsgCommit, MsgRoundChange:
+	case MsgPreprepare, MsgPrepare, MsgCommit:
+	case MsgRoundChange:
+		return fmt.Errorf("%w: record a ROUND-CHANGE with RecordRoundChange", errUnknownMsgType)
 	default:
 		return fmt.Errorf("%w: %v", errUnknownMsgType, typ)
 	}
-	dup, err := w.state.checkVote(height, round, typ, digest)
+	return w.recordVote(&Record{Kind: RecordVote, Height: height, Round: round, Type: typ, Digest: digest})
+}
+
+// RecordRoundChange records a ROUND-CHANGE by its full signed content, so a
+// second, different ROUND-CHANGE for the same round is refused even when it
+// reports the same prepared digest. m must be complete but need not be signed.
+func (w *WAL) RecordRoundChange(m *Message) error {
+	if m.Type != MsgRoundChange {
+		return fmt.Errorf("%w: %v is not a ROUND-CHANGE", errUnknownMsgType, m.Type)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.recordVote(&Record{Kind: RecordVote, Height: m.Height, Round: m.Round, Type: MsgRoundChange,
+		Digest: m.Digest, Content: m.SigningHash()})
+}
+
+func (w *WAL) recordVote(rec *Record) error {
+	dup, err := w.state.checkVote(rec)
 	if err != nil || dup {
 		return err
 	}
-	return w.append(&Record{Kind: RecordVote, Height: height, Round: round, Type: typ, Digest: digest})
+	return w.append(rec)
 }
 
-// RecordLock records entering PREPARED at (height, round) for digest.
+// RecordLock records entering PREPARED at (height, round) for digest. A lock
+// that contradicts this node's PREPARE or COMMIT in that round can only come
+// from a bug in the caller, and is refused rather than persisted.
 func (w *WAL) RecordLock(height, round uint64, digest common.Hash, certificate [][]byte, block []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	for _, typ := range []MsgType{MsgPrepare, MsgCommit} {
+		if d, ok := w.state.votes[voteKey{height, round, typ}]; ok && d.digest != digest {
+			return fmt.Errorf("%w: %v at height %d round %d was %x, lock is %x", ErrLockConflict, typ, height, round, d.digest, digest)
+		}
+	}
 	return w.append(&Record{Kind: RecordLock, Height: height, Round: round, Digest: digest, Certificate: certificate, Block: block})
 }
 
@@ -251,7 +287,7 @@ func (w *WAL) Vote(height, round uint64, typ MsgType) (common.Hash, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	d, ok := w.state.votes[voteKey{height, round, typ}]
-	return d, ok
+	return d.digest, ok
 }
 
 // MaxRound returns the highest round this node signed anything in at height.
@@ -341,16 +377,20 @@ type voteKey struct {
 	typ           MsgType
 }
 
+type recordedVote struct {
+	digest, content common.Hash
+}
+
 // VoteState is what the WAL records imply about what may still be signed.
 type VoteState struct {
-	votes    map[voteKey]common.Hash
+	votes    map[voteKey]recordedVote
 	maxRound map[uint64]uint64
 	locks    map[uint64]Record // latest lock per height
 }
 
 func newVoteState() *VoteState {
 	return &VoteState{
-		votes:    make(map[voteKey]common.Hash),
+		votes:    make(map[voteKey]recordedVote),
 		maxRound: make(map[uint64]uint64),
 		locks:    make(map[uint64]Record),
 	}
@@ -359,7 +399,7 @@ func newVoteState() *VoteState {
 func (s *VoteState) apply(r Record) {
 	switch r.Kind {
 	case RecordVote:
-		s.votes[voteKey{r.Height, r.Round, r.Type}] = r.Digest
+		s.votes[voteKey{r.Height, r.Round, r.Type}] = recordedVote{r.Digest, r.Content}
 		if cur, ok := s.maxRound[r.Height]; !ok || r.Round > cur {
 			s.maxRound[r.Height] = r.Round
 		}
@@ -370,12 +410,16 @@ func (s *VoteState) apply(r Record) {
 	}
 }
 
-// checkVote reports whether (height, round, typ, digest) may be signed. dup
-// means exactly this vote is already recorded.
-func (s *VoteState) checkVote(height, round uint64, typ MsgType, digest common.Hash) (dup bool, err error) {
+// checkVote reports whether rec may be signed. dup means exactly this vote
+// is already recorded.
+func (s *VoteState) checkVote(rec *Record) (dup bool, err error) {
+	height, round, typ, digest := rec.Height, rec.Round, rec.Type, rec.Digest
 	if d, ok := s.votes[voteKey{height, round, typ}]; ok {
-		if d != digest {
-			return false, fmt.Errorf("%w: %v at height %d round %d was %x, now %x", ErrConflictingVote, typ, height, round, d, digest)
+		if d.digest != digest {
+			return false, fmt.Errorf("%w: %v at height %d round %d was %x, now %x", ErrConflictingVote, typ, height, round, d.digest, digest)
+		}
+		if d.content != rec.Content {
+			return false, fmt.Errorf("%w: a different %v at height %d round %d", ErrConflictingVote, typ, height, round)
 		}
 		return true, nil
 	}
@@ -388,8 +432,8 @@ func (s *VoteState) checkVote(height, round uint64, typ MsgType, digest common.H
 		if typ == MsgCommit {
 			other = MsgPrepare
 		}
-		if d, ok := s.votes[voteKey{height, round, other}]; ok && d != digest {
-			return false, fmt.Errorf("%w: %v at height %d round %d was %x, now %v %x", ErrConflictingVote, other, height, round, d, typ, digest)
+		if d, ok := s.votes[voteKey{height, round, other}]; ok && d.digest != digest {
+			return false, fmt.Errorf("%w: %v at height %d round %d was %x, now %v %x", ErrConflictingVote, other, height, round, d.digest, typ, digest)
 		}
 	}
 	return false, nil
