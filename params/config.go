@@ -489,10 +489,15 @@ type BftConfig struct {
 
 // maxBftBackoffExp caps MaxBackoffExp so BaseTimeout<<MaxBackoffExp cannot
 // overflow and a stuck round still retries within the hour at sane timeouts.
+// It is a bound, not a recommendation: the design's default is 5, i.e. 64s
+// with a 2s base, where 10 would allow about 34 minutes.
 const maxBftBackoffExp = 10
 
 // String implements the stringer interface.
 func (c *BftConfig) String() string {
+	if c == nil {
+		return "<nil>" // an invalid config can reach the banner if validation order changes
+	}
 	return fmt.Sprintf("emptyBlockInterval=%ds baseTimeout=%ds maxBackoffExp=%d timeDrift=%ds",
 		c.EmptyBlockInterval, c.BaseTimeout, c.MaxBackoffExp, c.TimeDrift)
 }
