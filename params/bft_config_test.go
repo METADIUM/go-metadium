@@ -123,6 +123,13 @@ func TestBftConfigJSON(t *testing.T) {
 	if !strings.Contains(c.Description(), "PBFT switch") {
 		t.Error("the startup banner does not show the PBFT switch")
 	}
+	// An invalid config (switch block without parameters) must not panic
+	// the banner (review on #144).
+	broken := validBftConfig()
+	broken.Bft = nil
+	if !strings.Contains(broken.Description(), "<nil>") {
+		t.Error("banner of a config without bft parameters")
+	}
 
 	// Configs without PBFT must encode exactly as before.
 	out, err := json.Marshal(&ChainConfig{ChainID: big.NewInt(1)})
