@@ -65,24 +65,24 @@ start before it if the schedule needs them.
 
 | ID | Item | Design | Status |
 |----|------|--------|--------|
-| P2-01 | `validators.go`: set from `getMetaNodes` at `n-1`, `proposer(h, r)`, `f`, `Quorum` | §4.1–§4.3 | [ ] |
-| P2-02 | `messages.go`: `BftMessage` RLP, signing, `ecrecover` → validator index | §4.6 | [ ] |
-| P2-03 | `commitDigest = keccak256(rlp([BlockHash, Round, ChainID, 0x02]))` | §4.6 | [ ] |
-| P2-04 | `wal.go`: append-only file at `<datadir>/metabft/wal`, fsync before return | §6.1 | [ ] |
-| P2-05 | WAL records: `(height, round, type, digest)` per vote; lock `(preparedRound, digest, certificate, block RLP)` | §6.1 | [ ] |
-| P2-06 | WAL pruning on commit (one to two heights kept) | §6.1 | [ ] |
-| P2-07 | WAL missing/corrupt → observer mode flag | §6.1 | [ ] |
-| P2-08 | `evidence.go`: store both signed messages, survive restart | §7.1 | [ ] |
+| P2-01 | `validators.go`: ordered set from enode keys, `proposer(h, r)`, `f`, `Quorum = ceil(2N/3)` (reading `getMetaNodes` at `n-1` is P5) | §4.1–§4.3 | [x] |
+| P2-02 | `messages.go`: `Message` RLP, signing, `ecrecover` → validator index, chain ID check, low-s only | §4.6 | [x] |
+| P2-03 | `commitDigest = keccak256(rlp([BlockHash, Round, ChainID, 0x02]))`; a COMMIT's seal must be by its signer | §4.6 | [x] |
+| P2-04 | `wal.go`: append-only framed file (length + CRC-32C), fsync before return (path chosen in P5) | §6.1 | [x] |
+| P2-05 | WAL records: `(height, round, type, digest)` per vote; lock `(preparedRound, digest, certificate, block RLP)`; refuses conflicting and past-round votes | §6.1 | [x] |
+| P2-06 | WAL pruning (atomic rewrite + rename); calling it on commit is P3 | §6.1 | [x] |
+| P2-07 | `ErrWALMissing` / `ErrWALCorrupt` for the caller; an incomplete final frame (crash mid-append, never sent) is truncated instead | §6.1 | [x] |
+| P2-08 | `evidence.go`: verify, store both signed messages (one file per pair, order-independent), survive restart | §7.1 | [x] |
 
 **Tests**
 
 | ID | Test | Status |
 |----|------|--------|
-| P2-T1 | Quorum table: N=4→3, 7→5, 10→7, 13→9 | [ ] |
-| P2-T2 | Message signature and commit-seal signature cannot be swapped (domain separator) | [ ] |
-| P2-T3 | A signature with another ChainID is rejected | [ ] |
-| P2-T4 | WAL: crash injected before/after fsync; replay restores the last vote and lock | [ ] |
-| P2-T5 | WAL: truncated/corrupt tail → observer mode, never a vote from partial state | [ ] |
+| P2-T1 | Quorum table N=1..13, and for N=1..100: two quorums share f+1, honest nodes reach quorum, quorum is minimal | [x] |
+| P2-T2 | Message signature and commit-seal signature cannot be swapped (domain separator); tampering any field breaks the signature; high-s rejected | [x] |
+| P2-T3 | A signature with another ChainID is rejected | [x] |
+| P2-T4 | WAL: votes and lock survive reopen and still refuse conflicts; torn final frame at every cut point is discarded safely; concurrent writers | [x] |
+| P2-T5 | WAL: damage inside the file → `ErrWALCorrupt`, never a vote from partial state | [x] |
 
 ---
 
@@ -99,6 +99,7 @@ start before it if the schedule needs them.
 | P3-07 | `timer.go`: `deadline(n,0) = committedAt(n-1) + EmptyBlockInterval + BftBaseTimeout`, backoff for `r >= 1`, `committedAt` = "became head" | §4.5 | [ ] |
 | P3-08 | Restart: never sign a different digest at or below the last WAL record | §6.1 | [ ] |
 | P3-09 | Observer mode exits after one height commits past the local head | §6.1 | [ ] |
+| P3-11 | WAL created during bootstrap (`head + 1 < bftBlock`); a missing WAL means observer mode only when `head + 1 >= bftBlock`, so the switch cannot deadlock | §6.1 | [ ] |
 | P3-10 | Simulator with injected backend, clock and WAL | §6 | [ ] |
 
 **Simulation runs** (N = 4, 7, 10)
