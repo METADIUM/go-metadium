@@ -92,9 +92,22 @@ func TestWALVoteRules(t *testing.T) {
 	must(t, w.RecordVote(5, 1, MsgCommit, digestB))
 	// Other heights are independent.
 	must(t, w.RecordVote(6, 0, MsgPrepare, digestA))
-	// PRE-PREPARE is not a vote.
-	if err := w.RecordVote(7, 0, MsgPreprepare, digestA); err == nil {
-		t.Error("PRE-PREPARE recorded as a vote")
+	// A proposer's PRE-PREPARE is recorded like a vote and binds too.
+	must(t, w.RecordVote(7, 0, MsgPreprepare, digestA))
+	if err := w.RecordVote(7, 0, MsgPreprepare, digestB); !errors.Is(err, ErrConflictingVote) {
+		t.Errorf("second PRE-PREPARE in a round: %v", err)
+	}
+	if err := w.RecordVote(7, 0, 9, digestA); err == nil {
+		t.Error("unknown message type recorded")
+	}
+	if r, ok := w.MaxRound(5); !ok || r != 1 {
+		t.Errorf("MaxRound(5) = %d, %v; want 1", r, ok)
+	}
+	if r, ok := w.MaxRound(7); !ok || r != 0 {
+		t.Errorf("MaxRound(7) = %d, %v; want 0 (a round-0 vote counts)", r, ok)
+	}
+	if _, ok := w.MaxRound(8); ok {
+		t.Error("MaxRound reports a height nothing was signed at")
 	}
 	// Resending writes nothing.
 	size := fileSize(t, w.path)
