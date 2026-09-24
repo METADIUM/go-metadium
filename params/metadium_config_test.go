@@ -102,6 +102,12 @@ func TestMetadiumChainConfigsPinned(t *testing.T) {
 					"pin alongside it.", network.name, field, g, want)
 			}
 		}
+		// PBFT is for new private networks only (docs/pbft-consensus-design.md
+		// §1.2); a switch block in a public config would hard-fork it.
+		if c.BftBlock != nil || c.Bft != nil {
+			t.Errorf("%s has PBFT settings (bftBlock %v, bft %v); they must stay nil",
+				network.name, c.BftBlock, c.Bft)
+		}
 		if c.DAOForkSupport != network.daoFork {
 			t.Errorf("%s DAOForkSupport = %v, want %v (0.10.x stored-config parity; "+
 				"a mismatch masks later fork compatibility checks on upgrade, since "+
