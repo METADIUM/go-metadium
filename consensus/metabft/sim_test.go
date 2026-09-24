@@ -839,3 +839,31 @@ func TestSimLiars(t *testing.T) {
 		}
 	}
 }
+
+// TestSimRejoinAfterOutage is the recovery case from the review on #148:
+// f+1 validators are down for 90 minutes, so the rest keep timing out without
+// a quorum and end up dozens of rounds ahead of the returning validators'
+// WAL round. f+1 amplification must bridge that gap in one step, not one
+// 64-second timeout per round.
+func TestSimRejoinAfterOutage(t *testing.T) {
+	s := newSim(t, 4, 700)
+	s.start()
+	s.reach(5, time.Hour, nil)
+	down := s.nodes[:2]
+	for _, nd := range down {
+		nd.crash()
+	}
+	s.run(s.now+90*time.Minute, func() bool { return false })
+	if r := s.nodes[3].core.Round(); r <= maxRoundsAhead {
+		t.Fatalf("the survivors only reached round %d; the outage does not open a gap beyond the window", r)
+	}
+	height := s.minHeight(nil)
+	for _, nd := range down {
+		nd.boot()
+	}
+	back := s.now
+	s.reach(height+3, s.now+6*time.Hour, nil)
+	if took := s.now - back; took > 10*time.Minute {
+		t.Errorf("rejoining took %v", took)
+	}
+}
