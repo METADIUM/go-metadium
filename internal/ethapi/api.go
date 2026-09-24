@@ -1397,6 +1397,16 @@ func RPCMarshalHeader(head *types.Header) map[string]interface{} {
 	if head.ParentBeaconRoot != nil {
 		result["parentBeaconBlockRoot"] = head.ParentBeaconRoot
 	}
+	// PBFT blocks only; a committed PBFT block always carries seals, so this
+	// leaves every other network's output unchanged.
+	if head.CommitSeals != nil {
+		seals := make([]hexutil.Bytes, len(head.CommitSeals))
+		for i, seal := range head.CommitSeals {
+			seals[i] = seal
+		}
+		result["bftRound"] = hexutil.Uint64(head.BftRound)
+		result["commitSeals"] = seals
+	}
 	return result
 }
 
