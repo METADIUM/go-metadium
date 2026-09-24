@@ -49,6 +49,11 @@ var (
 	// headNum - (GovNodeCount/2 + 1). Returns nil when no block at or below
 	// head is final yet, or when governance state is not yet loaded.
 	GetFinalizedBlockNumberFunc func(headNum *big.Int) *big.Int
+
+	// BftValidatorsFunc returns the PBFT validator set for height: the
+	// governance nodes' enode public keys (64 bytes each) in governance order,
+	// read from the state at height-1 (docs/pbft-consensus-design.md §4.2).
+	BftValidatorsFunc func(height *big.Int) ([][]byte, error)
 	// Add TRS
 	GetTRSListMapFunc func(height *big.Int) (trsListMap map[common.Address]bool, trsSubscribe bool, err error)
 )
@@ -224,3 +229,11 @@ func TRSRestricted(trsListMap map[common.Address]bool, from common.Address, to *
 }
 
 // EOF
+
+// BftValidators returns the PBFT validator set for height (BftValidatorsFunc).
+func BftValidators(height *big.Int) ([][]byte, error) {
+	if BftValidatorsFunc == nil {
+		return nil, ErrNotInitialized
+	}
+	return BftValidatorsFunc(height)
+}

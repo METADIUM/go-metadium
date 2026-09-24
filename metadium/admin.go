@@ -1718,6 +1718,34 @@ func (ma *metaAdmin) acceptUnverifiableBlock(ctx context.Context, height *big.In
 	return height.Uint64() >= head
 }
 
+// bftValidators returns the PBFT validator set for height: governance nodes
+// from the state at height-1, ordered by name as getMetaNodes returns them.
+// Unlike verifyBlockSig there is no fallback for missing governance data: a
+// PBFT height with no readable set cannot be verified and is not accepted
+// (docs/pbft-consensus-design.md §7.7).
+func bftValidators(height *big.Int) ([][]byte, error) {
+	if admin == nil {
+		return nil, metaminer.ErrNotInitialized
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	num := new(big.Int).Sub(height, common.Big1)
+	if _, _, _, _, _, err := admin.getRegGovEnvContracts(ctx, num); err != nil {
+		return nil, fmt.Errorf("no governance at block %v: %w", num, err)
+	}
+	nodes, err := admin.getMetaNodes(ctx, num)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([][]byte, len(nodes))
+	for i, n := range nodes {
+		if keys[i], err = hex.DecodeString(n.Enode); err != nil {
+			return nil, fmt.Errorf("node %q: %w", n.Name, err)
+		}
+	}
+	return keys, nil
+}
+
 func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, isPangyo bool) bool {
 	if admin == nil {
 		return false
@@ -2384,6 +2412,7 @@ func init() {
 	metaminer.ReleaseMiningTokenFunc = releaseMiningToken
 	metaminer.HasMiningTokenFunc = hasMiningToken
 	metaminer.GetFinalizedBlockNumberFunc = getFinalizedBlockNumber
+	metaminer.BftValidatorsFunc = bftValidators
 	metaminer.GetTRSListMapFunc = getTRSListMap // Add TRS
 	metaapi.TRSInfo = TRSInfo                   // Add TRS
 	metaapi.Info = Info

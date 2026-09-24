@@ -159,11 +159,11 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | ID | Item | Design | Status |
 |----|------|--------|--------|
 | P5-00 | Remove the `errBftNotImplemented` startup guard (`eth/bft_guard.go`) in the same change that lands P5-01 | §9.3 | [ ] |
-| P5-01 | Wrapper engine in `CreateConsensusEngine` (`eth/ethconfig/config.go:175, 187`) | §7.2 | [ ] |
+| P5-01 | Wrapper engine `metabft.Engine` created in `CreateConsensusEngine` when the chain config has `bftBlock`; below it every call goes to the PoA engine (P5a) | §7.2 | [x] |
 | P5-02 | `VerifyHeader` pre-fork: `CommitSeals == nil && BftRound == 0` | §5.2, §5.3 | done in P1-06: the PoA engine enforces it for every height it verifies |
-| P5-03 | `VerifyHeader` post-fork: `IsCamellia`, `ParentBeaconRoot == nil`, `Time >= parent.Time` | §5.3 | [ ] |
-| P5-04 | `VerifyHeader` post-fork: `MinerNodeSig` from a validator of `n-1` | §5.3 | [ ] |
-| P5-05 | `VerifyHeader` post-fork: `>= Quorum` distinct valid seals over `commitDigest(BlockHash, BftRound, ChainID)` | §5.3 | [ ] |
+| P5-03 | `VerifyHeader` post-fork: the PoA engine's header checks (`VerifyHeaderPBFT`, which covers the Camellia fields and `ParentBeaconRoot == nil`; `IsCamellia` is guaranteed by `checkBft`), plus `Time >= parent.Time` (P5a) | §5.3 | [x] |
+| P5-04 | `VerifyHeader` post-fork: `MinerNodeSig` over the state root by `MinerNodeId`, a validator of the parent state (P5a) | §5.3 | [x] |
+| P5-05 | `VerifyHeader` post-fork: `>= Quorum` distinct seals over `commitDigest(BlockHash, BftRound, ChainID)`, every seal valid (`VerifySeals`, P5a) | §5.3 | [x] |
 | P5-06 | PRE-PREPARE time bound `\|Time − localNow\| <= timeDrift` (not applied on sync) | §4.5 | [ ] |
 | P5-07 | Worker proposer gate via `IsBftProposer` (`miner/worker.go:1666-1681`) | §7.3 | [ ] |
 | P5-08 | Worker hands the block to the BFT core; backend writes on commit | §7.3 | [ ] |
@@ -172,10 +172,10 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | P5-11 | Non-proposers validate via `ValidateBody` + `Process` + `ValidateState` | §7.3 | [ ] |
 | P5-12 | Rewards/Coinbase compared, not overwritten, post-fork (`consensus.go:741, 754`) | §7.5 | [ ] |
 | P5-13 | Block invalid if post-execution governance node count < 4; proposer drops the offending tx | §9.3.1 | [ ] |
-| P5-14 | `verifyMinerLimit` skipped post-fork (`metadium/admin.go:1765`) | §4.3 | [ ] |
+| P5-14 | `verifyMinerLimit` skipped post-fork | §4.3 | [x] — the PBFT engine never calls the PoA `verifyBlockSig`, where the limit lives (P5a) |
 | P5-15 | `getFinalizedBlockNumber` returns head post-fork (`metadium/admin.go:645`) | §7.4 | [ ] |
 | P5-16 | Reorg below the finalized number rejected in `insertChain` | §5.4 | [ ] |
-| P5-17 | `acceptUnverifiableBlock` forbidden post-fork (`metadium/admin.go:1708`) | §7.7 | [ ] |
+| P5-17 | `acceptUnverifiableBlock` forbidden post-fork | §7.7 | [x] — the PBFT engine reads the set through `BftValidators`, which has no fallback, and refuses a height it cannot read (P5a) |
 | P5-18 | Transition: halt at `BftBlock` if governance missing or `N < 4` | §9.3 | [ ] |
 | P5-19 | Blob sidecar fetched before PREPARE; PREPARE held until available | §12 | [ ] |
 | P5-20 | RPCs: `metabft_getValidators`, `_getRoundState`, `_status`, `_readiness`, `_getEvidence` | §6, §7.1, §9.3 | [ ] |
