@@ -129,6 +129,10 @@ func (c *Core) Round() uint64 { return c.round }
 // Observer reports whether the core is still refusing to sign.
 func (c *Core) Observer() bool { return c.observerUntil > 0 }
 
+// HasValidatorSet reports whether the current height has a validator set;
+// without one the core ignores everything until NewHeight is called again.
+func (c *Core) HasValidatorSet() bool { return c.set != nil }
+
 func (c *Core) canSign() bool {
 	return c.key != nil && c.observerUntil == 0 && c.selfIdx >= 0
 }
