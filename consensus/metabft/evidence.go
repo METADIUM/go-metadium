@@ -28,11 +28,11 @@ var errNotEquivocation = errors.New("messages are not an equivocation")
 // set on chainID and returns the offender's index.
 func (e *Evidence) Verify(chainID uint64, set *ValidatorSet) (int, error) {
 	a, b := &e.First, &e.Second
-	ia, err := a.Verify(chainID, set)
+	ia, err := a.VerifyAs(Stored, chainID, set)
 	if err != nil {
 		return 0, fmt.Errorf("first message: %w", err)
 	}
-	ib, err := b.Verify(chainID, set)
+	ib, err := b.VerifyAs(Stored, chainID, set)
 	if err != nil {
 		return 0, fmt.Errorf("second message: %w", err)
 	}

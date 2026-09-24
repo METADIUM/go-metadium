@@ -99,29 +99,35 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 | ID | Item | Design | Status |
 |----|------|--------|--------|
-| P3-01 | `core.go` states NEW_ROUND → PRE_PREPARED → PREPARED → COMMITTED | §4.4 | [ ] |
-| P3-02 | Every signed message written to the WAL before it is sent | §4.4, §6.1 | [ ] |
-| P3-03 | PRE-PREPARE checklist wired through the backend interface | §4.8 | [ ] |
-| P3-04 | Round change: timeout, invalid proposal, `f+1` amplification | §4.5 | [ ] |
-| P3-05 | Lock and re-proposal of the highest `preparedRound` block, header byte-identical | §4.5 | [ ] |
-| P3-06 | ROUND_CHANGE certificate attached to and checked on re-proposals | §4.5, §4.8 #2 | [ ] |
-| P3-07 | `timer.go`: `deadline(n,0) = committedAt(n-1) + EmptyBlockInterval + BftBaseTimeout`, backoff for `r >= 1`, `committedAt` = "became head" | §4.5 | [ ] |
-| P3-08 | Restart: never sign a different digest at or below the last WAL record | §6.1 | [ ] |
-| P3-09 | Observer mode exits after one height commits past the local head | §6.1 | [ ] |
-| P3-11 | WAL created during bootstrap (`head + 1 < bftBlock`); a missing WAL means observer mode only when `head + 1 >= bftBlock`, so the switch cannot deadlock | §6.1 | [ ] |
-| P3-10 | Simulator with injected backend, clock and WAL | §6 | [ ] |
+| P3-01 | `core.go`: single-threaded, event-driven core (`NewHeight`, `HandleMessage`, `Propose`, `Tick`, `Deadline`) | §4.4 | [x] |
+| P3-02 | Every signed message (PRE-PREPARE included) written to the WAL before it is sent; lock recorded on PREPARED | §4.4, §6.1 | [x] |
+| P3-03 | PRE-PREPARE checks: proposer, digest, height, justification in the core; chain-side checks via `Backend.VerifyProposal` | §4.8 | [x] |
+| P3-04 | Round change: timeout, invalid proposal, `f+1` amplification to the highest round f+1 validators reached | §4.5 | [x] |
+| P3-05 | Re-proposal of the highest prepared block (QBFT rule), byte-identical | §4.5 | [x] |
+| P3-06 | Round-change quorum and PREPARE quorum attached to round > 0 proposals and checked (`justify`); prepared claims need their evidence | §4.5, §4.8 #2 | [x] |
+| P3-07 | `timer.go`: `deadline(n,0) = committedAt(n-1) + EmptyBlockInterval + BftBaseTimeout`, backoff for `r >= 1`, `committedAt` = "became head" | §4.5 | [x] |
+| P3-08 | Restart: resume at the WAL's highest round, restore the lock, never re-propose in a round already proposed in | §6.1 | [x] |
+| P3-09 | Observer mode exits after one height commits past the local head | §6.1 | [x] |
+| P3-11 | `OpenNodeWAL`: WAL created during bootstrap (`head + 1 < bftBlock`); missing later or corrupt → observer until head+1 commits (calling it at startup is P5) | §6.1 | [x] |
+| P3-12 | `Message.ExtraHash` signed; a message received directly must carry exactly the `Extra` it names, a quoted one none, a non-ROUND-CHANGE never — so a relay cannot alter or strip an attachment and still pass `Verify` (review on #148) | §7.1 | [x] |
+| P3-13 | One `RequestProposal` per round; timeouts saturate instead of wrapping; PRE-PREPAREs/PREPAREs/COMMITs kept only up to 64 rounds ahead, while ROUND-CHANGEs beyond that still count for f+1 amplification (latest per sender held, replayed on arrival); WAL pruned every 16 heights (review on #148) | §4.5, §6.1 | [x] |
+| P3-S10 | f+1 validators down for 90 minutes; the others climb past the round window; the returning ones rejoin in one amplification step (a validator 100 rounds behind moves in one step) | [x] |
+| P3-10 | Simulator with injected backend, clock and WAL (`sim_test.go`) | §6 | [x] |
 
 **Simulation runs** (N = 4, 7, 10)
 
 | ID | Scenario | Status |
 |----|----------|--------|
-| P3-S1 | Message delay and loss | [ ] |
-| P3-S2 | Byzantine proposer: equivocation, invalid block, silence | [ ] |
-| P3-S3 | Byzantine voter: votes for two digests | [ ] |
-| P3-S4 | Crash and restart at every step (after PREPARE, after lock, after COMMIT) | [ ] |
-| P3-S5 | Proposer `Time` pushed into the past / future | [ ] |
-| P3-S6 | 100ms proposals under load, 5s idle: zero round changes in normal operation | [ ] |
-| P3-S7 | Safety invariant checked every step: no two commits at one height | [ ] |
+| P3-S1 | Message delay (≤300ms) and 5% loss, N=4/7/10 × 8 seeds | [x] |
+| P3-S2 | Byzantine proposer: equivocation, invalid block, silence | [x] |
+| P3-S3 | Byzantine voters (f) vote for both blocks of an equivocation, N=4/7/10 × 10 seeds | [x] |
+| P3-S4 | Random crashes/restarts with and without the WAL; all validators at once; targeted amnesia after a partial commit | [x] |
+| P3-S5 | Proposer `Time` pushed into the past / future | N/A in P3 — no timer takes header time as input by construction; the header bounds are P5-03/P5-06, scenario S-14 |
+| P3-S6 | 100ms proposals and 5s idle waits: zero round changes | [x] |
+| P3-S7 | Safety invariant checked on every commit of every node; seals checked to prove the decision | [x] |
+| P3-S8 | COMMITs withheld from all but one node (sync off), and 30% COMMIT loss: the prepared block is re-proposed and decided again | [x] |
+| P3-S9 | Liars (f): per peer, truthful / hides its prepared block / offers an older genuine one / invents one without evidence; as proposer, re-proposes its oldest prepared block. PREPARE and COMMIT loss for 20 minutes, then none | [x] |
+| P3-M | Mutation checks: re-proposal off → fork (P3-S8); WAL off → fork (amnesia); prepared claims accepted without evidence → crash (P3-S9); `justify` taking the lowest prepared round → stall (P3-S9) | [x] |
 
 ---
 

@@ -28,7 +28,7 @@ import (
 type RecordKind uint8
 
 const (
-	RecordVote RecordKind = 1 // a PREPARE, COMMIT or ROUND-CHANGE about to be sent
+	RecordVote RecordKind = 1 // a signed message about to be sent: PRE-PREPARE, PREPARE, COMMIT or ROUND-CHANGE
 	RecordLock RecordKind = 2 // entered PREPARED
 )
 
@@ -213,11 +213,13 @@ func (w *WAL) RecordVote(height, round uint64, typ MsgType, digest common.Hash) 
 	defer w.mu.Unlock()
 
 	switch typ {
-	case MsgPrepare, MsgCommit:
+	// A proposer records its PRE-PREPARE too: after a restart it must not
+	// propose a different block in a round it already proposed in.
+	case MsgPreprepare, MsgPrepare, MsgCommit:
 	case MsgRoundChange:
 		return fmt.Errorf("%w: record a ROUND-CHANGE with RecordRoundChange", errUnknownMsgType)
 	default:
-		return fmt.Errorf("%w: %v is not a vote", errUnknownMsgType, typ)
+		return fmt.Errorf("%w: %v", errUnknownMsgType, typ)
 	}
 	return w.recordVote(&Record{Kind: RecordVote, Height: height, Round: round, Type: typ, Digest: digest})
 }
@@ -286,6 +288,15 @@ func (w *WAL) Vote(height, round uint64, typ MsgType) (common.Hash, bool) {
 	defer w.mu.Unlock()
 	d, ok := w.state.votes[voteKey{height, round, typ}]
 	return d.digest, ok
+}
+
+// MaxRound returns the highest round this node signed anything in at height.
+// After a restart the node resumes there rather than at round 0.
+func (w *WAL) MaxRound(height uint64) (uint64, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	r, ok := w.state.maxRound[height]
+	return r, ok
 }
 
 // Prune drops every record at or below committed. It rewrites the file
@@ -389,7 +400,7 @@ func (s *VoteState) apply(r Record) {
 	switch r.Kind {
 	case RecordVote:
 		s.votes[voteKey{r.Height, r.Round, r.Type}] = recordedVote{r.Digest, r.Content}
-		if r.Round > s.maxRound[r.Height] {
+		if cur, ok := s.maxRound[r.Height]; !ok || r.Round > cur {
 			s.maxRound[r.Height] = r.Round
 		}
 	case RecordLock:
