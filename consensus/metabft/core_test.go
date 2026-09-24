@@ -342,3 +342,38 @@ func TestNestedExtraRejected(t *testing.T) {
 		t.Errorf("PREPARE with an ExtraHash: %v", err)
 	}
 }
+
+// TestRejoinFarBehind: a validator resuming far behind the others' round —
+// after a long outage the rest kept timing out without a quorum — must still
+// be pulled forward by f+1 ROUND-CHANGEs in one step (design §4.5), however
+// far ahead they are (review on #148).
+func TestRejoinFarBehind(t *testing.T) {
+	net := newTestNet(t, 4) // f = 1: two validators ahead pull a third
+	c, _ := newStubCore(t, net, 0)
+	c.NewHeight(10, 0)
+	const ahead = 100
+	for _, i := range []int{1, 2} {
+		must(t, c.HandleMessage(net.roundChange(t, i, 10, ahead, nil, 0), time.Second))
+	}
+	if c.Round() != ahead {
+		t.Fatalf("round %d after f+1 ROUND-CHANGEs for round %d, want %d", c.Round(), ahead, ahead)
+	}
+	// The held ROUND-CHANGEs were applied at round 100, so its proposer has a
+	// quorum there without anyone re-sending: 2 held + its own.
+	if got := len(c.rcs[ahead]); got != 3 {
+		t.Errorf("%d ROUND-CHANGEs for round %d stored, want 3", got, ahead)
+	}
+	// A far ROUND-CHANGE from a non-validator does not count.
+	stranger := newTestNet(t, 1)
+	rc := &Message{Type: MsgRoundChange, Height: 10, Round: 1000, ChainID: testChainID, Payload: encodePayload(&roundChangeClaim{})}
+	must(t, rc.Sign(stranger.keys[0]))
+	if err := c.HandleMessage(rc, time.Second); err == nil {
+		t.Error("a far ROUND-CHANGE from a non-validator was accepted")
+	}
+	// Far-ahead PREPAREs and COMMITs are still not kept per round.
+	far := net.signed(t, 3, MsgPrepare, 10, c.Round()+maxRoundsAhead+1, common.HexToHash("0x1"))
+	must(t, c.HandleMessage(far, time.Second))
+	if len(c.prepares[far.Round]) != 0 {
+		t.Error("a PREPARE beyond the round window was stored")
+	}
+}

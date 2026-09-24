@@ -74,6 +74,7 @@ type Core struct {
 	rcs            map[uint64]map[int]*Message
 	rcEvidence     map[uint64]map[int]Proposal // prepared block attached to an RC
 	rcRound        map[int]uint64              // highest RC round seen per sender
+	farRC          map[int]*Message            // latest ROUND-CHANGE per sender beyond the round window
 	prepared       *preparedState              // the highest round this node prepared in
 
 	future []*Message // messages for height+1
@@ -90,9 +91,11 @@ const (
 	// maxFuture bounds buffered next-height messages.
 	maxFuture = 4096
 
-	// maxRoundsAhead bounds how far past the current round messages are kept,
-	// so one validator cannot grow a map per round for the whole height.
-	// f+1 amplification needs only a round other validators actually reached.
+	// maxRoundsAhead bounds how far past the current round PRE-PREPAREs,
+	// PREPAREs and COMMITs are kept, so one validator cannot grow a map per
+	// round for the whole height. ROUND-CHANGEs beyond it still count for f+1
+	// amplification (see HandleMessage): a validator back from a long outage
+	// can be any number of rounds behind.
 	maxRoundsAhead = 64
 
 	// walPruneEvery prunes the WAL every this many heights rather than on
@@ -146,6 +149,7 @@ func (c *Core) NewHeight(height uint64, now time.Duration) {
 	c.rcs = make(map[uint64]map[int]*Message)
 	c.rcEvidence = make(map[uint64]map[int]Proposal)
 	c.rcRound = make(map[int]uint64)
+	c.farRC = make(map[int]*Message)
 	c.prepared = nil
 
 	if c.observerUntil > 0 && height > c.observerUntil {
@@ -231,6 +235,7 @@ func (c *Core) moveToRound(round uint64, now time.Duration) {
 	if c.canSign() && !c.sentRC[round] {
 		c.sendRoundChange(round)
 	}
+	c.replayFarRoundChanges(now)
 	c.proposeIfProposer()
 }
 
@@ -411,7 +416,7 @@ func (c *Core) HandleMessage(m *Message, now time.Duration) error {
 		return nil
 	}
 	if m.Round > c.round+maxRoundsAhead {
-		return nil
+		return c.handleFarRoundChange(m, now)
 	}
 	idx, err := m.Verify(c.backend.ChainID(), c.set)
 	if err != nil {
@@ -678,25 +683,64 @@ func (c *Core) handleRoundChange(m *Message, idx int, now time.Duration) error {
 		prepared = &preparedState{round: claim.PreparedRound, proposal: block, cert: extra.Prepares}
 	}
 	c.storeRoundChange(m, idx, prepared)
-
-	// f+1 validators past this round include an honest one: follow them to
-	// the highest round that f+1 of them have reached.
 	if m.Round > c.round {
-		var ahead []uint64
-		for _, r := range c.rcRound {
-			if r > c.round {
-				ahead = append(ahead, r)
-			}
-		}
-		if len(ahead) >= c.set.F()+1 {
-			sort.Slice(ahead, func(i, j int) bool { return ahead[i] > ahead[j] })
-			c.moveToRound(ahead[c.set.F()], now)
-		}
+		c.amplify(now)
 	}
 	if m.Round == c.round {
 		c.proposeIfProposer()
 	}
 	return nil
+}
+
+// handleFarRoundChange keeps a ROUND-CHANGE beyond the round window: only its
+// round counts toward amplification, and only the latest one per sender is
+// held, until this node reaches that round. PRE-PREPAREs, PREPAREs and
+// COMMITs that far ahead are dropped (maxRoundsAhead).
+func (c *Core) handleFarRoundChange(m *Message, now time.Duration) error {
+	if m.Type != MsgRoundChange || c.decided {
+		return nil
+	}
+	idx, err := m.Verify(c.backend.ChainID(), c.set)
+	if err != nil || idx == c.selfIdx {
+		return err
+	}
+	if m.Round <= c.rcRound[idx] {
+		return nil
+	}
+	c.rcRound[idx] = m.Round
+	c.farRC[idx] = m
+	c.amplify(now)
+	return nil
+}
+
+// amplify follows f+1 validators past this round — at least one of them is
+// honest — to the highest round that f+1 of them have reached.
+func (c *Core) amplify(now time.Duration) {
+	var ahead []uint64
+	for _, r := range c.rcRound {
+		if r > c.round {
+			ahead = append(ahead, r)
+		}
+	}
+	if len(ahead) >= c.set.F()+1 {
+		sort.Slice(ahead, func(i, j int) bool { return ahead[i] > ahead[j] })
+		c.moveToRound(ahead[c.set.F()], now)
+	}
+}
+
+// replayFarRoundChanges applies the held far ROUND-CHANGEs that are now for
+// the current round, with full validation, so its proposer can assemble a
+// quorum without waiting for them to be sent again.
+func (c *Core) replayFarRoundChanges(now time.Duration) {
+	for _, i := range sortedKeys(c.farRC) {
+		m := c.farRC[i]
+		if m.Round <= c.round+maxRoundsAhead {
+			delete(c.farRC, i)
+			if m.Round >= c.round {
+				c.handleRoundChange(m, i, now)
+			}
+		}
+	}
 }
 
 func (c *Core) storeRoundChange(m *Message, idx int, prepared *preparedState) {

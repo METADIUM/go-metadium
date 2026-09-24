@@ -101,7 +101,8 @@ start before it if the schedule needs them.
 | P3-09 | Observer mode exits after one height commits past the local head | §6.1 | [x] |
 | P3-11 | `OpenNodeWAL`: WAL created during bootstrap (`head + 1 < bftBlock`); missing later or corrupt → observer until head+1 commits (calling it at startup is P5) | §6.1 | [x] |
 | P3-12 | `Message.ExtraHash` signed; a message received directly must carry exactly the `Extra` it names, a quoted one none, a non-ROUND-CHANGE never — so a relay cannot alter or strip an attachment and still pass `Verify` (review on #148) | §7.1 | [x] |
-| P3-13 | One `RequestProposal` per round; timeouts saturate instead of wrapping; messages kept only up to 64 rounds ahead; WAL pruned every 16 heights (review on #148) | §4.5, §6.1 | [x] |
+| P3-13 | One `RequestProposal` per round; timeouts saturate instead of wrapping; PRE-PREPAREs/PREPAREs/COMMITs kept only up to 64 rounds ahead, while ROUND-CHANGEs beyond that still count for f+1 amplification (latest per sender held, replayed on arrival); WAL pruned every 16 heights (review on #148) | §4.5, §6.1 | [x] |
+| P3-S10 | f+1 validators down for 90 minutes; the others climb past the round window; the returning ones rejoin in one amplification step (a validator 100 rounds behind moves in one step) | [x] |
 | P3-10 | Simulator with injected backend, clock and WAL (`sim_test.go`) | §6 | [x] |
 
 **Simulation runs** (N = 4, 7, 10)
