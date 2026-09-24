@@ -273,6 +273,7 @@ func nodeKey2Id(ctx *cli.Context) error {
 }
 
 type genesisConfig struct {
+	ChainID     *big.Int       `json:"chainId"` // overrides the template's config.chainId when set
 	ExtraData   string         `json:"extraData"`
 	RewardPool  common.Address `json:"pool"`
 	Maintenance common.Address `json:"maintenance"`
@@ -376,6 +377,12 @@ func genGenesis(ctx *cli.Context) error {
 			bootnode = i.Id
 			break
 		}
+	}
+
+	if warn, err := applyGenesisChainID(genesis, config.ChainID); err != nil {
+		return err
+	} else if warn != "" {
+		log.Warn(warn)
 	}
 
 	genesis["coinbase"] = bootacct
