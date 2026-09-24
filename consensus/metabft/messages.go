@@ -51,6 +51,13 @@ type Message struct {
 	Payload    []byte // PRE-PREPARE: block RLP + RC certificate; ROUND-CHANGE: certificate
 	CommitSeal []byte // COMMIT only
 	Signature  []byte
+
+	// Extra travels with the message but is not signed. It may only carry
+	// data that verifies itself: a ROUND-CHANGE attaches its prepared block
+	// (checked against Digest) and PREPARE quorum (signed messages). Keeping
+	// it out of the signature lets a proposer quote round changes in its
+	// justification without their blocks.
+	Extra []byte
 }
 
 // signedFields is everything the message signature covers.
