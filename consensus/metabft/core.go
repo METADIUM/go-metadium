@@ -350,12 +350,12 @@ func (c *Core) sendRoundChange(round uint64) {
 		claim.Prepared, claim.PreparedRound, digest = true, p.round, p.proposal.Hash()
 		extra = encodePayload(&roundChangeExtra{Block: data, Prepares: p.cert})
 	}
-	if err := c.wal.RecordVote(c.height, round, MsgRoundChange, digest); err != nil {
+	m := &Message{Type: MsgRoundChange, Height: c.height, Round: round, ChainID: c.backend.ChainID(), Digest: digest,
+		Payload: encodePayload(claim), Extra: extra}
+	if err := c.wal.RecordRoundChange(m); err != nil {
 		c.log.Error("WAL refused ROUND-CHANGE", "height", c.height, "round", round, "err", err)
 		return
 	}
-	m := &Message{Type: MsgRoundChange, Height: c.height, Round: round, ChainID: c.backend.ChainID(), Digest: digest,
-		Payload: encodePayload(claim), Extra: extra}
 	if !c.sign(m) {
 		return
 	}

@@ -69,7 +69,7 @@ start before it if the schedule needs them.
 | P2-02 | `messages.go`: `Message` RLP, signing, `ecrecover` → validator index, chain ID check, low-s only | §4.6 | [x] |
 | P2-03 | `commitDigest = keccak256(rlp([BlockHash, Round, ChainID, 0x02]))`; a COMMIT's seal must be by its signer | §4.6 | [x] |
 | P2-04 | `wal.go`: append-only framed file (length + CRC-32C), fsync before return (path chosen in P5) | §6.1 | [x] |
-| P2-05 | WAL records: `(height, round, type, digest)` per vote; lock `(preparedRound, digest, certificate, block RLP)`; refuses conflicting and past-round votes | §6.1 | [x] |
+| P2-05 | WAL records: `(height, round, type, digest)` per vote, ROUND-CHANGE by its full signed content; lock `(preparedRound, digest, certificate, block RLP)`; refuses conflicting and past-round votes and locks that contradict a recorded vote | §6.1 | [x] |
 | P2-06 | WAL pruning (atomic rewrite + rename); calling it on commit is P3 | §6.1 | [x] |
 | P2-07 | `ErrWALMissing` / `ErrWALCorrupt` for the caller; an incomplete final frame (crash mid-append, never sent) is truncated instead | §6.1 | [x] |
 | P2-08 | `evidence.go`: verify, store both signed messages (one file per pair, order-independent), survive restart | §7.1 | [x] |
