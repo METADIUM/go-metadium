@@ -88,12 +88,15 @@ type signedFields struct {
 	ExtraHash  common.Hash
 }
 
+// ErrUnknownSigner means a message verified but its signer is not in the
+// validator set; a peer relaying it across a set change is not at fault.
+var ErrUnknownSigner = errors.New("signer is not a validator")
+
 var (
 	errUnknownMsgType   = errors.New("unknown message type")
 	errUnexpectedSeal   = errors.New("commit seal on a non-COMMIT message")
 	errMissingSeal      = errors.New("COMMIT without a commit seal")
 	errWrongChainID     = errors.New("message for another chain")
-	errUnknownSigner    = errors.New("signer is not a validator")
 	errBadSignature     = errors.New("invalid signature")
 	errNonCanonicalSig  = errors.New("non-canonical signature (high s)")
 	errSealWrongSigner  = errors.New("commit seal is not by the message signer")
@@ -200,7 +203,7 @@ func (m *Message) VerifyAs(mode VerifyMode, chainID uint64, set *ValidatorSet) (
 	}
 	idx, ok := set.IndexOf(signer)
 	if !ok {
-		return 0, errUnknownSigner
+		return 0, ErrUnknownSigner
 	}
 	if m.Type == MsgCommit {
 		sealer, err := RecoverSealSigner(CommitDigest(m.Digest, m.Round, m.ChainID), m.CommitSeal)
