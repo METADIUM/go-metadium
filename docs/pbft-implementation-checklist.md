@@ -44,20 +44,22 @@ start before it if the schedule needs them.
 
 | ID | Item | Design | Status |
 |----|------|--------|--------|
-| P1-01 | `BftRound`, `CommitSeals` in `Header` and at the end of `headerRlp` (after `BlobGasUsed`) | §5.1 | [ ] |
-| P1-02 | `headerToHeaderRlp` / `headerRlpToHeader` carry both fields (`block.go:187, 216`) | §5.1 | [ ] |
-| P1-03 | `Hash()` excludes `BftRound`/`CommitSeals` (`BlockHash`) | §5.2 | [ ] |
-| P1-04 | `CopyHeader` deep-copies `CommitSeals` | §5.2 | [ ] |
-| P1-05 | JSON exposure in `internal/ethapi/api.go:1383` and `gen_header_json.go` | §12 | [ ] |
+| P1-01 | `BftRound`, `CommitSeals` in `Header`, and in `headerRlp` between `BlobGasUsed` and `ParentBeaconRoot` (never filled, stays the omitted tail) | §5.1 | [x] |
+| P1-02 | `headerToHeaderRlp` / `headerRlpToHeader` carry both fields | §5.1 | [x] |
+| P1-03 | `Hash()` excludes `BftRound`/`CommitSeals` (`BlockHash`) | §5.2 | [x] |
+| P1-04 | `CopyHeader` deep-copies `CommitSeals`; `Size` counts them; `SanityCheck` bounds count (`MaxCommitSeals`) and length (`CommitSealLength`) | §5.2 | [x] |
+| P1-05 | JSON (`gen_header_json.go`, regenerated, `omitempty`) and RPC (`RPCMarshalHeader`, PBFT blocks only) | §12 | [x] |
 
 **Tests**
 
 | ID | Test | Status |
 |----|------|--------|
-| P1-T1 | RLP round trip with and without the new fields | [ ] |
-| P1-T2 | Pre-fork header hash is unchanged by this change (fixed vectors from existing blocks) | [ ] |
-| P1-T3 | Same header with different seal sets → same `BlockHash` | [ ] |
-| P1-T4 | "round 0 + no seals" encodes identically to a pre-fork header | [ ] |
+| P1-T1 | RLP round trip with and without the new fields | [x] |
+| P1-T2 | Header hashes unchanged by this change: pre-London, London and Camellia vectors computed in PoA mode on the tree before it (encodings matched byte for byte) | [x] |
+| P1-T3 | Same header with different seal sets and rounds → same `BlockHash`; `Rewards`/`MinerNodeId`/`MinerNodeSig`/`Coinbase`/`Time` still change it | [x] |
+| P1-T4 | "round 0 + no seals" encodes identically to a pre-fork header | [x] |
+| P1-T5 | Without the Camellia fields, a PBFT header does not round-trip (why `IsBft ⇒ IsCamellia`) | [x] |
+| P1-T6 | Non-PBFT JSON and RPC output unchanged; PBFT fields round-trip through JSON | [x] |
 
 ---
 
