@@ -56,8 +56,11 @@ Code references are against `release/v1.1.4` (`e804c8fe4`, merged into master as
 1. **The header is already non-standard.** `Header` already carries `Fees`, `Rewards`, `MinerNodeId`
    and `MinerNodeSig` (`core/types/block.go:66`), and RLP goes through
    `headerRlp` (`core/types/block.go:104`, encoding at `:309`). Adding commit-seal fields
-   **follows existing precedent**. Note that the last field of `headerRlp` is `BlobGasUsed`;
-   `Header.ParentBeaconRoot` is **not in `headerRlp`, so it is neither sent nor hashed** (it is always nil on the PoA path).
+   **follows existing precedent**. Note that `headerRlp` declares `ParentBeaconRoot` as its last field,
+   but `headerToHeaderRlp` **never fills it**, so it is always the omitted tail: neither sent nor hashed
+   (it is also always nil on the PoA path).
+   Also note that `Hash()` and `EncodeRLP()` only take the `headerRlp` path in PoA mode; under
+   `ConsensusPoW` (the package default in unit tests) they use `HeaderLegacy`, which ignores the Metadium fields.
 2. **`SealHash` covers less than the block hash.** `SealHash`
    (`consensus/ethash/consensus.go:664`) **excludes** `Rewards`/`MinerNodeId`/`MinerNodeSig`/
    `MixDigest`/`Nonce`, but the block hash (`headerRlp`) includes all of them.
@@ -304,18 +307,23 @@ All of these must pass before sending PREPARE.
 ### 5.1 New fields
 
 ```go
-// core/types/block.go — in both Header and headerRlp, right after headerRlp's BlobGasUsed (at the very end)
+// core/types/block.go — in Header, and in headerRlp between BlobGasUsed and ParentBeaconRoot
     // BFT fork: committed round and 2f+1 commit seals. Excluded from BlockHash.
-    BftRound    uint64   `json:"bftRound"    rlp:"optional"`
-    CommitSeals [][]byte `json:"commitSeals" rlp:"optional"`
+    BftRound    uint64   `json:"bftRound,omitempty"    rlp:"optional"`
+    CommitSeals [][]byte `json:"commitSeals,omitempty" rlp:"optional"`
 ```
 
-- `rlp:"optional"` fields can be omitted **only at the tail**, so both fields go at the very end of `headerRlp`.
+- `rlp:"optional"` fields can be omitted **only at the tail**. In `headerRlp` the fields go **before
+  `ParentBeaconRoot`**, not after it: that field is never filled, so it stays the omitted tail. After it,
+  a set `CommitSeals` would force the nil `*common.Hash` to be encoded as an empty string, which does not
+  decode back into a 32-byte hash. With both PBFT fields at their zero value they are omitted as well,
+  so non-PBFT encodings stay byte-identical.
   Add them to the `headerToHeaderRlp` / `headerRlpToHeader` conversions too (`block.go:187, 216`).
+- JSON uses `omitempty`, so non-PBFT headers keep their JSON and RPC output unchanged.
 - When a later optional field is set, earlier nil optional fields are encoded as zero and decode as zero,
   not nil (`BaseFee` nil ↔ 0 changes meaning). The chain-config check therefore requires
   **`IsBft` implies `IsCamellia`** — headers after Camellia have every earlier optional field set.
-- PBFT blocks must have `ParentBeaconRoot == nil` (a field missing from `headerRlp`, so it is never sent).
+- PBFT blocks must have `ParentBeaconRoot == nil` (`headerToHeaderRlp` never fills it, so it is never sent).
 
 ### 5.2 `BlockHash` — one hash for the block and for signing
 
@@ -834,7 +842,7 @@ At the same size PBFT is less available than raft: it gives up some availability
 | Phase | Content | Deliverable / check |
 |---|---|---|
 | **P0** | genesis `bftBlock`/`bft`, `IsBft()`, `camelliaBlock <= bftBlock` check, flag consistency check, chain-ID `init` check, `genesis-template.json` placeholder | `params` unit tests, `init` rejection tests |
-| **P1** | header fields (end of `headerRlp`) + `BlockHash` exclusion rule + no seals pre-fork + RLP round trip | `core/types` round-trip tests, pre/post-fork hash stability tests, **test rejecting a pre-fork block with arbitrary seals** |
+| **P1** | header fields (`headerRlp`, before `ParentBeaconRoot`) + `BlockHash` exclusion rule + no seals pre-fork + RLP round trip | `core/types` round-trip tests, pre/post-fork hash stability tests, **test rejecting a pre-fork block with arbitrary seals** |
 | **P2** | `consensus/metabft` validator set / proposer / quorum / message signing / WAL / evidence storage | pure unit tests (no chain), WAL crash-point injection tests |
 | **P3** | state machine `core.go` + round change + byte-identical re-proposal, with mocked backend, clock and WAL | **deterministic simulation**: N=4/7/10, injecting delay, loss, Byzantine behaviour, **crash-restart and clock manipulation** |
 | **P4** | `metabft/1` P2P sub-protocol + dedup and equivocation detection | two-node message round trip, forged-signature rejection, equivocation evidence |
@@ -994,7 +1002,7 @@ The design body (§3–§12) holds whichever branch is chosen.
 | rev.2 | scope changed to new private networks, option B (PoA bootstrap → switch), chain ID scheme, block timing |
 | rev.3 | validator count and availability (§9.6) |
 | rev.4 | first review round (below) |
-| rev.5 | PR #143 review: `committedAt` defined as "became head" (§4.5, §9.2), why observer mode waits exactly one height (§6.1), requirement-driven decision criteria for the alternatives (§13). §8.2 corrected during P0: PBFT networks keep `--consensusmethod 2` |
+| rev.5 | PR #143 review: `committedAt` defined as "became head" (§4.5, §9.2), why observer mode waits exactly one height (§6.1), requirement-driven decision criteria for the alternatives (§13). §8.2 corrected during P0: PBFT networks keep `--consensusmethod 2`. §2/§5.1 corrected during P1: `headerRlp` declares `ParentBeaconRoot` (never filled), and the PBFT fields go before it |
 
 **rev.4 review changes**
 
@@ -1003,7 +1011,7 @@ The design body (§3–§12) holds whichever branch is chosen.
 | 1 | the deadline depended on the proposer-chosen, seconds-resolution `parent.Time` → round-change storms under load, timestamp manipulation | timers moved to the local monotonic clock, `Time >= parent.Time` + PRE-PREPARE bound check, resolution kept in seconds (§4.5). A strict `>` was not adopted because it conflicts with the 100ms profile |
 | 2 | no persistence of the PREPARED lock → double voting after restart | WAL, restart and observer-mode rules, no same node key on two servers (§6.1) |
 | 3 | the dedup cache silently dropped equivocations → contradicted the §12 mitigation | keep the digest as the cache value; a different digest is stored as evidence with an alarm. Signature check before the cache lookup (§7.1) |
-| 4 | seals attached to a pre-fork block left its hash unchanged | pre-fork `CommitSeals == nil && BftRound == 0` enforced, fields at the end of `headerRlp`, `IsBft ⇒ IsCamellia` (§5.1–5.3) |
+| 4 | seals attached to a pre-fork block left its hash unchanged | pre-fork `CommitSeals == nil && BftRound == 0` enforced, fields at the optional tail of `headerRlp`, `IsBft ⇒ IsCamellia` (§5.1–5.3) |
 | 5 | no rule for N < 4 after the switch | a block leaving N < 4 after execution is invalid — **reject** chosen over the suggested halt, because a halt has no recovery path (§9.3.1) |
 | 6 | the `MinerNodeSig` check contradicted the re-proposal rule, `BftRound` was ambiguous | `BftRound` = committed round, re-proposed header unchanged, `MinerNodeSig` only checked for validator membership (§4.5, §5.3) |
 | 7 | code-reference line numbers off | §2 table and body corrected. `etcdutil.go:989` kept since it is the `acquireTokenSync` declaration (CAS at 1024 added) |
