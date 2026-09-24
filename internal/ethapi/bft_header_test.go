@@ -18,6 +18,12 @@ func TestRPCMarshalHeaderBftFields(t *testing.T) {
 		t.Error("a non-PBFT header gained commitSeals")
 	}
 
+	h.CommitSeals = [][]byte{} // an explicitly encoded empty list decodes like this
+	out = RPCMarshalHeader(h)
+	if _, ok := out["commitSeals"]; ok {
+		t.Error("an empty seal list gained commitSeals")
+	}
+
 	h.BftRound = 2
 	h.CommitSeals = [][]byte{make([]byte, types.CommitSealLength), make([]byte, types.CommitSealLength)}
 	out = RPCMarshalHeader(h)

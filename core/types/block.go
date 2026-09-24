@@ -324,6 +324,8 @@ func (h *Header) Hash() common.Hash {
 		// BlockHash (docs/pbft-consensus-design.md §5.2): the PBFT fields are
 		// the only ones left out. With both at their zero value the optional
 		// tail is omitted, so this equals the encoding without the fields.
+		// The check is != nil, not len > 0: an empty but non-nil slice (an
+		// explicitly encoded empty list) must not change the hash either.
 		cpy := *h
 		cpy.BftRound, cpy.CommitSeals = 0, nil
 		return rlpHash(&cpy)
