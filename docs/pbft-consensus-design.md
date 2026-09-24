@@ -629,9 +629,12 @@ In `params/config.go`, add `BftBlock *big.Int`, `Bft *BftConfig`, `IsBft(num)`, 
 --bft.requestsyncinterval <sec, default 10>  # per-node operational value
 ```
 
-`--consensusmethod` is not used to select PBFT. If `4` (PBFT) is given without `bftBlock` in the genesis,
-or `bftBlock` is set and a different value is given explicitly, startup fails with `Fatalf`
-(added to the check at `cmd/utils/flags.go:2084`).
+**`--consensusmethod` stays `2` (PoA) on PBFT networks.** It selects the Metadium engine family:
+engine creation (`eth/ethconfig/config.go:187`) and the Metadium admin (`metadium/admin.go:1291`) both key
+on `ConsensusPoA`, and the PoA bootstrap segment (§9) needs exactly that path. Switching to BFT inside the
+family is decided by `bftBlock`, not by the flag. So the CLI keeps rejecting `3` and `4`
+(`cmd/utils/flags.go:2084`, unchanged), and a node whose chain config sets `bftBlock` refuses to start
+unless it runs with `ConsensusPoA`.
 
 ---
 
@@ -991,7 +994,7 @@ The design body (§3–§12) holds whichever branch is chosen.
 | rev.2 | scope changed to new private networks, option B (PoA bootstrap → switch), chain ID scheme, block timing |
 | rev.3 | validator count and availability (§9.6) |
 | rev.4 | first review round (below) |
-| rev.5 | PR #143 review: `committedAt` defined as "became head" (§4.5, §9.2), why observer mode waits exactly one height (§6.1), requirement-driven decision criteria for the alternatives (§13) |
+| rev.5 | PR #143 review: `committedAt` defined as "became head" (§4.5, §9.2), why observer mode waits exactly one height (§6.1), requirement-driven decision criteria for the alternatives (§13). §8.2 corrected during P0: PBFT networks keep `--consensusmethod 2` |
 
 **rev.4 review changes**
 
