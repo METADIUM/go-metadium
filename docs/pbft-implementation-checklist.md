@@ -49,20 +49,24 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 | ID | Item | Design | Status |
 |----|------|--------|--------|
-| P1-01 | `BftRound`, `CommitSeals` in `Header` and at the end of `headerRlp` (after `BlobGasUsed`) | §5.1 | [ ] |
-| P1-02 | `headerToHeaderRlp` / `headerRlpToHeader` carry both fields (`block.go:187, 216`) | §5.1 | [ ] |
-| P1-03 | `Hash()` excludes `BftRound`/`CommitSeals` (`BlockHash`) | §5.2 | [ ] |
-| P1-04 | `CopyHeader` deep-copies `CommitSeals` | §5.2 | [ ] |
-| P1-05 | JSON exposure in `internal/ethapi/api.go:1383` and `gen_header_json.go` | §12 | [ ] |
+| P1-01 | `BftRound`, `CommitSeals` in `Header`, and in `headerRlp` between `BlobGasUsed` and `ParentBeaconRoot` (never filled, stays the omitted tail) | §5.1 | [x] |
+| P1-02 | `headerToHeaderRlp` / `headerRlpToHeader` carry both fields | §5.1 | [x] |
+| P1-03 | `Hash()` excludes `BftRound`/`CommitSeals` (`BlockHash`) | §5.2 | [x] |
+| P1-04 | `CopyHeader` deep-copies `CommitSeals`; `Size` counts them; `SanityCheck` bounds count (`MaxCommitSeals`) and length (`CommitSealLength`) | §5.2 | [x] |
+| P1-05 | JSON (`gen_header_json.go`, regenerated, `omitempty`) and RPC (`RPCMarshalHeader`, only when seals are non-empty) | §12 | [x] |
+| P1-06 | PoA `verifyHeader` rejects any header carrying the PBFT fields (`verifyNoPbftFields`), so a node accepts exactly what the current release accepts; needs no chain config because this engine only verifies non-PBFT heights (moved back from P5-02, review on #146) | §5.2, §5.3 | [x] |
 
 **Tests**
 
 | ID | Test | Status |
 |----|------|--------|
-| P1-T1 | RLP round trip with and without the new fields | [ ] |
-| P1-T2 | Pre-fork header hash is unchanged by this change (fixed vectors from existing blocks) | [ ] |
-| P1-T3 | Same header with different seal sets → same `BlockHash` | [ ] |
-| P1-T4 | "round 0 + no seals" encodes identically to a pre-fork header | [ ] |
+| P1-T1 | RLP round trip with and without the new fields | [x] |
+| P1-T2 | Header hashes unchanged by this change: pre-London, London and Camellia vectors computed in PoA mode on the tree before it (encodings matched byte for byte) | [x] |
+| P1-T3 | Same header with different seal sets and rounds → same `BlockHash`; `Rewards`/`MinerNodeId`/`MinerNodeSig`/`Coinbase`/`Time` still change it | [x] |
+| P1-T4 | "round 0 + no seals" encodes identically to a pre-fork header | [x] |
+| P1-T5 | Without the Camellia fields, a PBFT header does not round-trip (why `IsBft ⇒ IsCamellia`) | [x] |
+| P1-T6 | Non-PBFT JSON and RPC output unchanged (also for an empty seal list); PBFT fields round-trip through JSON | [x] |
+| P1-T7 | Real mainnet header (block 118,924,592) hashes to its on-chain hash; trailing seals decode (documents P1-06) and are rejected by the PoA engine | [x] |
 
 ---
 
@@ -149,7 +153,7 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 |----|------|--------|--------|
 | P5-00 | Remove the `errBftNotImplemented` startup guard (`eth/bft_guard.go`) in the same change that lands P5-01 | §9.3 | [ ] |
 | P5-01 | Wrapper engine in `CreateConsensusEngine` (`eth/ethconfig/config.go:175, 187`) | §7.2 | [ ] |
-| P5-02 | `VerifyHeader` pre-fork: `CommitSeals == nil && BftRound == 0` | §5.2, §5.3 | [ ] |
+| P5-02 | `VerifyHeader` pre-fork: `CommitSeals == nil && BftRound == 0` | §5.2, §5.3 | done in P1-06: the PoA engine enforces it for every height it verifies |
 | P5-03 | `VerifyHeader` post-fork: `IsCamellia`, `ParentBeaconRoot == nil`, `Time >= parent.Time` | §5.3 | [ ] |
 | P5-04 | `VerifyHeader` post-fork: `MinerNodeSig` from a validator of `n-1` | §5.3 | [ ] |
 | P5-05 | `VerifyHeader` post-fork: `>= Quorum` distinct valid seals over `commitDigest(BlockHash, BftRound, ChainID)` | §5.3 | [ ] |

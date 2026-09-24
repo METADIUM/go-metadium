@@ -94,6 +94,7 @@ var (
 	errDuplicateUncle  = errors.New("duplicate uncle")
 	errUncleIsAncestor = errors.New("uncle is ancestor")
 	errDanglingUncle   = errors.New("uncle's parent is not ancestor")
+	errPbftFields      = errors.New("PBFT fields on a header outside PBFT")
 )
 
 // Author implements consensus.Engine, returning the header's coinbase as the
@@ -228,6 +229,9 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	// Ensure that the header's extra-data section is of a reasonable size
 	if uint64(len(header.Extra)) > params.MaximumExtraDataSize {
 		return fmt.Errorf("extra-data too long: %d > %d", len(header.Extra), params.MaximumExtraDataSize)
+	}
+	if err := verifyNoPbftFields(header); err != nil {
+		return err
 	}
 	// Verify the header's timestamp
 	if !uncle {
@@ -545,6 +549,19 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 // clean sync over the whole post-Camellia range has to pass before this is
 // deployed. The failure message carries the block, the parent and both values so
 // that a violation found that way is diagnosable rather than just a stall.
+// verifyNoPbftFields rejects headers carrying the PBFT fields. This engine
+// only ever verifies non-PBFT heights (PBFT blocks go through the PBFT engine,
+// docs/pbft-consensus-design.md §7.2), so the rule needs no chain config.
+// Without it, bytes appended after BlobGasUsed — which releases before the
+// fields existed fail to decode — would decode into CommitSeals, leave the
+// hash unchanged, and be stored and relayed with the block.
+func verifyNoPbftFields(header *types.Header) error {
+	if header.BftRound != 0 || header.CommitSeals != nil {
+		return fmt.Errorf("%w: bftRound %d, %d commit seals", errPbftFields, header.BftRound, len(header.CommitSeals))
+	}
+	return nil
+}
+
 func verifyCamelliaHeaderFields(header, parent *types.Header) error {
 	// EIP-4788's parentBeaconRoot means nothing here -- Metadium has no beacon
 	// chain, and the PoA sealing path never sets the field; only the engine-API
