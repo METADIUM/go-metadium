@@ -103,8 +103,15 @@ existing `ConsensusPBFT` constant ("PBFT family").
 ```
 N         = number of validators (governance getNodeLength)
 f         = floor((N-1)/3)
-Quorum    = 2f+1 = ceil((2N+1)/3)   // N=4→3, N=7→5, N=10→7, N=13→9
+Quorum    = ceil(2N/3)              // N=4→3, 5→4, 6→4, 7→5, 10→7, 13→9
 ```
+
+- **The quorum is `ceil(2N/3)`, not `2f+1`.** The two agree only when `N = 3f+1`. Safety needs any two
+  quorums to share at least `f+1` nodes (`2Q − N >= f+1`); with `N = 6` (`f = 1`), `2f+1 = 3` gives two
+  quorums that can be disjoint, and with `N = 5` they share one node that may be the Byzantine one.
+  `ceil(2N/3)` is the smallest value that satisfies the inequality for every `N`, and `N − f >= Q` keeps
+  liveness (IBFT 2.0 / QBFT use the same rule). rev.5 and earlier wrote `2f+1 = ceil((2N+1)/3)`, which is
+  wrong for `N = 5, 6`.
 
 - With `N < 4`, `f=0` → BFT is meaningless. **Precondition for switching to PBFT: `N >= 4`** (§9.3),
   **and `N >= 4` stays a block-validity rule after the switch** (§9.3.1).
@@ -281,8 +288,8 @@ commitDigest = keccak256(rlp([BlockHash(header), Round, ChainID, byte(0x02)]))
 Assumptions: (a) the digest covers the whole block hash (§5.2), (b) honest nodes do not lose their
 previous votes or lock across restarts (§6.1), (c) the same node key never signs from two places at once (§6.1 operating rules).
 
-- **Agreement:** for two blocks at the same height to each gather `2f+1` commits, the two quorums
-  overlap in at least `f+1` nodes, at least one of them honest. An honest node COMMITs only one digest
+- **Agreement:** for two blocks at the same height to each gather `Quorum` commits, the two quorums
+  overlap in at least `2·Quorum − N >= f+1` nodes (§4.1), at least one of them honest. An honest node COMMITs only one digest
   per round — contradiction. Across rounds, the re-proposal rule in §4.5 guarantees it.
   Without assumption (b), an honest node that restarted is effectively Byzantine and the argument fails.
 - **Validity:** every honest node fully executes and validates the block before PREPARE (§4.8).
@@ -308,7 +315,7 @@ All of these must pass before sending PREPARE.
 
 ```go
 // core/types/block.go — in Header, and in headerRlp between BlobGasUsed and ParentBeaconRoot
-    // BFT fork: committed round and 2f+1 commit seals. Excluded from BlockHash.
+    // BFT fork: committed round and a quorum of commit seals. Excluded from BlockHash.
     BftRound    uint64   `json:"bftRound,omitempty"    rlp:"optional"`
     CommitSeals [][]byte `json:"commitSeals,omitempty" rlp:"optional"`
 ```
@@ -347,7 +354,7 @@ func (h *Header) Hash() common.Hash {
 ```
 
 - **The PBFT digest is this hash (`BlockHash`).** `SealHash` leaves out `Rewards`/`MixDigest`/`Nonce`/
-  `MinerNodeId`/`MinerNodeSig`; used as the digest, the single digest that 2f+1 validators committed
+  `MinerNodeId`/`MinerNodeSig`; used as the digest, the single digest that a quorum of validators committed
   would map to **several block hashes** differing only in those fields. Nodes storing different hashes
   would disagree on the next block's `ParentHash` — the chain splits even though consensus succeeded.
 - **Can seals be stripped or forged if they are not in the hash?** — Yes, but it is pointless.
@@ -374,7 +381,7 @@ The round in which the block was first proposed is not recorded (not needed for 
 - The rev.3 rule "`MinerNodeSig` matches the key of `proposer(height, BftRound)`" is **removed**.
   A block re-proposed after a round change keeps the original proposer's `MinerNodeSig`, which differs
   from the commit round's proposer. The commit-round proposer's right to propose was checked during
-  consensus through the ROUND_CHANGE certificate, and at import time the 2f+1 seals prove the outcome.
+  consensus through the ROUND_CHANGE certificate, and at import time the quorum of seals proves the outcome.
 - `MinerNodeSig` stays as **the identity proof of the node that built the block**
   (`consensus/ethash/consensus.go:642-648`).
 
@@ -437,6 +444,12 @@ Chaindata writes are batched, so the fsync point cannot be guaranteed there.
   A restored lock is followed per §4.5.
 - **If the WAL is missing or corrupt** (disk replacement, snapshot restore, reinstall), start in observer
   mode and only vote after seeing the chain commit at least one height past the local head.
+- **But a missing WAL is not always a lost one.** At the switch every validator starts without a WAL; if
+  all of them waited as observers, nobody would vote and the chain would stop at `BftBlock`. So the WAL
+  is **created during the bootstrap segment**, while `head + 1 < BftBlock` — before any PBFT vote is
+  possible, since a PRE-PREPARE for height `n` needs `n − 1` as the local head. A missing WAL then means
+  observer mode only when `head + 1 >= BftBlock`. A validator added by governance after the switch starts
+  as an observer for one height; that is harmless unless the network cannot reach a quorum without it.
 - **Why one height is enough — and must not be relaxed below it.** A block is written at COMMITTED, and a
   PRE-PREPARE is only accepted when its parent is the local head. So any vote that was in flight when the
   node crashed can only be at `chaindata head + 1`. Once the other validators commit that height, a lost
@@ -777,15 +790,15 @@ Example: customer 42 production = `638200421`, staging = `638200422`. Internal d
 
 ### 9.6 Validator count and availability
 
-**Formula.** Tolerating `f` faulty nodes needs `N = 3f + 1`, and committing a block needs `2f + 1`
-live nodes (the quorum). `f` is the **sum** of stopped and malicious nodes (with 7 nodes and one stopped,
+**Formula.** Tolerating `f` faulty nodes needs `N = 3f + 1`, and committing a block needs `ceil(2N/3)`
+live nodes (the quorum; `2f + 1` when `N = 3f + 1`, §4.1). `f` is the **sum** of stopped and malicious nodes (with 7 nodes and one stopped,
 only one malicious node can be tolerated).
 
 | N | Faults tolerated f | Quorum | Notes |
 |---|---|---|---|
 | 3 or fewer | 0 | — | BFT meaningless. Switch refused (§9.3), reduction after the switch rejected (§9.3.1) |
 | **4** | 1 | 3 | minimum |
-| 5, 6 | 1 | 4, 5 | same tolerance as 4 with a larger quorum → **not recommended** |
+| 5, 6 | 1 | 4, 4 | same tolerance as 4 with a larger quorum → **not recommended** |
 | **7** | 2 | 5 | recommended for production |
 | **10** | 3 | 7 | |
 | 13 | 4 | 9 | |
@@ -945,7 +958,7 @@ The etcd token still picks the proposer; after a block propagates, validators co
 
 ### Alternative 2: on-chain signature records (no consensus or header change) — added in rev.4
 Each validator periodically signs `(height, block hash)` and records it in a dedicated contract as a
-transaction. A height with 2f+1 signatures becomes the evidence.
+transaction. A height with a quorum (`ceil(2N/3)`) of signatures becomes the evidence.
 - Gains: multi-party signed evidence that third parties can verify. No changes to the header, P2P or consensus code, so existing chains are unaffected
 - Does not gain: real-time Byzantine defence. The guarantee that there is no reorg still rests on the current etcd/raft
 - Difference: the limitation can be **stated openly alongside the evidence** instead of hidden. The most realistic evidence option on a short schedule
@@ -1002,7 +1015,7 @@ The design body (§3–§12) holds whichever branch is chosen.
 | rev.2 | scope changed to new private networks, option B (PoA bootstrap → switch), chain ID scheme, block timing |
 | rev.3 | validator count and availability (§9.6) |
 | rev.4 | first review round (below) |
-| rev.5 | PR #143 review: `committedAt` defined as "became head" (§4.5, §9.2), why observer mode waits exactly one height (§6.1), requirement-driven decision criteria for the alternatives (§13). §8.2 corrected during P0: PBFT networks keep `--consensusmethod 2`. §2/§5.1 corrected during P1: `headerRlp` declares `ParentBeaconRoot` (never filled), and the PBFT fields go before it |
+| rev.5 | PR #143 review: `committedAt` defined as "became head" (§4.5, §9.2), why observer mode waits exactly one height (§6.1), requirement-driven decision criteria for the alternatives (§13). §8.2 corrected during P0: PBFT networks keep `--consensusmethod 2`. §2/§5.1 corrected during P1: `headerRlp` declares `ParentBeaconRoot` (never filled), and the PBFT fields go before it. Corrected during P2: quorum is `ceil(2N/3)` (§4.1, §4.7, §9.6 — `2f+1` is unsafe for N = 5, 6), and the WAL is created during bootstrap so the switch does not deadlock (§6.1) |
 
 **rev.4 review changes**
 
