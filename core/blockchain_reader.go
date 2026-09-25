@@ -270,9 +270,35 @@ func (bc *BlockChain) GetReceiptsByHash(hash common.Hash) types.Receipts {
 func (bc *BlockChain) GetBlobSidecars(hash common.Hash) []*types.BlobTxSidecar {
 	number := rawdb.ReadHeaderNumber(bc.db, hash)
 	if number == nil {
-		return nil
+		// Not written yet: a PBFT proposal's, if one was recorded.
+		sidecars, _ := bc.proposalSidecars.Get(hash)
+		return sidecars
 	}
 	return rawdb.ReadBlobSidecars(bc.db, hash, *number)
+}
+
+// completeSidecars returns the sidecars to store for a block being written:
+// the pool's, unless they fall short of the block's blob count and a
+// complete set was recorded for it as a PBFT proposal, fetched and
+// validated before this node voted (docs/pbft-consensus-design.md §12).
+// Writing the pool's partial set would replace that complete one. Without
+// PBFT nothing is recorded, and the pool's set is kept as before.
+func (bc *BlockChain) completeSidecars(hash common.Hash, fromPool []*types.BlobTxSidecar, blobTxs int) []*types.BlobTxSidecar {
+	if len(fromPool) < blobTxs {
+		if recorded, ok := bc.proposalSidecars.Get(hash); ok && len(recorded) >= blobTxs {
+			return recorded
+		}
+	}
+	return fromPool
+}
+
+// AddProposalSidecars records the blob sidecars of a PBFT proposal that is
+// not written yet, so GetBlobSidecars serves them by its hash. A few
+// proposals are kept; a decided one is written with its block.
+func (bc *BlockChain) AddProposalSidecars(hash common.Hash, sidecars []*types.BlobTxSidecar) {
+	if len(sidecars) > 0 {
+		bc.proposalSidecars.Add(hash, sidecars)
+	}
 }
 
 // GetUnclesInChain retrieves all the uncles from a given block backwards until
