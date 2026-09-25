@@ -321,3 +321,24 @@ func indexOfProposer(net *testNet, height uint64) (int, bool) {
 	v := net.set.Proposer(height, 0)
 	return net.set.IndexOf(v.PubKey[:])
 }
+
+type failingChain struct{ *memChain }
+
+func (failingChain) InsertBlock(*types.Block) error { return errors.New("disk full") }
+
+// TestNodeCounters: a decided block that cannot be written and a message
+// the full queue turns away are both counted for the status RPC.
+func TestNodeCounters(t *testing.T) {
+	net := newTestNet(t, 4)
+	n := NewNode(NodeConfig{Config: nodeTestConfig, ChainID: testChainID, BftBlock: 1,
+		Validators: func(uint64) (*ValidatorSet, error) { return net.set, nil }, Broadcast: func(*Message) {}}, failingChain{newMemChain()})
+	// Not started: the loop is not draining, so the queue fills.
+	for i := 0; i < msgQueue+2; i++ {
+		n.HandleMessage(&Message{Type: MsgPrepare, Height: 1})
+	}
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1)})
+	n.Commit(blockProposal{block}, 0, nil)
+	if c := n.Counters(); c.DroppedMessages != 2 || c.InsertFailures != 1 {
+		t.Errorf("counters %+v, want 2 dropped and 1 insert failure", c)
+	}
+}
