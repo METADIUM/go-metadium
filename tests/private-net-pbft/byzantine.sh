@@ -37,9 +37,19 @@ agree() {
   done
   pass "all $NODES nodes agree at block $h $1"
 }
+# save_logs: keep every node's log before a recreate drops it
+STEP=0
+save_logs() {
+  STEP=$((STEP + 1))
+  mkdir -p logs/byzantine
+  for n in $(seq 1 "$NODES"); do
+    docker logs "gmet-pbft-node$n" >"logs/byzantine/$STEP-node$n.log" 2>&1 || true
+  done
+}
 # set_fault FAULT NODE...: recreate the nodes with METABFT_FAULT=FAULT
 set_fault() {
   local f=$1; shift
+  save_logs
   local envs=()
   for n in "$@"; do envs+=("FAULT_node$n=$f"); done
   env "${envs[@]}" docker compose up -d --force-recreate "${@/#/node}" >/dev/null 2>&1

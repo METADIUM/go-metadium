@@ -84,7 +84,8 @@ GMET_BIN=../../build/bin/gmet-fault NODES=7 ./setup.sh ...
 
 It switches one validator's fault on at a time through `METABFT_FAULT` (see
 `eth/bft_fault.go`), recreating that node's container, and every node back to normal at
-the end:
+the end. A recreate drops the container's log, so every node's log is saved to
+`logs/byzantine/<step>-node<N>.log` before each one:
 - S-05: its proposals carry a wrong rewards field; the others refuse them ("rewards field
   does not match"), none of its blocks commits, the chain continues;
 - S-14: its proposals are stamped before their parent, or 10 s ahead; the local-clock bound

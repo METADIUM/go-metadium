@@ -100,12 +100,22 @@ func bftFaultBroadcast(s *bftService, m *metabft.Message) bool {
 				continue
 			}
 			if i%2 == 0 {
-				p.queue <- alt
+				send(p, alt)
 			}
-			p.queue <- m
+			send(p, m)
 		}
 		s.mu.RUnlock()
 		return true
 	}
 	return false
+}
+
+// send queues m for p, dropping it when the queue is full, as broadcast does,
+// so a slow peer cannot stall the consensus loop.
+func send(p *bftPeer, m *metabft.Message) {
+	select {
+	case p.queue <- m:
+	default:
+		p.Log().Debug("metabft send queue full; dropping", "type", m.Type, "height", m.Height, "round", m.Round)
+	}
 }
