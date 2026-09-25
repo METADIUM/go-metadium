@@ -46,7 +46,11 @@ type NodeConfig struct {
 	// Broadcast sends a signed message to the other validators. It must not
 	// block: it is called from the node's event loop.
 	Broadcast func(m *Message)
-	Clock     mclock.Clock // nil: the system's monotonic clock
+	// OnProposalWanted, if set, is called whenever ProposalWanted may have
+	// become true: a new request, or EmptyBlockInterval passing on one. It
+	// must not block (Engine.WakeProposer).
+	OnProposalWanted func()
+	Clock            mclock.Clock // nil: the system's monotonic clock
 }
 
 // Node runs a Core against a Chain (design §7.3). One goroutine owns the
@@ -80,6 +84,7 @@ type Node struct {
 	committedAt time.Duration
 	height      uint64
 	round       uint64
+	emptyTimer  mclock.Timer // wakes the builder when EmptyBlockInterval passes
 }
 
 type proposalRequest struct{ height, round uint64 }
@@ -125,6 +130,11 @@ func (n *Node) Start() {
 func (n *Node) Stop() {
 	close(n.quit)
 	n.wg.Wait()
+	n.mu.Lock()
+	if n.emptyTimer != nil {
+		n.emptyTimer.Stop()
+	}
+	n.mu.Unlock()
 }
 
 // HandleMessage queues a message from the network. It does not block.
@@ -165,6 +175,8 @@ func (n *Node) SubmitBlock(block *types.Block) error {
 	case n.blocks <- block:
 	default:
 		// A block is already waiting; the builder retries on its next cycle.
+		// Logged, since a loop that stops draining shows up here first.
+		n.log.Debug("A proposal is already waiting; dropping this one", "number", block.Number(), "hash", block.Hash())
 	}
 	return nil
 }
@@ -332,7 +344,24 @@ func (n *Node) VerifyProposal(p Proposal, fresh bool) error {
 func (n *Node) RequestProposal(height, round uint64) {
 	n.mu.Lock()
 	n.want = &proposalRequest{height, round}
+	if n.emptyTimer != nil {
+		n.emptyTimer.Stop()
+		n.emptyTimer = nil
+	}
+	if round == 0 {
+		// An idle builder needs a second wake-up, when an empty block is due.
+		if wait := n.committedAt + n.cfg.Config.EmptyBlockInterval - n.now(); wait > 0 {
+			n.emptyTimer = n.clock.AfterFunc(wait, n.wakeBuilder)
+		}
+	}
 	n.mu.Unlock()
+	n.wakeBuilder()
+}
+
+func (n *Node) wakeBuilder() {
+	if n.cfg.OnProposalWanted != nil {
+		n.cfg.OnProposalWanted()
+	}
 }
 
 func (n *Node) Broadcast(m *Message) { n.cfg.Broadcast(m) }

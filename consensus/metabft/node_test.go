@@ -263,6 +263,8 @@ func TestNodeEmptyBlockInterval(t *testing.T) {
 	}
 	c := newNodeCluster(t, net, 1, down, nil)
 	nd := c.nodes[proposer]
+	var wakes atomic.Int64
+	nd.cfg.OnProposalWanted = func() { wakes.Add(1) }
 	nd.Start()
 	defer nd.Stop()
 	deadline := time.Now().Add(5 * time.Second)
@@ -278,9 +280,18 @@ func TestNodeEmptyBlockInterval(t *testing.T) {
 	if nd.ProposalWanted(2, true) {
 		t.Fatal("a block wanted for a height not running")
 	}
+	// The builder is woken for the request, and again when the empty block
+	// is due, so it need not poll.
+	requested := wakes.Load()
+	if requested == 0 {
+		t.Fatal("builder not woken for the request")
+	}
 	c.clock.Run(nodeTestConfig.EmptyBlockInterval)
 	if !nd.ProposalWanted(1, false) {
 		t.Fatal("no empty block wanted after EmptyBlockInterval")
+	}
+	if wakes.Load() == requested {
+		t.Fatal("builder not woken when the empty block became due")
 	}
 }
 
