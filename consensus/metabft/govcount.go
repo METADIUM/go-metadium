@@ -30,6 +30,9 @@ const (
 
 var (
 	errTooFewValidators = errors.New("metabft: block leaves fewer governance nodes than PBFT needs")
+	// errNodeCountUnreadable is a failure too, but a different one for an
+	// operator: governance is broken or unreachable, not a node removed.
+	errNodeCountUnreadable = errors.New("metabft: governance node count cannot be read")
 
 	registryLookupSelector = crypto.Keccak256([]byte(RegistryLookupSig))[:4]
 	nodeLengthSelector     = crypto.Keccak256([]byte(NodeLengthSig))[:4]

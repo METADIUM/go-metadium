@@ -91,7 +91,7 @@ func (e *Engine) VerifyPostState(chain consensus.ChainHeaderReader, header *type
 	}
 	n, err := e.nodeCount(chain, e, header, statedb)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errTooFewValidators, err)
+		return fmt.Errorf("%w: %v", errNodeCountUnreadable, err)
 	}
 	if n < MinValidators {
 		return fmt.Errorf("%w: %d, minimum %d", errTooFewValidators, n, MinValidators)

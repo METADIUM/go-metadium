@@ -69,11 +69,11 @@ func TestGovernanceNodeCount(t *testing.T) {
 	}
 	// No readable governance is a failure, not a pass.
 	metaminer.BftRegistryFunc = func(*big.Int) (common.Address, error) { return common.Address{}, metaminer.ErrNotInitialized }
-	if err := engine.VerifyPostState(chain, header, statedb); !errors.Is(err, errTooFewValidators) {
+	if err := engine.VerifyPostState(chain, header, statedb); !errors.Is(err, errNodeCountUnreadable) {
 		t.Errorf("no registry: %v", err)
 	}
 	metaminer.BftRegistryFunc = func(*big.Int) (common.Address, error) { return common.Address{0xde, 0xad}, nil }
-	if err := engine.VerifyPostState(chain, header, statedb); !errors.Is(err, errTooFewValidators) {
+	if err := engine.VerifyPostState(chain, header, statedb); !errors.Is(err, errNodeCountUnreadable) {
 		t.Errorf("registry without code: %v", err)
 	}
 }
