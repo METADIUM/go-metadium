@@ -63,15 +63,23 @@ for n in $(seq 1 4); do
 done
 (( logged >= 1 )) && pass "$logged of 4 validators logged leaving the vote out (those that proposed meanwhile)" || fail "no validator logged the floor exclusion"
 
-# The excluded vote holds its sender's later transactions (nonce order)
-# until it is retried after bftExcludeHeights and, its ballot over, reverts.
+# The excluded vote is listed in metabft_status (with its sender and nonce)
+# on the validators that left it out. It holds its sender's later
+# transactions (nonce order) until a retry, every metabft.ExcludeFor (30 s),
+# finds its ballot over: the vote then reverts and is included (P5-27).
+listed=0
+for n in $(seq 1 4); do
+  c=$(rpc "$(port_of "$n")" metabft_status '[]' | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('excludedTxs') or []))")
+  (( c > 0 )) && listed=$((listed + 1))
+done
+(( listed >= 1 )) && pass "the excluded vote is listed in metabft_status on $listed of 4 validators" || fail "metabft_status lists no excluded transaction"
 ./gov.py finalize | sed 's/^/  /'
-stuck=$(rpc "$P1" txpool_status '[]' | python3 -c "import sys,json; print(int(json.load(sys.stdin)['pending'],16))")
-log "  waiting for the excluded vote's retry ($stuck pending)"
+t0=$SECONDS
 for _ in $(seq 1 120); do
   (( $(rpc "$P1" txpool_status '[]' | python3 -c "import sys,json; print(int(json.load(sys.stdin)['pending'],16))") == 0 )) && break
-  sleep 5
+  sleep 2
 done
+(( SECONDS - t0 <= 150 )) && pass "the excluded vote cleared $((SECONDS - t0)) s after its ballot ended" || fail "the excluded vote took $((SECONDS - t0)) s to clear"
 
 # S-08: add node5 back.
 ./gov.py add 5 | sed 's/^/  /'

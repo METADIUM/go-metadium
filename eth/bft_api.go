@@ -87,6 +87,19 @@ type BftStatus struct {
 	InsertFailures  uint64        `json:"insertFailures"`
 	DroppedMessages uint64        `json:"droppedMessages"`
 	LastRejection   *BftRejection `json:"lastRejection,omitempty"`
+	// ExcludedTxs are left out of this node's proposals by the validator
+	// floor until retryAt; each holds its sender's later transactions,
+	// which replacing its nonce frees (design §9.3.1).
+	ExcludedTxs []BftExcludedTx `json:"excludedTxs,omitempty"`
+}
+
+// BftExcludedTx is a transaction left out by the validator floor.
+type BftExcludedTx struct {
+	Hash    common.Hash    `json:"hash"`
+	From    common.Address `json:"from"`
+	Nonce   hexutil.Uint64 `json:"nonce"`
+	Reason  string         `json:"reason"`
+	RetryAt time.Time      `json:"retryAt"`
 }
 
 // Status returns the round state, peers, failure counters and the last
@@ -105,6 +118,10 @@ func (api *BftAPI) Status() BftStatus {
 	api.s.mu.RUnlock()
 	if r := st.LastRejection; r != nil {
 		out.LastRejection = &BftRejection{Height: hexutil.Uint64(r.Height), Hash: r.Hash, Reason: r.Reason, At: r.At}
+	}
+	for _, x := range api.s.engine.ExcludedTxs() {
+		out.ExcludedTxs = append(out.ExcludedTxs, BftExcludedTx{Hash: x.Hash, From: x.Sender, Nonce: hexutil.Uint64(x.Nonce),
+			Reason: x.Reason, RetryAt: x.Until})
 	}
 	return out
 }

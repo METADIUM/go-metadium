@@ -19,7 +19,6 @@ package miner
 import (
 	"errors"
 	"math/big"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -45,41 +44,17 @@ var errBftFloorBreach = errors.New("transaction breaks the PBFT validator floor"
 // is tried again.
 const bftRetryDelay = 20 * time.Millisecond
 
-// bftExcludeHeights is how long a transaction that broke the validator
-// floor is left out before it is tried again; governance may have changed
-// by then.
-const bftExcludeHeights = 64
-
-// bftExclusions are the transactions left out of PBFT proposals, with the
-// height from which they are tried again.
-type bftExclusions struct {
-	mu    sync.Mutex
-	until map[common.Hash]uint64
-}
-
-func (x *bftExclusions) add(hash common.Hash, until uint64) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	if x.until == nil {
-		x.until = make(map[common.Hash]uint64)
-	}
-	x.until[hash] = until
-}
-
-func (x *bftExclusions) has(hash common.Hash, height uint64) bool {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	until, ok := x.until[hash]
-	if ok && height >= until {
-		delete(x.until, hash)
-		return false
-	}
-	return ok
+// bftExcluder is the PBFT engine's record of transactions left out by the
+// validator floor (consensus/metabft.Engine.ExcludeTx).
+type bftExcluder interface {
+	ExcludeTx(hash common.Hash, sender common.Address, nonce uint64, reason string) time.Time
+	IsExcluded(hash common.Hash) bool
 }
 
 // bftExcluded reports whether a PBFT build leaves tx out.
 func (w *worker) bftExcluded(env *environment, hash common.Hash) bool {
-	return w.chainConfig.IsBft(env.header.Number) && w.bftExcl.has(hash, env.header.Number.Uint64())
+	x, ok := w.engine.(bftExcluder)
+	return ok && w.chainConfig.IsBft(env.header.Number) && x.IsExcluded(hash)
 }
 
 // bftCheckFloor runs the engine's post-state rule after a transaction at a
@@ -101,9 +76,15 @@ func (w *worker) bftCheckFloor(env *environment, tx *types.Transaction) error {
 	if err == nil {
 		return nil
 	}
-	log.Warn("Leaving a transaction out of PBFT proposals: it breaks the validator floor", "hash", tx.Hash(),
-		"number", env.header.Number, "retry", env.header.Number.Uint64()+bftExcludeHeights, "err", err)
-	w.bftExcl.add(tx.Hash(), env.header.Number.Uint64()+bftExcludeHeights)
+	from, _ := types.Sender(env.signer, tx)
+	if x, ok := w.engine.(bftExcluder); ok {
+		until := x.ExcludeTx(tx.Hash(), from, tx.Nonce(), err.Error())
+		// The sender's later transactions wait behind this one (nonce
+		// order) until the retry; replacing its nonce frees them at once.
+		log.Warn("Leaving a transaction out of PBFT proposals: it breaks the validator floor", "hash", tx.Hash(),
+			"from", from, "nonce", tx.Nonce(), "number", env.header.Number, "retry", until.Format(time.RFC3339),
+			"err", err, "note", "later transactions from this sender wait; replace this nonce to free them")
+	}
 	if p, ok := w.engine.(bftProducer); ok {
 		p.WakeProposer()
 	}

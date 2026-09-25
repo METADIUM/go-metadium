@@ -68,5 +68,7 @@ node1, the one node that allows unlocking over HTTP):
   and N stays 4; the validators that proposed meanwhile log leaving it out;
 - adding node5 back: it seals and proposes again, without a restart.
 
-A vote left out by the floor holds its sender's later transactions (nonce order) until
-it is retried after 64 heights; replacing that nonce frees them at once.
+A vote left out by the floor is listed in `metabft_status` (`excludedTxs`: hash, sender,
+nonce, reason, retry time). It holds its sender's later transactions (nonce order) until a
+retry, every 30 s, finds it includable (its ballot over, it reverts); replacing that nonce
+frees them at once.

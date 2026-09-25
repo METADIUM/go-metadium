@@ -210,4 +210,9 @@ func TestWorkerLeavesOutValidatorFloorBreach(t *testing.T) {
 	if err := metabft.NewBlockChain(b.chain, engine, nil).VerifyBlock(blk, true); err != nil {
 		t.Errorf("the proposal without it: %v", err)
 	}
+	// The engine lists it, with its sender and nonce, for the status RPC.
+	excluded := engine.ExcludedTxs()
+	if len(excluded) != 1 || excluded[0].Hash != tx.Hash() || excluded[0].Sender != testBankAddress || excluded[0].Nonce != tx.Nonce() {
+		t.Errorf("excluded %+v, want the breaching transaction", excluded)
+	}
 }

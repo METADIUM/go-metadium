@@ -67,6 +67,9 @@ type Engine struct {
 	mu       sync.RWMutex
 	proposer Proposer
 	wake     chan struct{}
+
+	exclMu   sync.Mutex
+	excluded map[common.Hash]ExcludedTx // left out of proposals by the validator floor
 }
 
 // Proposer is the consensus side of block production (Node): it says when
@@ -79,7 +82,7 @@ type Proposer interface {
 // NewEngine wraps the PoA engine.
 func NewEngine(legacy *ethash.Ethash, validators ValidatorsFunc) *Engine {
 	return &Engine{legacy: legacy, validators: validators, rewards: GovernanceRewards, nodeCount: GovernanceNodeCount,
-		wake: make(chan struct{}, 1)}
+		wake: make(chan struct{}, 1), excluded: make(map[common.Hash]ExcludedTx)}
 }
 
 // SetNodeCount replaces how the post-execution governance node count is
