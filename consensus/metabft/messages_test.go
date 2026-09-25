@@ -62,7 +62,7 @@ func TestMessageVerifyRejects(t *testing.T) {
 	if _, err := m.Verify(testChainID+1, net.set); !errors.Is(err, errWrongChainID) {
 		t.Errorf("other chain: %v", err)
 	}
-	if _, err := other.signed(t, 0, MsgPrepare, 10, 0, testDigest).Verify(testChainID, net.set); !errors.Is(err, errUnknownSigner) {
+	if _, err := other.signed(t, 0, MsgPrepare, 10, 0, testDigest).Verify(testChainID, net.set); !errors.Is(err, ErrUnknownSigner) {
 		t.Errorf("non-validator: %v", err)
 	}
 
