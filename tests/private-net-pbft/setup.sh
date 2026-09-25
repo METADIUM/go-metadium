@@ -141,6 +141,7 @@ networks:
 x-gmet-common: &gmet-common
   image: gmet-pbft:latest
   restart: unless-stopped
+  cap_add: [NET_ADMIN]   # faults.sh partitions with iptables (as root, via docker exec)
   user: "${GMET_UID:-1000}:${GMET_GID:-1000}"
   entrypoint: ["/entrypoint.sh"]
   networks:
@@ -182,6 +183,6 @@ log "Building Docker image (gmet-pbft:latest)..."
 BUILD=$(mktemp -d)
 cp "$GMET_BIN" "$BUILD/gmet"
 cp ../private-net-poa/entrypoint.sh "$BUILD/"
-docker build -q -f ../private-net-poa/Dockerfile -t gmet-pbft:latest "$BUILD" >/dev/null
+docker build -q -f Dockerfile -t gmet-pbft:latest "$BUILD" >/dev/null
 rm -rf "$BUILD"
 log "=== Done. Next: ./start.sh, then ./deploy.sh before block $BFT_BLOCK ==="
