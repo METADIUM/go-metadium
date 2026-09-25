@@ -23,10 +23,17 @@ type ValidatorsFunc func(height uint64) (*ValidatorSet, error)
 // GovernanceValidators reads the set from the Metadium governance contract
 // (metadium/miner.BftValidators): the state at height-1, governance order,
 // with the nodes' coinbases.
+//
+// Fewer than MinValidators nodes is no set at all: at bftBlock that stops
+// the chain rather than letting it run BFT with f = 0 (design §9.3); after
+// the switch VerifyPostState keeps it from happening (§9.3.1).
 func GovernanceValidators(height uint64) (*ValidatorSet, error) {
 	keys, coinbases, err := metaminer.BftValidators(new(big.Int).SetUint64(height))
 	if err != nil {
 		return nil, err
+	}
+	if len(keys) < MinValidators {
+		return nil, fmt.Errorf("%w: %d governance nodes at block %d, PBFT needs %d", errTooFewValidators, len(keys), height-1, MinValidators)
 	}
 	set, err := NewValidatorSet(keys)
 	if err != nil {
@@ -175,27 +182,28 @@ func (e *Engine) VerifyHeader(chain consensus.ChainHeaderReader, header *types.H
 }
 
 // VerifyHeaders implements consensus.Engine, in order, on one goroutine.
+// Each header is verified against the one before it in the batch, which is
+// not in the chain yet: PoA heights included, which the PoA engine's single
+// VerifyHeader would refuse for want of a parent.
 func (e *Engine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
 	abort := make(chan struct{})
 	results := make(chan error, len(headers))
 	go func() {
 		for i, header := range headers {
+			var parent *types.Header
+			if i == 0 {
+				parent = chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+			} else if headers[i-1].Hash() == header.ParentHash {
+				parent = headers[i-1]
+			}
 			var err error
 			switch {
+			case parent == nil:
+				err = consensus.ErrUnknownAncestor
 			case !isBft(chain, header.Number):
-				err = e.legacy.VerifyHeader(chain, header)
+				err = e.legacy.VerifyHeaderWithParent(chain, header, parent)
 			default:
-				var parent *types.Header
-				if i == 0 {
-					parent = chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
-				} else if headers[i-1].Hash() == header.ParentHash {
-					parent = headers[i-1]
-				}
-				if parent == nil {
-					err = consensus.ErrUnknownAncestor
-				} else {
-					err = e.verifyBftHeader(chain, header, parent)
-				}
+				err = e.verifyBftHeader(chain, header, parent)
 			}
 			select {
 			case <-abort:
@@ -427,7 +435,9 @@ func (e *Engine) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	if p == nil {
 		return errSealingNotRunning
 	}
-	return p.SubmitBlock(block)
+	// The PoA seal fields (nonce, mixHash) are part of the header every
+	// validator checks, and of the digest they agree on.
+	return p.SubmitBlock(e.legacy.SealPoA(block))
 }
 
 // SealHash implements consensus.Engine.

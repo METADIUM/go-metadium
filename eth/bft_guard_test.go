@@ -32,7 +32,7 @@ func TestCheckBftNode(t *testing.T) {
 		{"mainnet, snap sync", params.MetadiumMainnetChainConfig, params.ConsensusPoA, downloader.SnapSync, nil, ""},
 		{"testnet", params.MetadiumTestnetChainConfig, params.ConsensusPoA, downloader.FullSync, nil, ""},
 		{"PoW dev chain", params.AllEthashProtocolChanges, params.ConsensusPoW, downloader.FullSync, nil, ""},
-		{"PBFT chain on PoA", bft, params.ConsensusPoA, downloader.FullSync, errBftNotImplemented, ""},
+		{"PBFT chain on PoA", bft, params.ConsensusPoA, downloader.FullSync, nil, ""},
 		{"PBFT chain on PoW", bft, params.ConsensusPoW, downloader.FullSync, nil, "--consensusmethod 2"},
 		{"PBFT chain, snap sync", bft, params.ConsensusPoA, downloader.SnapSync, nil, "--syncmode full"},
 		{"PBFT chain with invalid parameters", &broken, params.ConsensusPoA, downloader.FullSync, nil, "parameters are missing"},

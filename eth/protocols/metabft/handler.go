@@ -29,10 +29,22 @@ type Backend interface {
 	// HandleEvidence receives an equivocation, already verified.
 	HandleEvidence(ev *metabft.Evidence)
 
+	// UnknownSigner is told of a validly signed message whose signer is not
+	// in the set. That is normal around a validator-set change, so it is not
+	// misbehaviour by itself, but each costs this node a signature recovery:
+	// a non-nil error (a peer over its budget) disconnects the peer.
+	UnknownSigner(peer *Peer) error
+
 	// SyncStatus is this node's (height, round), for SyncRequest.
 	SyncStatus() (height, round uint64)
+	// HandleSyncReply receives a peer's (height, round). The reply is not
+	// signed, so it is a hint: it may only come from a peer RunPeer
+	// admitted, and must not move consensus by itself.
 	HandleSyncReply(peer *Peer, height, round uint64)
 
+	// RunPeer runs handler for a connected peer. It must admit only
+	// validators: any node can advertise metabft/1, and only consensus
+	// messages carry signatures.
 	RunPeer(peer *Peer, handler func(*Peer) error) error
 	PeerInfo(id enode.ID) interface{}
 }
@@ -125,7 +137,9 @@ func handleConsensus(backend Backend, cache *Cache, peer *Peer, m *metabft.Messa
 	}
 	if _, err := m.Verify(backend.ChainID(), set); err != nil {
 		if errors.Is(err, metabft.ErrUnknownSigner) {
-			return nil // e.g. a validator set change this node has not reached yet
+			// e.g. a validator set change this node has not reached yet;
+			// the backend bounds how often a peer may do it.
+			return backend.UnknownSigner(peer)
 		}
 		return fmt.Errorf("%w: %v", errMisbehaving, err)
 	}

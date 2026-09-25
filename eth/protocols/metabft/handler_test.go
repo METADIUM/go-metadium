@@ -16,12 +16,14 @@ import (
 const testChainID = 638200003
 
 type testBackend struct {
-	validator bool
-	set       *metabft.ValidatorSet
-	height    uint64
-	received  []*metabft.Message
-	evidence  []*metabft.Evidence
-	syncFrom  []uint64
+	validator  bool
+	set        *metabft.ValidatorSet
+	height     uint64
+	received   []*metabft.Message
+	evidence   []*metabft.Evidence
+	syncFrom   []uint64
+	unknown    int   // UnknownSigner calls
+	unknownErr error // what UnknownSigner returns
 }
 
 func (b *testBackend) IsValidator() bool { return b.validator }
@@ -34,6 +36,7 @@ func (b *testBackend) HandleConsensus(_ *Peer, m *metabft.Message) error {
 	return nil
 }
 func (b *testBackend) HandleEvidence(ev *metabft.Evidence)  { b.evidence = append(b.evidence, ev) }
+func (b *testBackend) UnknownSigner(*Peer) error            { b.unknown++; return b.unknownErr }
 func (b *testBackend) SyncStatus() (uint64, uint64)         { return b.height, 3 }
 func (b *testBackend) HandleSyncReply(_ *Peer, h, r uint64) { b.syncFrom = append(b.syncFrom, h, r) }
 func (b *testBackend) RunPeer(p *Peer, h func(*Peer) error) error {
@@ -140,6 +143,15 @@ func TestForgedSenderCannotPreempt(t *testing.T) {
 	if cache.Len() != 0 || len(b.received) != 0 {
 		t.Fatal("a non-validator's message reached the cache or the engine")
 	}
+	if b.unknown != 1 {
+		t.Fatalf("backend told of %d unknown signers, want 1", b.unknown)
+	}
+	// Over its budget, the backend drops the peer.
+	b.unknownErr = errors.New("over budget")
+	if err := send(t, sender, handle, signed(t, outsider[0], metabft.MsgPrepare, 10, 1, common.HexToHash("0xbad"))); !errors.Is(err, b.unknownErr) {
+		t.Fatalf("unknown signer over budget: %v", err)
+	}
+	b.unknownErr = nil
 	genuine := signed(t, keys[2], metabft.MsgPrepare, 10, 0, common.HexToHash("0xaa"))
 	if err := send(t, sender, handle, genuine); err != nil || len(b.received) != 1 {
 		t.Fatalf("genuine message after the forgery: %v, %d received", err, len(b.received))
