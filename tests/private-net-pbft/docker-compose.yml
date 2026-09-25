@@ -1,0 +1,151 @@
+# go-metadium 4-node private network: PoA bootstrap, then PBFT from bftBlock
+# (docs/pbft-consensus-design.md §9). Prerequisites: ./setup.sh
+# Start: ./start.sh   Governance: ./deploy.sh   Test: ./pbft-test.sh   Stop: ./stop.sh
+# RPC is bound to 127.0.0.1 only: node1 runs with an unlocked account.
+
+networks:
+  gmet-pbft-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.32.0.0/24
+
+x-gmet-common: &gmet-common
+  image: gmet-pbft:latest
+  restart: unless-stopped
+  user: "${GMET_UID:-1000}:${GMET_GID:-1000}"
+  entrypoint: ["/entrypoint.sh"]
+  networks:
+    - gmet-pbft-net
+
+services:
+  node1:
+    <<: *gmet-common
+    container_name: gmet-pbft-node1
+    hostname: gmet-pbft-node1
+    volumes:
+      - ./genesis.json:/data/genesis.json:ro
+      - ./data/node1:/data/geth
+    ports:
+      - "127.0.0.1:8645:8545"
+    networks:
+      gmet-pbft-net:
+        ipv4_address: 172.32.0.11
+    command: >
+      --networkid 1337
+      --consensusmethod 2
+      --syncmode full
+      --gcmode archive
+      --mine
+      --miner.etherbase 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,admin,miner,txpool,debug,personal
+      --http.corsdomain "*"
+      --http.vhosts "*"
+      --port 30303
+      --nat extip:172.32.0.11
+      --maxpeers 10
+      --verbosity 3
+      --userocksdb 0
+      --unlock 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+      --password /data/geth/password.txt
+      --allow-insecure-unlock
+      --rpc.txfeecap 0
+  node2:
+    <<: *gmet-common
+    container_name: gmet-pbft-node2
+    hostname: gmet-pbft-node2
+    depends_on:
+      - node1
+    volumes:
+      - ./genesis.json:/data/genesis.json:ro
+      - ./data/node2:/data/geth
+    ports:
+      - "127.0.0.1:8646:8545"
+    networks:
+      gmet-pbft-net:
+        ipv4_address: 172.32.0.12
+    command: >
+      --networkid 1337
+      --consensusmethod 2
+      --syncmode full
+      --gcmode archive
+      --mine
+      --miner.etherbase 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,admin,miner,txpool,debug,personal
+      --http.corsdomain "*"
+      --http.vhosts "*"
+      --port 30303
+      --nat extip:172.32.0.12
+      --maxpeers 10
+      --verbosity 3
+      --userocksdb 0
+  node3:
+    <<: *gmet-common
+    container_name: gmet-pbft-node3
+    hostname: gmet-pbft-node3
+    depends_on:
+      - node1
+    volumes:
+      - ./genesis.json:/data/genesis.json:ro
+      - ./data/node3:/data/geth
+    ports:
+      - "127.0.0.1:8647:8545"
+    networks:
+      gmet-pbft-net:
+        ipv4_address: 172.32.0.13
+    command: >
+      --networkid 1337
+      --consensusmethod 2
+      --syncmode full
+      --gcmode archive
+      --mine
+      --miner.etherbase 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,admin,miner,txpool,debug,personal
+      --http.corsdomain "*"
+      --http.vhosts "*"
+      --port 30303
+      --nat extip:172.32.0.13
+      --maxpeers 10
+      --verbosity 3
+      --userocksdb 0
+  node4:
+    <<: *gmet-common
+    container_name: gmet-pbft-node4
+    hostname: gmet-pbft-node4
+    depends_on:
+      - node1
+    volumes:
+      - ./genesis.json:/data/genesis.json:ro
+      - ./data/node4:/data/geth
+    ports:
+      - "127.0.0.1:8648:8545"
+    networks:
+      gmet-pbft-net:
+        ipv4_address: 172.32.0.14
+    command: >
+      --networkid 1337
+      --consensusmethod 2
+      --syncmode full
+      --gcmode archive
+      --mine
+      --miner.etherbase 0x90F79bf6EB2c4f870365E785982E1f101E93b906
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,admin,miner,txpool,debug,personal
+      --http.corsdomain "*"
+      --http.vhosts "*"
+      --port 30303
+      --nat extip:172.32.0.14
+      --maxpeers 10
+      --verbosity 3
+      --userocksdb 0
