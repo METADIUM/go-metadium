@@ -9,6 +9,13 @@
         several senders keep the pool busy
 
 Usage: ./measure.py [--latency N] [--idle BLOCKS] [--load SECONDS]
+
+Resolution: M-01 polls for the receipt every 5 ms and M-02 polls the head
+every 20 ms, so each carries up to that much quantisation; differences of
+that size are not real. M-03's transfers per second is bounded by the
+senders here, synchronous RPC from one host that may also run the
+validators: read it as "everything sent was committed, with no round
+changes", not as the chain's throughput (M-06 is).
 """
 import argparse, json, statistics, threading, time, urllib.request
 
@@ -98,6 +105,9 @@ def load(seconds, senders=4):
         rounds.append(int(b.get("bftRound", "0x0"), 16))
         times.append(int(b["timestamp"], 16))
     span = max(1, times[-1] - times[0]) if times else 1
+    # sent counts transfers the node accepted; more committed than that
+    # means something else is sending, and the numbers are not these.
+    assert txs <= sum(sent), f"{txs} committed but only {sum(sent)} sent"
     return sum(sent), txs, rounds, span, end - start
 
 

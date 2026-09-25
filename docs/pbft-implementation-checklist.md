@@ -203,12 +203,12 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | S-03 | Stop 3 validators (> f) | stops; resumes on recovery; no fork | [x] — N=7: no progress with 3 of 7 down (176 → 176), resumed on recovery, all agree |
 | S-04 | Equivocating proposer | no commit, round change, evidence ×2, alarm | [ ] |
 | S-05 | Wrong state root / Rewards / Coinbase | PREPARE refused, round change | [ ] |
-| S-06 | 4:3 partition | both sides stop; resumes on heal; no fork | [x] — N=7, `faults.sh`: 3 validators cut off (isolated from each other too, so 4/1/1/1: Docker bridges cannot overlap and the image has no iptables); the 4 stop, resume on heal, no fork, no evidence |
+| S-06 | 4:3 partition | both sides stop; resumes on heal; no fork | [x] — N=7, `faults.sh`: 3 validators cut off (isolated from each other too, so 4/1/1/1: Docker bridges cannot overlap and the image has no iptables); the 4 stop, resume on heal, no fork, no evidence. Open: a true 4:3 split (the minority still connected to each other, so it can see its own votes and must not commit), which needs a second bridge or iptables in the image (review on #164) |
 | S-07 | One node clock +5 min | production continues | [ ] |
 | S-08 | Add/remove validator via governance | switch at epoch boundary | [ ] |
 | S-09 | New node joins after snap sync | seals verify, joins consensus | [ ] |
 | S-10 | Block with removed/forged seals | import rejected | [ ] |
-| S-11 | Kill after PREPARE / after COMMIT, restart | no conflicting vote, lock restored | [x] — N=7, `faults.sh`: SIGKILL of validators in turn under transaction load, three rounds; progress, agreement, no equivocation evidence anywhere. The kill point is not aimed at PREPARE/COMMIT; the simulator covers those exactly (`TestSimAmnesiaAfterCommit`) |
+| S-11 | Kill after PREPARE / after COMMIT, restart | no conflicting vote, lock restored | [x] — N=7, `faults.sh`: SIGKILL of validators in turn under transaction load, three rounds; progress, agreement, no equivocation evidence anywhere. The kill point is not aimed at PREPARE/COMMIT; the simulator covers those exactly (`TestSimAmnesiaAfterCommit`). A deterministic network version would need a debug flag that exits right after the WAL write of a COMMIT (review on #164) |
 | S-12 | Restart with WAL deleted | observer mode, joins after one height | [x] — N=7, `faults.sh`: restarted without its WAL, the node reports observer mode, leaves it after a height, all agree |
 | S-13 | Same node key on two servers | evidence + alarm | [ ] |
 | S-14 | Proposer `Time` past / +10s | rejected; next height round 0 normal | [ ] |
@@ -227,7 +227,7 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 | ID | Measurement | Target | Result | Status |
 |----|-------------|--------|--------|--------|
-| M-01 | Confirmation latency, N=7 LAN (`idleseal=100`) | p99 < 300ms (PoA baseline p99 130ms) | p50 198 / p99 220 ms (N=7, idleseal 100, `measure.py`; 1121 ms before #165) | [x] |
+| M-01 | Confirmation latency, N=7 LAN (`idleseal=100`) | p99 < 300ms (PoA baseline p99 130ms) | p50 198 / p99 220 ms (N=7, idleseal 100, `measure.py`; 1121 ms before #165). The worker fixes behind it (#165) have no unit test: rerun `measure.py` against the M-01 and M-02 targets on every worker change | [x] |
 | M-02 | Idle empty-block interval | `EmptyBlockInterval` ± 10%, 0 round changes | 5.09 s mean over 10 intervals, 0 round changes (6.09 s before #165) | [x] |
 | M-03 | Round changes under load (several blocks/s) | 0 | 0 blocks above round 0 in 60 s at ~900 transfers/s | [x] |
 | M-04 | Fixed-interval profile (`blockCreationTime = 2000`, no idleseal) | 2.0s interval holds | | [ ] — the PBFT build window is capped at `timeDrift/2` (1s at the default drift), so without idleseal blocks may come faster than `blockCreationTime`; pacing belongs in `ProposalWanted` if the profile must hold |
