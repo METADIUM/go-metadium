@@ -428,7 +428,9 @@ func (e *Engine) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	if p == nil {
 		return errSealingNotRunning
 	}
-	return p.SubmitBlock(block)
+	// The PoA seal fields (nonce, mixHash) are part of the header every
+	// validator checks, and of the digest they agree on.
+	return p.SubmitBlock(e.legacy.SealPoA(block))
 }
 
 // SealHash implements consensus.Engine.

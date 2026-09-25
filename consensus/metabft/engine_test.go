@@ -356,6 +356,35 @@ func TestEngineAssemblesVerifiableHeader(t *testing.T) {
 	if err := verifyProposerSig(block.Header(), set); err != nil {
 		t.Errorf("assembled header: %v", err)
 	}
+
+	// From Avocado on, the header carries the PoA seal fields, which the PoA
+	// engine's Seal sets; a proposal goes through Engine.Seal instead, which
+	// must set them too (found on the private network: every proposal failed
+	// with "invalid mix digest").
+	chain.config.AvocadoBlock = big.NewInt(0)
+	engine = NewEngine(ethash.NewFaker(), func(uint64) (*ValidatorSet, error) { return set, nil })
+	if err := engine.VerifyProposal(chain, block.Header()); err == nil || !strings.Contains(err.Error(), "mix digest") {
+		t.Fatalf("an unsealed proposal after Avocado: %v, want the mix digest check", err)
+	}
+	proposer := &captureProposer{}
+	engine.SetProposer(proposer)
+	if err := engine.Seal(chain, block, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if proposer.got == nil {
+		t.Fatal("no block submitted")
+	}
+	if err := engine.VerifyProposal(chain, proposer.got.Header()); err != nil {
+		t.Errorf("the submitted proposal: %v", err)
+	}
+}
+
+type captureProposer struct{ got *types.Block }
+
+func (*captureProposer) ProposalWanted(uint64, bool) bool { return false }
+func (p *captureProposer) SubmitBlock(b *types.Block) error {
+	p.got = b
+	return nil
 }
 
 // TestEngineBatchAcrossSwitch: block import verifies a batch whose headers'
