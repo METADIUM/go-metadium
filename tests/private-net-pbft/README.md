@@ -15,6 +15,7 @@ NODES=7 ./setup.sh  # node keys and accounts, genesis (BFT_BLOCK=200 by default)
 ./deploy.sh         # governance with every node as a member; before bftBlock
 ./pbft-test.sh      # switch, seals, rotation, agreement, finality, f and f+1 down
 ./faults.sh         # partition, kill -9 under load, WAL loss
+./governance.sh     # NODES=5: remove a validator by ballot, try going below 4, add it back
 ./measure.py        # latency, idle interval, load (§11.3); with NODE_ARGS="--metadium.block.idleseal 100"
                     # for the private operating profile
 ./stop.sh --clean   # remove containers, data and the generated files
@@ -57,3 +58,15 @@ Notes:
   PBFT replaces the token.
 - `pbft-test.sh` stops nodes with `docker stop --time 60`, giving the node
   time to close its databases.
+
+`governance.sh` (NODES=5, §11.2 S-08, S-15) drives the governance contract through
+`gov.py`, which proposes and votes as the members (their test keys are imported into
+node1, the one node that allows unlocking over HTTP):
+- removing node5 by ballot: from the next block the quorum is the 4-set's and node5 no
+  longer proposes;
+- a ballot that would leave 3 nodes: the deciding vote never commits, the chain continues
+  and N stays 4; the validators that proposed meanwhile log leaving it out;
+- adding node5 back: it seals and proposes again, without a restart.
+
+A vote left out by the floor holds its sender's later transactions (nonce order) until
+it is retried after 64 heights; replacing that nonce frees them at once.
