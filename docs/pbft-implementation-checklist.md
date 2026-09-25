@@ -189,6 +189,8 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 ---
 
+**Test config (review on #158):** the unit tests ran PBFT on a config without Avocado, so neither private-network bug (the in-batch parent, the mixHash) showed there. PBFT tests should use a config with the forks a real private network has from genesis (Avocado, Pangyo, Camellia), so the engine tests enforce the same header rules. Open.
+
 ## P6: verification on 7 nodes
 
 ### Fault injection (design §11.2)
