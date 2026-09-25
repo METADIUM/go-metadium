@@ -198,18 +198,18 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 | ID | Scenario | Expected | Status |
 |----|----------|----------|--------|
-| S-01 | Stop 1 validator | production continues | [ ] |
-| S-02 | Stop 2 validators (= f) | production continues, slower | [ ] |
-| S-03 | Stop 3 validators (> f) | stops; resumes on recovery; no fork | [ ] |
+| S-01 | Stop 1 validator | production continues | [x] — N=7 and N=4, `pbft-test.sh` |
+| S-02 | Stop 2 validators (= f) | production continues, slower | [x] — N=7: 14 blocks with 2 of 7 stopped; both caught up |
+| S-03 | Stop 3 validators (> f) | stops; resumes on recovery; no fork | [x] — N=7: no progress with 3 of 7 down (176 → 176), resumed on recovery, all agree |
 | S-04 | Equivocating proposer | no commit, round change, evidence ×2, alarm | [ ] |
 | S-05 | Wrong state root / Rewards / Coinbase | PREPARE refused, round change | [ ] |
-| S-06 | 4:3 partition | both sides stop; resumes on heal; no fork | [ ] |
+| S-06 | 4:3 partition | both sides stop; resumes on heal; no fork | [x] — N=7, `faults.sh`: 3 validators cut off (isolated from each other too, so 4/1/1/1: Docker bridges cannot overlap and the image has no iptables); the 4 stop, resume on heal, no fork, no evidence |
 | S-07 | One node clock +5 min | production continues | [ ] |
 | S-08 | Add/remove validator via governance | switch at epoch boundary | [ ] |
 | S-09 | New node joins after snap sync | seals verify, joins consensus | [ ] |
 | S-10 | Block with removed/forged seals | import rejected | [ ] |
-| S-11 | Kill after PREPARE / after COMMIT, restart | no conflicting vote, lock restored | [ ] |
-| S-12 | Restart with WAL deleted | observer mode, joins after one height | [ ] |
+| S-11 | Kill after PREPARE / after COMMIT, restart | no conflicting vote, lock restored | [x] — N=7, `faults.sh`: SIGKILL of validators in turn under transaction load, three rounds; progress, agreement, no equivocation evidence anywhere. The kill point is not aimed at PREPARE/COMMIT; the simulator covers those exactly (`TestSimAmnesiaAfterCommit`) |
+| S-12 | Restart with WAL deleted | observer mode, joins after one height | [x] — N=7, `faults.sh`: restarted without its WAL, the node reports observer mode, leaves it after a height, all agree |
 | S-13 | Same node key on two servers | evidence + alarm | [ ] |
 | S-14 | Proposer `Time` past / +10s | rejected; next height round 0 normal | [ ] |
 | S-15 | Governance removal down to N = 3 | tx never commits, chain continues | [ ] |

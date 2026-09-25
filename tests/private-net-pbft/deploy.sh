@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy.sh - deploy governance with the four nodes as members. Must finish
+# deploy.sh - deploy governance with every node as a member. Must finish
 # before bftBlock: the PBFT validator set is read from it (design §9.2).
 #
 # Options: GMET_BIN=/path/to/gmet
@@ -20,22 +20,21 @@ HEAD=$(block_number 8645) || err "node1 RPC not responding; run start.sh first"
 (( HEAD + 20 < BFT_BLOCK )) || err "head $HEAD is too close to bftBlock $BFT_BLOCK; start over with a later BFT_BLOCK"
 log "=== Deploying governance at block $HEAD (bftBlock $BFT_BLOCK) ==="
 
-id_of() { awk -v n="node$1" '$1==n{print $2}' node-ids.txt; }
-ACCOUNTS=(0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
-  0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC 0x90F79bf6EB2c4f870365E785982E1f101E93b906)
 members=""
-for n in 1 2 3 4; do
+for n in $(seq 1 "$NODES"); do
   boot=""; [[ $n == 1 ]] && boot=', "bootnode": true'
   members+="$( [[ $n == 1 ]] || echo ,)
-    {\"addr\": \"${ACCOUNTS[$((n - 1))]}\", \"stake\": 1000000000000000000, \"name\": \"node$n\",
-     \"id\": \"$(id_of $n)\", \"ip\": \"172.32.0.1$n\", \"port\": 30303$boot}"
+    {\"addr\": \"$(account_of "$n")\", \"stake\": 1000000000000000000, \"name\": \"node$n\",
+     \"id\": \"$(awk -v m="node$n" '$1==m{print $2}' node-ids.txt)\", \"ip\": \"172.32.0.1$n\", \"port\": 30303$boot}"
 done
+accounts=$(awk '{printf "%s{\"addr\": \"%s\", \"balance\": 0}", (NR>1 ? ", " : ""), $3}' node-ids.txt)
+A1=$(account_of 1)
 cat > config.json <<CFG
 {
-  "staker":      "${ACCOUNTS[0]}",
-  "ecosystem":   "${ACCOUNTS[0]}",
-  "maintenance": "${ACCOUNTS[0]}",
-  "feecollector":"${ACCOUNTS[0]}",
+  "staker":      "$A1",
+  "ecosystem":   "$A1",
+  "maintenance": "$A1",
+  "feecollector":"$A1",
   "env": {
     "ballotDurationMin":      60,
     "ballotDurationMax":      604800,
@@ -53,10 +52,7 @@ cat > config.json <<CFG
   },
   "members": [$members
   ],
-  "accounts": [
-    {"addr": "${ACCOUNTS[0]}", "balance": 0}, {"addr": "${ACCOUNTS[1]}", "balance": 0},
-    {"addr": "${ACCOUNTS[2]}", "balance": 0}, {"addr": "${ACCOUNTS[3]}", "balance": 0}
-  ]
+  "accounts": [$accounts]
 }
 CFG
 
