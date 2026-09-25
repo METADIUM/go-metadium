@@ -39,7 +39,7 @@ GMET_UID=$(id -u)
 GMET_GID=$(id -g)
 ENV
 
-rm -rf data/ passwords.txt genesis.json node-ids.txt
+rm -rf data/ passwords.txt genesis.json node-ids.txt keys.txt
 echo "$PASSWORD" > passwords.txt
 chmod 600 passwords.txt
 
@@ -58,7 +58,8 @@ PRIVKEYS=(
 )
 (( NODES >= 4 && NODES <= ${#PRIVKEYS[@]} )) || err "NODES must be 4..${#PRIVKEYS[@]}, have $NODES"
 
-# node-ids.txt: "nodeN <node ID> <account>" per node
+# node-ids.txt: "nodeN <node ID> <account>" per node; keys.txt: "nodeN <account key>"
+# (gov.py signs the members' ballots with it)
 for i in $(seq 0 $((NODES - 1))); do
   node="node$((i + 1))"
   mkdir -p "data/$node/gmet" "data/$node/geth"
@@ -77,6 +78,8 @@ for i in $(seq 0 $((NODES - 1))); do
   chmod 600 "data/$node/geth/nodekey" "data/$node/gmet/nodekey"
   id=$("$BOOTNODE_BIN" -nodekey "data/$node/geth/nodekey" -writeaddress)
   echo "$node $id $account" >> node-ids.txt
+  echo "$node ${PRIVKEYS[$i]}" >> keys.txt
+  chmod 600 keys.txt
   cp passwords.txt "data/$node/password.txt"
   log "  $node: $account ${id:0:16}..."
 done
