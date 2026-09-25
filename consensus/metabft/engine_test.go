@@ -28,6 +28,8 @@ func engineConfig() *params.ChainConfig {
 		ChainID:        big.NewInt(testChainID),
 		HomesteadBlock: big.NewInt(0), EIP150Block: big.NewInt(0), EIP155Block: big.NewInt(0), EIP158Block: big.NewInt(0),
 		ByzantiumBlock: big.NewInt(0), ConstantinopleBlock: big.NewInt(0), PetersburgBlock: big.NewInt(0), IstanbulBlock: big.NewInt(0),
+		MuirGlacierBlock: big.NewInt(0), BerlinBlock: big.NewInt(0), LondonBlock: big.NewInt(0),
+		AvocadoBlock: big.NewInt(0), PangyoBlock: big.NewInt(0), ApplepieBlock: big.NewInt(0), BokbunjaBlock: big.NewInt(0),
 		CamelliaBlock: big.NewInt(0),
 		BftBlock:      big.NewInt(engineBftBlock),
 		Bft:           &params.BftConfig{EmptyBlockInterval: 5, BaseTimeout: 2, MaxBackoffExp: 5, TimeDrift: 2},
@@ -50,6 +52,18 @@ func (c *fakeChain) GetHeader(h common.Hash, n uint64) *types.Header {
 func (c *fakeChain) GetHeaderByNumber(uint64) *types.Header      { return nil }
 func (c *fakeChain) GetHeaderByHash(h common.Hash) *types.Header { return c.headers[h] }
 func (c *fakeChain) GetTd(common.Hash, uint64) *big.Int          { return big.NewInt(1) }
+
+// testSealer gives test headers the PoA seal fields (nonce, mixHash), which
+// the config's Avocado makes header verification check.
+var testSealer = ethash.NewFaker()
+
+// poaSeal sets h's PoA seal fields for its current contents, as Engine.Seal
+// does for a proposal. Call it after any change to a field the seal hash
+// covers (time, coinbase, root, ...), before commit seals are made.
+func poaSeal(h *types.Header) {
+	sealed := testSealer.SealPoA(types.NewBlockWithHeader(h)).Header()
+	h.Nonce, h.MixDigest = sealed.Nonce, sealed.MixDigest
+}
 
 func usePoAMode(t *testing.T) {
 	old := params.ConsensusMethod
@@ -82,6 +96,7 @@ func (net *testNet) bftHeader(t *testing.T, parent *types.Header, builder int, r
 		t.Fatal(err)
 	}
 	h.MinerNodeSig = sig
+	poaSeal(h)
 	digest := CommitDigest(h.Hash(), round, testChainID)
 	for _, i := range sealers {
 		seal, err := SignCommitSeal(digest, net.keys[i])
@@ -162,6 +177,7 @@ func TestEngineVerifiesPBFTHeader(t *testing.T) {
 			h := net.bftHeader(t, parent, 1, 0, nil)
 			h.Time = parent.Time - 1
 			h.MinerNodeSig, _ = crypto.Sign(ethash.BftBuilderSigHash(h.Number, h.Root), net.keys[1])
+			poaSeal(h)
 			for _, i := range []int{0, 1, 2} {
 				seal, _ := SignCommitSeal(CommitDigest(h.Hash(), 0, testChainID), net.keys[i])
 				h.CommitSeals = append(h.CommitSeals, seal)
@@ -253,6 +269,7 @@ func TestEngineSignersWithParentState(t *testing.T) {
 	// Header rules that need no state still apply.
 	early := net.bftHeader(t, parent, 1, 0, nil)
 	early.Time = parent.Time - 1
+	poaSeal(early)
 	if err := engine.VerifyHeader(chain, early); !errors.Is(err, errTimeBeforeParent) {
 		t.Errorf("stateless rule without the parent state: %v", err)
 	}
@@ -300,6 +317,7 @@ func TestEngineBuilderIdentity(t *testing.T) {
 		h := net.bftHeader(t, parent, 1, 0, nil)
 		h.Coinbase = coinbase
 		h.MinerNodeSig = sign(h)
+		poaSeal(h)
 		for _, i := range []int{0, 1, 2} {
 			seal, _ := SignCommitSeal(CommitDigest(h.Hash(), 0, testChainID), net.keys[i])
 			h.CommitSeals = append(h.CommitSeals, seal)
@@ -409,6 +427,7 @@ func TestEngineBatchAcrossSwitch(t *testing.T) {
 			TxHash: types.EmptyTxsHash, ReceiptHash: types.EmptyReceiptsHash, Difficulty: big.NewInt(1),
 			Number: big.NewInt(n), GasLimit: parent.GasLimit, Time: parent.Time + 1,
 			WithdrawalsHash: &types.EmptyWithdrawalsHash, ExcessBlobGas: new(big.Int), BlobGasUsed: new(big.Int)}
+		poaSeal(h)
 		batch = append(batch, h)
 		parent = h
 	}

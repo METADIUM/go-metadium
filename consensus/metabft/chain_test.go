@@ -96,7 +96,7 @@ func (env *chainEnv) propose(bc *core.BlockChain, engine *Engine, parent *types.
 	if err != nil {
 		env.t.Fatal(err)
 	}
-	return block
+	return engine.legacy.SealPoA(block) // as Engine.Seal does
 }
 
 // seal attaches commit seals for round by the given validators.
@@ -113,10 +113,12 @@ func (env *chainEnv) seal(block *types.Block, round uint64, sealers ...int) *typ
 	return block.WithSeal(h)
 }
 
-// withHeader returns block with its header changed by edit.
+// withHeader returns block with its header changed by edit, and the PoA
+// seal fields redone for it, as its builder would.
 func withHeader(block *types.Block, edit func(*types.Header)) *types.Block {
 	h := block.Header()
 	edit(h)
+	poaSeal(h)
 	return block.WithSeal(h)
 }
 

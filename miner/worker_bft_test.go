@@ -55,6 +55,8 @@ func bftWorkerConfig() *params.ChainConfig {
 		ChainID:        big.NewInt(1337),
 		HomesteadBlock: big.NewInt(0), EIP150Block: big.NewInt(0), EIP155Block: big.NewInt(0), EIP158Block: big.NewInt(0),
 		ByzantiumBlock: big.NewInt(0), ConstantinopleBlock: big.NewInt(0), PetersburgBlock: big.NewInt(0), IstanbulBlock: big.NewInt(0),
+		MuirGlacierBlock: big.NewInt(0), BerlinBlock: big.NewInt(0), LondonBlock: big.NewInt(0),
+		AvocadoBlock: big.NewInt(0), PangyoBlock: big.NewInt(0), ApplepieBlock: big.NewInt(0), BokbunjaBlock: big.NewInt(0),
 		CamelliaBlock: big.NewInt(0),
 		BftBlock:      big.NewInt(1),
 		Bft:           &params.BftConfig{EmptyBlockInterval: 5, BaseTimeout: 2, MaxBackoffExp: 5, TimeDrift: 2},
