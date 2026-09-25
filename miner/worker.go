@@ -601,7 +601,26 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 	}
 
 	// commitSimple just starts a new commitNewWork
+	//
+	// On a PBFT chain it does not hold busyMining across the send: commitWork
+	// takes it itself, as soon as mainLoop receives, and would find it still
+	// held here often enough to drop the request, leaving the proposal to the
+	// next 1 s tick (up to a second of confirmation latency with idleseal on
+	// a 7-node network). A request that finds a build running is retried
+	// shortly instead, since it may carry a proposal the running build does
+	// not (a new round, or transactions that arrived after its fill).
+	bftChain := w.chainConfig.BftBlock != nil
+	retry := false
 	commitSimple := func() {
+		if bftChain {
+			if atomic.LoadInt32(&w.busyMining) != 0 {
+				retry = true
+				return
+			}
+			w.newWorkCh <- &newWorkReq{interrupt: nil, timestamp: time.Now().Unix()}
+			w.newTxs.Store(0)
+			return
+		}
 		if atomic.CompareAndSwapInt32(&w.busyMining, 0, 1) {
 			w.newWorkCh <- &newWorkReq{interrupt: nil, timestamp: time.Now().Unix()}
 			w.newTxs.Store(0)
@@ -624,6 +643,16 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 	bftWake := w.bftProposalWake()
 
 	for {
+		if retry {
+			retry = false
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(bftRetryDelay)
+		}
 		select {
 		case <-w.startCh:
 			w.refreshPending(false)
@@ -1232,6 +1261,14 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *atomic.Int32,
 		// the fill above, which drained txCh, so an arrival during the wait
 		// resets it by taking the txCh branch. Off (0) on the public networks,
 		// where the slot always runs to env.till.
+		// PBFT: an empty build does not hold the slot open (see bftEmptyBuild).
+		if w.chainConfig.IsBft(env.header.Number) && env.tcount == 0 {
+			stopTimer(timer)
+			if w.bftEmptyDue(env.header.Number) {
+				break // propose the empty block now
+			}
+			return true // nothing to propose; the next arrival starts a new build
+		}
 		var (
 			quiet  *time.Timer
 			quietC <-chan time.Time

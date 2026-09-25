@@ -41,6 +41,10 @@ type bftProducer interface {
 // fewer nodes than PBFT needs (design §9.3.1).
 var errBftFloorBreach = errors.New("transaction breaks the PBFT validator floor")
 
+// bftRetryDelay is how soon a PBFT work request that found a build running
+// is tried again.
+const bftRetryDelay = 20 * time.Millisecond
+
 // bftExcludeHeights is how long a transaction that broke the validator
 // floor is left out before it is tried again; governance may have changed
 // by then.
@@ -116,6 +120,23 @@ func (w *worker) bftProposalWanted(height *big.Int) bool {
 	}
 	pending, _ := w.eth.TxPool().Stats()
 	return p.ProposalWanted(height.Uint64(), pending > 0)
+}
+
+// bftEmptyDue reports whether the node wants a block for height even
+// without transactions: the empty-block interval has passed, or a later
+// round needs a proposal.
+//
+// A PBFT build that comes out empty neither waits for the rest of its
+// collection window nor proposes, unless an empty block is due. Holding the
+// window open cost an idle chain the window on every empty block (6.1 s
+// intervals at a 5 s emptyBlockInterval), and a build started for a
+// transaction the pool had not yet evicted after its block delayed the next
+// transaction by up to the window. PoA keeps its behaviour: there a
+// withheld round would burn the mining token; PBFT has none, and the height
+// keeps asking until it is proposed.
+func (w *worker) bftEmptyDue(height *big.Int) bool {
+	p, ok := w.engine.(bftProducer)
+	return ok && p.ProposalWanted(height.Uint64(), false)
 }
 
 // bftProposalWake is the engine's wake-up channel on a PBFT chain, nil
