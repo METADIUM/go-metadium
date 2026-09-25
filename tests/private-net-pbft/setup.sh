@@ -156,6 +156,8 @@ HDR
     echo "    container_name: gmet-pbft-$node"
     echo "    hostname: gmet-pbft-$node"
     [[ $n != 1 ]] && printf '    depends_on:\n      - node1\n'
+    echo "    environment:"
+    echo "      - METABFT_FAULT=\${FAULT_$node:-}   # fault injection, with a pbftfault build (byzantine.sh)"
     echo "    volumes:"
     echo "      - ./genesis.json:/data/genesis.json:ro"
     echo "      - ./data/$node:/data/geth"

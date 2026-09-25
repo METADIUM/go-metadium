@@ -202,8 +202,8 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | S-01 | Stop 1 validator | production continues | [x] — N=7 and N=4, `pbft-test.sh` |
 | S-02 | Stop 2 validators (= f) | production continues, slower | [x] — N=7: 14 blocks with 2 of 7 stopped; both caught up |
 | S-03 | Stop 3 validators (> f) | stops; resumes on recovery; no fork | [x] — N=7: no progress with 3 of 7 down (176 → 176), resumed on recovery, all agree |
-| S-04 | Equivocating proposer | no commit, round change, evidence ×2, alarm | [ ] |
-| S-05 | Wrong state root / Rewards / Coinbase | PREPARE refused, round change | [ ] |
+| S-04 | Equivocating proposer | no commit, round change, evidence ×2, alarm | [x] — `byzantine.sh`, N=7, pbftfault build: the equivocating proposer's rounds never commit, the chain continues, evidence stored on the 3 peers that received both PRE-PREPAREs, all agree |
+| S-05 | Wrong state root / Rewards / Coinbase | PREPARE refused, round change | [x] — `byzantine.sh`, N=7: proposals with a wrong rewards field refused by the others ("rewards field does not match the reward distribution"), none commits, the chain continues. A wrong state root is caught by `ValidateState` in the same path (unit tests) |
 | S-06 | 4:3 partition | both sides stop; resumes on heal; no fork | [x] — N=7, `faults.sh`: 3 validators cut off (isolated from each other too, so 4/1/1/1: Docker bridges cannot overlap and the image has no iptables); the 4 stop, resume on heal, no fork, no evidence. True 4:3 split since: iptables in the image, 3 validators cut off while connected to each other; both sides stop (450 → 450), the minority changing rounds (round 4) without committing; healed, all agree, no evidence |
 | S-07 | One node clock +5 min | production continues | [ ] |
 | S-08 | Add/remove validator via governance | switch at epoch boundary | [x] — `governance.sh`, N=5, real ballots: node5 removed, from the next block 3 seals (quorum of 4) and node5 not proposing; added back, 4 seals (quorum of 5) and node5 proposing, no restart, no round change |
@@ -212,9 +212,9 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | S-11 | Kill after PREPARE / after COMMIT, restart | no conflicting vote, lock restored | [x] — N=7, `faults.sh`: SIGKILL of validators in turn under transaction load, three rounds; progress, agreement, no equivocation evidence anywhere. The kill point is not aimed at PREPARE/COMMIT; the simulator covers those exactly (`TestSimAmnesiaAfterCommit`). A deterministic network version would need a debug flag that exits right after the WAL write of a COMMIT (review on #164) |
 | S-12 | Restart with WAL deleted | observer mode, joins after one height | [x] — N=7, `faults.sh`: restarted without its WAL, the node reports observer mode, leaves it after a height, all agree |
 | S-13 | Same node key on two servers | evidence + alarm | [ ] |
-| S-14 | Proposer `Time` past / +10s | rejected; next height round 0 normal | [ ] |
+| S-14 | Proposer `Time` past / +10s | rejected; next height round 0 normal | [x] — `byzantine.sh`, N=7: proposals stamped before the parent or 10 s ahead refused by the local-clock bound, which a fresh proposal meets before the header rules; `Time >= parent.Time` at import is covered by `TestEngineVerifiesPBFTHeader` |
 | S-15 | Governance removal down to N = 3 | tx never commits, chain continues | [x] — `governance.sh`: the deciding vote of a ballot to go from 4 to 3 never committed; the chain continued at N=4, and the validators that proposed meanwhile logged `3, minimum 4` (the post-state count read from the real contracts). See P5-27 |
-| S-16 | Re-proposed block after round change commits | original `MinerNodeSig`, `BftRound` = commit round, imports | [ ] |
+| S-16 | Re-proposed block after round change commits | original `MinerNodeSig`, `BftRound` = commit round, imports | [x] — `byzantine.sh`, N=7: with every round-0 COMMIT withheld at heights divisible by 10, height 230 committed in round 1 with round 0's proposer as builder (the prepared block re-proposed unchanged), imported on every node |
 | S-17 | Pre-fork block with arbitrary `CommitSeals` | import rejected | [ ] |
 
 ### Transition rehearsal
