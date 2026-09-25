@@ -6,3 +6,4 @@ config.json
 passwords.txt
 .env
 docker-compose.yml
+__pycache__/
