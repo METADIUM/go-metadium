@@ -5,6 +5,7 @@
 # Usage:   ./setup.sh
 # Options: GMET_BIN=/path/to/gmet  BOOTNODE_BIN=/path/to/bootnode
 #          NODES=4 (4..9; all of them governance members and validators)
+#          NODE_ARGS="--metadium.block.idleseal 100" (extra flags for every node)
 #          BFT_BLOCK=200 (the switch; governance must be deployed before it)
 #          CAMELLIA_BLOCK=100 (must not be after BFT_BLOCK)
 #
@@ -19,6 +20,7 @@ cd "$SCRIPT_DIR"
 GMET_BIN="${GMET_BIN:-$SCRIPT_DIR/../../build/bin/gmet}"
 BOOTNODE_BIN="${BOOTNODE_BIN:-$SCRIPT_DIR/../../build/bin/bootnode}"
 NODES="${NODES:-4}"
+NODE_ARGS="${NODE_ARGS:-}"   # extra flags for every node, e.g. "--metadium.block.idleseal 100"
 BFT_BLOCK="${BFT_BLOCK:-200}"
 CAMELLIA_BLOCK="${CAMELLIA_BLOCK:-100}"
 PASSWORD="privatenet123"
@@ -168,6 +170,7 @@ HDR
     echo "      --http.api eth,net,web3,admin,miner,txpool,debug,personal,metabft"
     echo "      --http.corsdomain \"*\" --http.vhosts \"*\""
     echo "      --port 30303 --nat extip:172.32.0.1$n --maxpeers 16 --verbosity 3 --userocksdb 0"
+    [[ -n "$NODE_ARGS" ]] && echo "      $NODE_ARGS"
     if [[ $n == 1 ]]; then
       echo "      --unlock $account --password /data/geth/password.txt --allow-insecure-unlock --rpc.txfeecap 0"
     fi

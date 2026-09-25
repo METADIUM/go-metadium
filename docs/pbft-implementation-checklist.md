@@ -227,12 +227,12 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 | ID | Measurement | Target | Result | Status |
 |----|-------------|--------|--------|--------|
-| M-01 | Confirmation latency, N=7 LAN (`idleseal=100`) | p99 < 300ms (PoA baseline p99 130ms) | | [ ] |
-| M-02 | Idle empty-block interval | `EmptyBlockInterval` ± 10%, 0 round changes | | [ ] |
-| M-03 | Round changes under load (several blocks/s) | 0 | | [ ] |
+| M-01 | Confirmation latency, N=7 LAN (`idleseal=100`) | p99 < 300ms (PoA baseline p99 130ms) | p50 198 / p99 220 ms (N=7, idleseal 100, `measure.py`; 1121 ms before #165) | [x] |
+| M-02 | Idle empty-block interval | `EmptyBlockInterval` ± 10%, 0 round changes | 5.09 s mean over 10 intervals, 0 round changes (6.09 s before #165) | [x] |
+| M-03 | Round changes under load (several blocks/s) | 0 | 0 blocks above round 0 in 60 s at ~900 transfers/s | [x] |
 | M-04 | Fixed-interval profile (`blockCreationTime = 2000`, no idleseal) | 2.0s interval holds | | [ ] — the PBFT build window is capped at `timeDrift/2` (1s at the default drift), so without idleseal blocks may come faster than `blockCreationTime`; pacing belongs in `ProposalWanted` if the profile must hold |
 | M-05 | WAL fsync cost per block | recorded, included in M-01 | | [ ] |
-| M-06 | TPS vs Camellia (`scripts/rpc-test-full.sh`, `mixed-tx-e2e`) | no regression beyond agreed margin | | [ ] |
+| M-06 | TPS vs Camellia (`scripts/rpc-test-full.sh`, `mixed-tx-e2e`) | no regression beyond agreed margin | ~902 tx/s PBFT vs ~839 tx/s PoA on the same 7-node network (value transfers, `measure.py`); the RPC suites not rerun | [ ] |
 | M-07 | Validator execution cost: each block runs twice (proposal check, then import); if it dominates M-01, keep the processed state for the import (review on #152) | recorded | | [ ] |
 | M-08 | Full-sync speed: `Engine.VerifyHeaders` checks a batch sequentially on one goroutine (review on #150) | recorded | | [ ] |
 | M-09 | Proposer cost of the validator-floor check: a fresh EVM and two static calls after every transaction at a PBFT height; if it shows in M-01, look the registry up once per build and call only `getNodeLength` per transaction (review on #155) | recorded | | [ ] |

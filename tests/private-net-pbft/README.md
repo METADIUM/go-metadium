@@ -15,6 +15,8 @@ NODES=7 ./setup.sh  # node keys and accounts, genesis (BFT_BLOCK=200 by default)
 ./deploy.sh         # governance with every node as a member; before bftBlock
 ./pbft-test.sh      # switch, seals, rotation, agreement, finality, f and f+1 down
 ./faults.sh         # partition, kill -9 under load, WAL loss
+./measure.py        # latency, idle interval, load (§11.3); with NODE_ARGS="--metadium.block.idleseal 100"
+                    # for the private operating profile
 ./stop.sh --clean   # remove containers, data and the generated files
 ```
 
