@@ -26,7 +26,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 // bftTestChain is a chain whose config switches to PBFT at bftBlock. The
@@ -132,5 +134,77 @@ func TestProposalSidecars(t *testing.T) {
 	bc.AddProposalSidecars(hash, sc)
 	if got := bc.GetBlobSidecars(hash); len(got) != 1 {
 		t.Errorf("proposal sidecars: %v", got)
+	}
+}
+
+// TestCompleteSidecarsOnImport: a validator that fetched a proposal's full
+// sidecar set before voting keeps it when the block is written, even if its
+// pool holds only some of them (review on #163).
+func TestCompleteSidecarsOnImport(t *testing.T) {
+	bc, _ := bftTestChain(t, 3)
+	hash := common.Hash{0xb2}
+	one, two := &types.BlobTxSidecar{}, &types.BlobTxSidecar{}
+	partial := []*types.BlobTxSidecar{one}
+	if got := bc.completeSidecars(hash, partial, 2); len(got) != 1 {
+		t.Fatalf("nothing recorded: %d sidecars, want the pool's 1", len(got))
+	}
+	bc.AddProposalSidecars(hash, []*types.BlobTxSidecar{one, two})
+	if got := bc.completeSidecars(hash, partial, 2); len(got) != 2 {
+		t.Errorf("recorded full set: %d sidecars, want 2", len(got))
+	}
+	if got := bc.completeSidecars(hash, []*types.BlobTxSidecar{two, one}, 2); got[0] != two {
+		t.Error("a complete pool set was replaced")
+	}
+	if got := bc.completeSidecars(common.Hash{0xb3}, nil, 0); got != nil {
+		t.Errorf("a block without blobs: %v", got)
+	}
+}
+
+// TestImportKeepsRecordedSidecars drives the same case through block import:
+// a block with two blob transactions, the pool holding the sidecar of only
+// the first, and the full set recorded for the block before it is written.
+func TestImportKeepsRecordedSidecars(t *testing.T) {
+	key, _ := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	sender := crypto.PubkeyToAddress(key.PublicKey)
+	config := &params.ChainConfig{
+		ChainID:        big.NewInt(1337),
+		HomesteadBlock: big.NewInt(0), EIP150Block: big.NewInt(0), EIP155Block: big.NewInt(0), EIP158Block: big.NewInt(0),
+		ByzantiumBlock: big.NewInt(0), ConstantinopleBlock: big.NewInt(0), PetersburgBlock: big.NewInt(0), IstanbulBlock: big.NewInt(0),
+		BerlinBlock: big.NewInt(0), LondonBlock: big.NewInt(0), CamelliaBlock: big.NewInt(0),
+		Ethash: new(params.EthashConfig),
+	}
+	genesis := &Genesis{Config: config, Difficulty: big.NewInt(1), GasLimit: 30_000_000, BaseFee: big.NewInt(params.InitialBaseFee),
+		Alloc: types.GenesisAlloc{sender: {Balance: big.NewInt(1e18)}}}
+	signer := types.LatestSigner(config)
+	var txs []*types.Transaction
+	_, blocks, _ := GenerateChainWithGenesis(genesis, ethash.NewFaker(), 1, func(i int, b *BlockGen) {
+		for n := uint64(0); n < 2; n++ {
+			tx := types.MustSignNewTx(key, signer, &types.BlobTx{
+				ChainID: uint256.NewInt(1337), Nonce: n, GasTipCap: uint256.NewInt(1), GasFeeCap: uint256.NewInt(1e12),
+				Gas: 21000, To: &common.Address{0x01}, MaxFeePerBlobGas: uint256.NewInt(1e12), Value: new(uint256.Int),
+				BlobHashes: []common.Hash{{0x01, byte(n)}},
+			})
+			b.AddTx(tx)
+			txs = append(txs, tx)
+		}
+	})
+	bc, err := NewBlockChain(rawdb.NewMemoryDatabase(), nil, genesis, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Stop()
+	first, second := &types.BlobTxSidecar{Commitments: [][]byte{{1}}}, &types.BlobTxSidecar{Commitments: [][]byte{{2}}}
+	bc.BlobSidecarFn = func(h common.Hash) *types.BlobTxSidecar {
+		if h == txs[0].Hash() {
+			return first
+		}
+		return nil
+	}
+	bc.AddProposalSidecars(blocks[0].Hash(), []*types.BlobTxSidecar{first, second})
+	if _, err := bc.InsertChain(blocks); err != nil {
+		t.Fatal(err)
+	}
+	if got := rawdb.ReadBlobSidecars(bc.db, blocks[0].Hash(), 1); len(got) != 2 {
+		t.Errorf("stored %d sidecars after import, want the recorded 2", len(got))
 	}
 }

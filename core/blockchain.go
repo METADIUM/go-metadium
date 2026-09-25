@@ -1905,6 +1905,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 			return it.index, err
 		}
 		// Persist collected blob sidecars.
+		blobSidecars = bc.completeSidecars(block.Hash(), blobSidecars, blobTxCount)
 		if len(blobSidecars) > 0 {
 			rawdb.WriteBlobSidecars(bc.db, block.Hash(), block.NumberU64(), blobSidecars)
 		}
