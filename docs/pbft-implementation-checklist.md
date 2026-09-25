@@ -190,7 +190,7 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 ---
 
-**Test config (review on #158):** the unit tests ran PBFT on a config without Avocado, so neither private-network bug (the in-batch parent, the mixHash) showed there. PBFT tests should use a config with the forks a real private network has from genesis (Avocado, Pangyo, Camellia), so the engine tests enforce the same header rules. Open.
+**Test config (review on #158):** the unit tests ran PBFT on a config without Avocado, so neither private-network bug (the in-batch parent, the mixHash) showed there. PBFT tests should use a config with the forks a real private network has from genesis (Avocado, Pangyo, Camellia), so the engine tests enforce the same header rules. Done: the `consensus/metabft` engine and chain tests and the miner's PBFT worker tests run with London, Avocado, Pangyo, Applepie, Bokbunja and Camellia from genesis, and their headers carry the PoA seal fields as real ones do. Without `Engine.Seal`'s sealing step the worker test now fails with the mixHash error the network showed.
 
 ## P6: verification on 7 nodes
 
