@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -72,6 +73,9 @@ type Node struct {
 	blocks chan *types.Block
 	quit   chan struct{}
 	wg     sync.WaitGroup
+
+	insertFailures atomic.Uint64
+	droppedMsgs    atomic.Uint64
 
 	// Loop-owned.
 	head      *types.Header
@@ -142,6 +146,7 @@ func (n *Node) HandleMessage(m *Message) {
 	select {
 	case n.msgs <- m:
 	default:
+		n.droppedMsgs.Add(1)
 		n.log.Warn("Consensus message queue full; dropping", "type", m.Type, "height", m.Height, "round", m.Round)
 	}
 }
@@ -179,6 +184,22 @@ func (n *Node) SubmitBlock(block *types.Block) error {
 		n.log.Debug("A proposal is already waiting; dropping this one", "number", block.Number(), "hash", block.Hash())
 	}
 	return nil
+}
+
+// NodeCounters are failures an operator should see (the status RPC, P5-20).
+type NodeCounters struct {
+	// InsertFailures counts decided blocks this node could not write. The
+	// height then waits for sync; a deterministic failure (a local rule the
+	// quorum disagrees with) leaves it waiting, and this is where it shows.
+	InsertFailures uint64
+	// DroppedMessages counts messages the full queue turned away; a dropped
+	// COMMIT can cost a round.
+	DroppedMessages uint64
+}
+
+// Counters returns the failure counters.
+func (n *Node) Counters() NodeCounters {
+	return NodeCounters{InsertFailures: n.insertFailures.Load(), DroppedMessages: n.droppedMsgs.Load()}
 }
 
 // Status returns the height and round being agreed on.
@@ -372,6 +393,7 @@ func (n *Node) Commit(p Proposal, round uint64, seals [][]byte) {
 	h.BftRound, h.CommitSeals = round, seals
 	sealed := b.WithSeal(h)
 	if err := n.chain.InsertBlock(sealed); err != nil {
+		n.insertFailures.Add(1)
 		// The height stays decided here; the block comes back through sync
 		// from a validator that wrote it.
 		n.log.Error("Cannot write the decided block", "number", sealed.Number(), "hash", sealed.Hash(), "err", err)
