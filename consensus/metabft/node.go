@@ -175,6 +175,8 @@ func (n *Node) SubmitBlock(block *types.Block) error {
 	case n.blocks <- block:
 	default:
 		// A block is already waiting; the builder retries on its next cycle.
+		// Logged, since a loop that stops draining shows up here first.
+		n.log.Debug("A proposal is already waiting; dropping this one", "number", block.Number(), "hash", block.Hash())
 	}
 	return nil
 }

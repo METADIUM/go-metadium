@@ -588,6 +588,9 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 	//
 	// A PBFT chain needs it too: pending transactions are what let the
 	// round-0 proposer build before the empty-block interval (design §4.5).
+	// It is subscribed for the whole chain, PoA bootstrap segment included,
+	// which costs that segment a round per burst; keep it so, or the first
+	// PBFT height loses its transaction wake-up at the switch.
 	var txCh chan core.NewTxsEvent
 	if params.BlockIdleSealTime > 0 || params.BlockEmptyInterval > 0 || w.chainConfig.BftBlock != nil {
 		txCh = make(chan core.NewTxsEvent, 64)

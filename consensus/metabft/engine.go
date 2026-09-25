@@ -390,8 +390,9 @@ func (e *Engine) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 
 // Seal implements consensus.Engine. At PBFT heights a block is not sealed
 // here but proposed: it goes to the node, which decides it with the other
-// validators and writes it itself. Nothing is ever sent on results then;
-// the miner must not wait for it (design §7.3).
+// validators and writes it itself. Nothing is ever sent on results then, so
+// a caller that waits on it at a PBFT height waits forever; the miner does
+// not (proposeBft passes nil) (design §7.3).
 func (e *Engine) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
 	if !isBft(chain, block.Number()) {
 		return e.legacy.Seal(chain, block, results, stop)
