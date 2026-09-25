@@ -158,7 +158,7 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 | ID | Item | Design | Status |
 |----|------|--------|--------|
-| P5-00 | Remove the `errBftNotImplemented` startup guard (`eth/bft_guard.go`) once a PBFT chain can produce blocks end to end (P5-07, P5-08, P5-23); P5-01 alone would let a node start on a chain that then stops at `bftBlock` | §9.3 | [ ] |
+| P5-00 | Remove the `errBftNotImplemented` startup guard (`eth/bft_guard.go`) once a PBFT chain can produce blocks end to end (P5-07, P5-08, P5-23) and the guards are in (P5-13 `N >= 4`, P5-16 no reorg below finality, P5-25 no snap sync; review on #152); P5-01 alone would let a node start on a chain that then stops at `bftBlock` | §9.3 | [ ] |
 | P5-01 | Wrapper engine `metabft.Engine` created in `CreateConsensusEngine` when the chain config has `bftBlock`; below it every call goes to the PoA engine (P5a) | §7.2 | [x] |
 | P5-02 | `VerifyHeader` pre-fork: `CommitSeals == nil && BftRound == 0` | §5.2, §5.3 | done in P1-06: the PoA engine enforces it for every height it verifies |
 | P5-03 | `VerifyHeader` post-fork: the PoA engine's header checks (`VerifyHeaderPBFT`, which covers the Camellia fields and `ParentBeaconRoot == nil`; `IsCamellia` is guaranteed by `checkBft`), plus `Time >= parent.Time` (P5a) | §5.3 | [x] |
