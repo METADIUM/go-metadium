@@ -164,13 +164,13 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | P5-03 | `VerifyHeader` post-fork: the PoA engine's header checks (`VerifyHeaderPBFT`, which covers the Camellia fields and `ParentBeaconRoot == nil`; `IsCamellia` is guaranteed by `checkBft`), plus `Time >= parent.Time` (P5a) | §5.3 | [x] |
 | P5-04 | `VerifyHeader` post-fork: `MinerNodeSig` over `keccak256(number ‖ root)` (the Pangyo form) by `MinerNodeId`, a validator of the parent state, and `Coinbase` that validator's governance coinbase; the PoA engine assembles this form at PBFT heights (P5a) | §5.3 | [x] |
 | P5-05 | `VerifyHeader` post-fork: `>= Quorum` distinct seals over `commitDigest(BlockHash, BftRound, ChainID)`, every seal valid (`VerifySeals`, P5a) | §5.3 | [x] |
-| P5-06 | PRE-PREPARE time bound `\|Time − localNow\| <= timeDrift` (not applied on sync) | §4.5 | [ ] |
+| P5-06 | PRE-PREPARE time bound `\|Time − localNow\| <= timeDrift` (not applied on sync) | §4.5 | [x] — fresh proposals only: a re-proposal of a prepared block keeps its original `Time`, which a quorum already checked, and the core says which is which (`VerifyProposal(p, fresh)`, P5c) |
 | P5-07 | Worker proposer gate via `IsBftProposer` (`miner/worker.go:1666-1681`) | §7.3 | [ ] |
-| P5-08 | Worker hands the block to the BFT core; backend writes on commit | §7.3 | [ ] — the node side is done in P5-24 (`SubmitBlock`, and `Commit` writes through `Chain.InsertBlock`); the worker side is open |
+| P5-08 | Worker hands the block to the BFT core; backend writes on commit | §7.3 | [ ] — the node side is done in P5-24 (`SubmitBlock`, and `Commit` writes through `Chain.InsertBlock`, which imports the block with its seals and posts it for broadcast, P5c); the worker side is open |
 | P5-09 | `LogBlock` / `ReleaseMiningToken` skipped post-fork (`miner/worker.go:1901-1910`) | §7.3 | [ ] |
 | P5-10 | Proposer timestamp `max(parent.Time, now)`; `timeIt` not used post-fork | §7.3 | [ ] |
-| P5-11 | Non-proposers validate via `ValidateBody` + `Process` + `ValidateState` | §7.3 | [ ] |
-| P5-12 | Rewards/Coinbase compared, not overwritten, post-fork (`consensus.go:741, 754`) | §7.5 | [ ] |
+| P5-11 | Non-proposers validate via `ValidateBody` + `Process` + `ValidateState` | §7.3 | [x] — `metabft.BlockChain.VerifyBlock`, on a copy of the head state; header through `Engine.VerifyProposal` (every import rule but the seals) (P5c) |
+| P5-12 | Rewards/Coinbase compared, not overwritten, post-fork (`consensus.go:741, 754`) | §7.5 | [x] — `Rewards` is compared with the distribution from the parent state and `Fees`, at import and on proposals; empty where governance has no distribution (`ErrNotInitialized`). `Coinbase` is the builder's governance coinbase (P5-04): the reward coinbase is overwritten by the signer's in `FinalizeAndAssemble` today, so it is not what the header carries (P5c) |
 | P5-13 | Block invalid if post-execution governance node count < 4; proposer drops the offending tx | §9.3.1 | [ ] |
 | P5-14 | `verifyMinerLimit` skipped post-fork | §4.3 | [x] — the PBFT engine never calls the PoA `verifyBlockSig`, where the limit lives (P5a) |
 | P5-15 | `getFinalizedBlockNumber` returns head post-fork (`metadium/admin.go:645`) | §7.4 | [ ] |

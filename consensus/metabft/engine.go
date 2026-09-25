@@ -34,6 +34,17 @@ func GovernanceValidators(height uint64) (*ValidatorSet, error) {
 	return set.WithCoinbases(coinbases)
 }
 
+// RewardsFunc computes the rewards field of block number from its fees, as
+// the PoA engine's accumulateRewards does (metadium/miner.CalculateRewards
+// with no block reward and no crediting).
+type RewardsFunc func(number, fees *big.Int) (rewards []byte, err error)
+
+// GovernanceRewards is the Metadium reward distribution.
+func GovernanceRewards(number, fees *big.Int) ([]byte, error) {
+	_, rewards, err := metaminer.CalculateRewards(number, new(big.Int), fees, nil)
+	return rewards, err
+}
+
 // Engine is the consensus engine of a PBFT network (design §7.2). One chain
 // holds a PoA bootstrap segment below bftBlock and PBFT above it, and a node
 // syncing from genesis verifies both, so the engine wraps the PoA engine:
@@ -42,11 +53,12 @@ func GovernanceValidators(height uint64) (*ValidatorSet, error) {
 type Engine struct {
 	legacy     *ethash.Ethash
 	validators ValidatorsFunc
+	rewards    RewardsFunc
 }
 
 // NewEngine wraps the PoA engine.
 func NewEngine(legacy *ethash.Ethash, validators ValidatorsFunc) *Engine {
-	return &Engine{legacy: legacy, validators: validators}
+	return &Engine{legacy: legacy, validators: validators, rewards: GovernanceRewards}
 }
 
 var (
@@ -57,6 +69,8 @@ var (
 	errBadSeal           = errors.New("metabft: invalid commit seal")
 	errDuplicateSeal     = errors.New("metabft: two commit seals from one validator")
 	errUnclesAtPBFT      = errors.New("metabft: uncles at a PBFT height")
+	errBadRewards        = errors.New("metabft: rewards field does not match the reward distribution")
+	errSealedProposal    = errors.New("metabft: proposal carries commit data")
 	errSealingNotRunning = errors.New("metabft: PBFT sealing is not wired to the miner yet")
 )
 
@@ -158,18 +172,81 @@ func parentStateMissing(chain consensus.ChainHeaderReader, parent *types.Header)
 	return ok && !sr.HasBlockAndState(parent.Hash(), parent.Number.Uint64())
 }
 
-// verifySigners checks the proposer signature and the commit seals against
-// the validator set of the parent state. A height whose set cannot be read
-// is not accepted: there is no bootstrap fallback here.
+// verifySigners runs the checks that read the parent state: the builder
+// against the validator set, the rewards field, and the commit seals. A
+// height whose set cannot be read is not accepted: there is no bootstrap
+// fallback here.
 func (e *Engine) verifySigners(chain consensus.ChainHeaderReader, header *types.Header) error {
-	set, err := e.validators(header.Number.Uint64())
+	set, err := e.verifyBuilt(header)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errNoValidatorSet, err)
-	}
-	if err := verifyProposerSig(header, set); err != nil {
 		return err
 	}
 	return VerifySeals(header, chain.Config().ChainID.Uint64(), set)
+}
+
+// verifyBuilt checks what the builder is responsible for and returns the
+// validator set it was checked against.
+func (e *Engine) verifyBuilt(header *types.Header) (*ValidatorSet, error) {
+	set, err := e.validators(header.Number.Uint64())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errNoValidatorSet, err)
+	}
+	if err := verifyProposerSig(header, set); err != nil {
+		return nil, err
+	}
+	return set, e.verifyRewards(header)
+}
+
+// verifyRewards compares the rewards field with the distribution computed
+// from the parent state and the block's fees (design §7.5; the fees
+// themselves are checked against execution by ValidateState). The PoA path
+// overwrites the field with its own result on a header copy and never
+// compares, so a wrong field only showed where it changed the state root.
+// Where the distribution is not set up in governance (ErrNotInitialized)
+// the PoA engine credits the fees to the coinbase and leaves the field
+// empty; so must the block. Coinbase is bound to the builder by
+// verifyProposerSig.
+func (e *Engine) verifyRewards(header *types.Header) error {
+	fees := header.Fees
+	if fees == nil {
+		fees = new(big.Int)
+	}
+	want, err := e.rewards(header.Number, fees)
+	switch {
+	case errors.Is(err, metaminer.ErrNotInitialized):
+		want = nil
+	case err != nil:
+		return fmt.Errorf("%w: %v", errBadRewards, err)
+	}
+	if !bytes.Equal(want, header.Rewards) {
+		return fmt.Errorf("%w: have %q, want %q", errBadRewards, header.Rewards, want)
+	}
+	return nil
+}
+
+// VerifyProposal checks a proposal's header before the core votes on it
+// (design §4.8 step 3): every rule of an imported header except the commit
+// seals, which a proposal cannot have yet. The parent must be in the chain
+// with its state.
+func (e *Engine) VerifyProposal(chain consensus.ChainHeaderReader, header *types.Header) error {
+	if !isBft(chain, header.Number) {
+		return fmt.Errorf("metabft: block %v is below bftBlock", header.Number)
+	}
+	if header.BftRound != 0 || len(header.CommitSeals) != 0 {
+		return errSealedProposal
+	}
+	parent := chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+	if parent == nil {
+		return consensus.ErrUnknownAncestor
+	}
+	if err := e.legacy.VerifyHeaderPBFT(chain, header, parent); err != nil {
+		return err
+	}
+	if header.Time < parent.Time {
+		return fmt.Errorf("%w: %d < %d", errTimeBeforeParent, header.Time, parent.Time)
+	}
+	_, err := e.verifyBuilt(header)
+	return err
 }
 
 // verifyProposerSig checks the block builder's identity (design §5.3):

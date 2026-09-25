@@ -21,8 +21,9 @@ type Chain interface {
 	CurrentHeader() *types.Header
 	// VerifyBlock runs the chain-side checks of design §4.8 (steps 3-6) on a
 	// proposal whose parent is the current head: header rules except the
-	// seals, timestamp bounds, execution, rewards, N >= 4.
-	VerifyBlock(block *types.Block) error
+	// seals, timestamp bounds (fresh proposals only, see
+	// Backend.VerifyProposal), execution, rewards, N >= 4.
+	VerifyBlock(block *types.Block, fresh bool) error
 	// InsertBlock writes a decided block, seals attached, as the new head.
 	InsertBlock(block *types.Block) error
 	// SubscribeHeads reports every new head, however the chain got it: this
@@ -319,12 +320,12 @@ func (n *Node) DecodeProposal(data []byte) (Proposal, error) {
 	return blockProposal{b}, nil
 }
 
-func (n *Node) VerifyProposal(p Proposal) error {
+func (n *Node) VerifyProposal(p Proposal, fresh bool) error {
 	b := p.(blockProposal).Block
 	if n.head == nil || b.ParentHash() != n.head.Hash() {
 		return errors.New("proposal is not on the local head")
 	}
-	return n.chain.VerifyBlock(b)
+	return n.chain.VerifyBlock(b, fresh)
 }
 
 func (n *Node) RequestProposal(height, round uint64) {

@@ -31,6 +31,7 @@ type simBlock struct {
 	Bad     bool   // fails VerifyProposal everywhere
 	Salt    uint64 // lets a Byzantine proposer make a second, different block
 	Nonce   uint64 // every build differs, like real blocks (timestamps, tx selection)
+	BuiltAt uint64 // simulated time of the build, the block's "timestamp"
 }
 
 func (b *simBlock) Height() uint64 { return b.H }
@@ -113,6 +114,7 @@ type sim struct {
 	partition          func(from, to int) bool             // true: cut
 	filter             func(from, to int, m *Message) bool // true: drop this message
 	buildDelay         time.Duration                       // time a proposer takes to have its block
+	drift              time.Duration                       // > 0: fresh proposals older than this fail, like BftTimeDrift
 	noSyncUntil        time.Duration                       // block sync is off before this time
 
 	decided  map[uint64]common.Hash // height -> the one hash anyone committed
@@ -221,13 +223,15 @@ func (nd *simNode) headHash() common.Hash {
 	return nd.chain[len(nd.chain)-1].Hash()
 }
 
-func (nd *simNode) VerifyProposal(p Proposal) error {
+func (nd *simNode) VerifyProposal(p Proposal, fresh bool) error {
 	b := p.(*simBlock)
 	switch {
 	case b.Bad:
 		return errors.New("bad block")
 	case b.H != uint64(len(nd.chain))+1 || b.Parent != nd.headHash():
 		return errors.New("not on the local head")
+	case fresh && nd.sim.drift > 0 && nd.sim.now-time.Duration(b.BuiltAt) > nd.sim.drift:
+		return errors.New("timestamp too far from the local clock")
 	}
 	return nil
 }
@@ -239,7 +243,7 @@ func (nd *simNode) RequestProposal(height, round uint64) {
 			return
 		}
 		b := &simBlock{H: height, Parent: nd.headHash(), Builder: uint64(nd.idx), Round: round, Bad: nd.kind == badProposer,
-			Nonce: nd.sim.rng.Uint64()}
+			Nonce: nd.sim.rng.Uint64(), BuiltAt: uint64(nd.sim.now)}
 		nd.sim.blocks[b.Hash()] = b
 		core.Propose(b, nd.sim.now)
 	})
@@ -664,6 +668,26 @@ func TestSimCommitWithheld(t *testing.T) {
 			if s.reproposals() == 0 {
 				t.Errorf("N=%d height %d: the prepared block was never re-proposed", n, target)
 			}
+		}
+	}
+}
+
+// TestSimReproposalOutlivesDrift: a prepared block is re-proposed rounds
+// after it was built, long past the timestamp bound for new proposals. It
+// must still be accepted, since no other block may be proposed at that
+// height.
+func TestSimReproposalOutlivesDrift(t *testing.T) {
+	for _, n := range simSizes {
+		s := newSim(t, n, 350)
+		s.drift = time.Second
+		s.filter = func(from, to int, m *Message) bool {
+			return m.Type == MsgCommit && m.Height == 3 && m.Round == 0 && to != 0
+		}
+		s.noSyncUntil = 24 * time.Hour // consensus alone must get past it
+		s.start()
+		s.reach(8, 30*time.Minute, nil)
+		if s.reproposals() == 0 {
+			t.Errorf("N=%d: the prepared block was never re-proposed", n)
 		}
 	}
 }
