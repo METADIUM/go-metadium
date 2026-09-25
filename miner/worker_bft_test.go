@@ -24,9 +24,11 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/consensus/metabft"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
@@ -59,14 +61,14 @@ func bftWorkerConfig() *params.ChainConfig {
 	}
 }
 
-// TestWorkerProposesAtPBFTHeight: on a PBFT chain the worker builds only
-// when the consensus node wants a block, without the PoA miner and token
-// gates, hands the block to the node instead of writing it, and the block
-// passes the validators' proposal checks.
-func TestWorkerProposesAtPBFTHeight(t *testing.T) {
+// newBftWorkerEnv sets up a PBFT engine with metadium's hooks stubbed:
+// validator 1 builds, with a governance coinbase unlike its etherbase, and
+// the PoA hooks count their calls in poaGates.
+func newBftWorkerEnv(t *testing.T, poaGates *atomic.Int32) (*metabft.Engine, *fakeProposer) {
+	t.Helper()
 	oldMethod := params.ConsensusMethod
 	params.ConsensusMethod = params.ConsensusPoA
-	defer func() { params.ConsensusMethod = oldMethod }()
+	t.Cleanup(func() { params.ConsensusMethod = oldMethod })
 
 	keys := make([]*ecdsa.PrivateKey, 4)
 	pubs := make([][]byte, 4)
@@ -86,10 +88,10 @@ func TestWorkerProposesAtPBFTHeight(t *testing.T) {
 
 	oldSign, oldLog, oldToken, oldIsMiner, oldCoinbase := metaminer.SignBlockFunc, metaminer.LogBlockFunc,
 		metaminer.AcquireMiningTokenFunc, metaminer.IsMinerFunc, metaminer.GetCoinbaseFunc
-	defer func() {
+	t.Cleanup(func() {
 		metaminer.SignBlockFunc, metaminer.LogBlockFunc, metaminer.AcquireMiningTokenFunc = oldSign, oldLog, oldToken
 		metaminer.IsMinerFunc, metaminer.GetCoinbaseFunc = oldIsMiner, oldCoinbase
-	}()
+	})
 	// The node's governance coinbase differs from its etherbase, as it may
 	// in production; the transactions must still run against the former.
 	metaminer.GetCoinbaseFunc = func(*big.Int) (common.Address, error) { return coinbases[1], nil }
@@ -97,7 +99,6 @@ func TestWorkerProposesAtPBFTHeight(t *testing.T) {
 		sig, err := crypto.Sign(ethash.BftBuilderSigHash(height, hash), keys[1])
 		return coinbases[1], nil, sig, err
 	}
-	var poaGates atomic.Int32
 	metaminer.LogBlockFunc = func(int64, common.Hash) { poaGates.Add(1) }
 	metaminer.AcquireMiningTokenFunc = func(*big.Int, common.Hash) (bool, error) { poaGates.Add(1); return true, nil }
 	metaminer.IsMinerFunc = func() bool { poaGates.Add(1); return true }
@@ -105,6 +106,20 @@ func TestWorkerProposesAtPBFTHeight(t *testing.T) {
 	engine := metabft.NewEngine(ethash.NewFaker(), func(uint64) (*metabft.ValidatorSet, error) { return set, nil })
 	proposer := &fakeProposer{submitted: make(chan *types.Block, 16)}
 	engine.SetProposer(proposer)
+
+	engine.SetNodeCount(func(consensus.ChainHeaderReader, consensus.Engine, *types.Header, *state.StateDB) (uint64, error) {
+		return 4, nil
+	})
+	return engine, proposer
+}
+
+// TestWorkerProposesAtPBFTHeight: on a PBFT chain the worker builds only
+// when the consensus node wants a block, without the PoA miner and token
+// gates, hands the block to the node instead of writing it, and the block
+// passes the validators' proposal checks.
+func TestWorkerProposesAtPBFTHeight(t *testing.T) {
+	var poaGates atomic.Int32
+	engine, proposer := newBftWorkerEnv(t, &poaGates)
 
 	w, b := newTestWorker(t, bftWorkerConfig(), engine, rawdb.NewMemoryDatabase(), 0)
 	defer w.close()
@@ -151,5 +166,46 @@ func TestWorkerProposesAtPBFTHeight(t *testing.T) {
 	chain := metabft.NewBlockChain(b.chain, engine, nil)
 	if err := chain.VerifyBlock(blk, true); err != nil {
 		t.Errorf("the proposal fails the validators' checks: %v", err)
+	}
+}
+
+// TestWorkerLeavesOutValidatorFloorBreach: a transaction whose result would
+// leave governance with fewer than four nodes is left out of the proposal
+// (design §9.3.1); the block is proposed without it and still valid.
+func TestWorkerLeavesOutValidatorFloorBreach(t *testing.T) {
+	var poaGates atomic.Int32
+	engine, proposer := newBftWorkerEnv(t, &poaGates)
+	// Stand-in for a governance removal: once testUserAddress holds funds,
+	// the state has three nodes.
+	engine.SetNodeCount(func(_ consensus.ChainHeaderReader, _ consensus.Engine, _ *types.Header, statedb *state.StateDB) (uint64, error) {
+		if statedb.GetBalance(testUserAddress).Sign() > 0 {
+			return 3, nil
+		}
+		return 4, nil
+	})
+	w, b := newTestWorker(t, bftWorkerConfig(), engine, rawdb.NewMemoryDatabase(), 0)
+	defer w.close()
+	tx, err := types.SignTx(types.NewTransaction(b.txPool.Nonce(testBankAddress), testUserAddress, big.NewInt(1000), params.TxGas,
+		big.NewInt(params.InitialBaseFee), nil), types.LatestSigner(bftWorkerConfig()), testBankKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := b.txPool.Add([]*types.Transaction{tx}, true, true); errs[0] != nil {
+		t.Fatal(errs[0])
+	}
+	w.start()
+	proposer.wanted.Store(true)
+	engine.WakeProposer()
+	var blk *types.Block
+	select {
+	case blk = <-proposer.submitted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no block proposed")
+	}
+	if len(blk.Transactions()) != 0 || blk.GasUsed() != 0 || blk.Fees().Sign() != 0 {
+		t.Fatalf("proposal has %d txs, gas %d, fees %v; want the breaching transaction left out", len(blk.Transactions()), blk.GasUsed(), blk.Fees())
+	}
+	if err := metabft.NewBlockChain(b.chain, engine, nil).VerifyBlock(blk, true); err != nil {
+		t.Errorf("the proposal without it: %v", err)
 	}
 }

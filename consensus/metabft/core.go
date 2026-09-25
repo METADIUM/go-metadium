@@ -22,7 +22,7 @@ type Backend interface {
 	Validators(height uint64) (*ValidatorSet, error)
 	DecodeProposal(data []byte) (Proposal, error)
 	// VerifyProposal runs the chain-side checks of design §4.8 (header,
-	// timestamp bounds, execution, rewards; N >= 4 is P5-13). The parent must be the
+	// timestamp bounds, execution, rewards, N >= 4). The parent must be the
 	// local head. fresh is false for a re-proposal of a prepared block: it
 	// keeps its original header, Time included, and a quorum already
 	// checked that time when it was new, so the local-clock bound (§4.5)

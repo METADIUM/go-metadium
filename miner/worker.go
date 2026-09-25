@@ -187,6 +187,8 @@ type intervalAdjust struct {
 // worker is the main object which takes care of submitting new work to consensus engine
 // and gathering the sealing result.
 type worker struct {
+	bftExcl bftExclusions // PBFT: transactions left out of proposals
+
 	config      *Config
 	chainConfig *params.ChainConfig
 	engine      consensus.Engine
@@ -952,8 +954,14 @@ func (w *worker) applyTransaction(env *environment, tx *types.Transaction) (*typ
 	if err != nil {
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.SetGas(gp)
+		return receipt, err
 	}
-	return receipt, err
+	// PBFT: on a breach the whole build is abandoned (the finished
+	// transaction cannot be reverted), so env is not restored.
+	if err := w.bftCheckFloor(env, tx); err != nil {
+		return nil, err
+	}
+	return receipt, nil
 }
 
 func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32) error {
@@ -1044,6 +1052,10 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 		from, _ := types.Sender(env.signer, tx)
 
 		// Metadium: TRS (Transaction Restriction Service) filtering
+		if w.bftExcluded(env, tx.Hash()) {
+			txs.Pop()
+			continue
+		}
 		if env.trsSubscribe && metaminer.TRSRestricted(env.trsListMap, from, tx.To()) {
 			log.Debug("included in trsList", "hash", tx.Hash(), "from", from)
 			txs.Pop()
@@ -1070,6 +1082,10 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 			logs, err = w.commitTransaction(env, tx)
 		}
 		switch {
+		case errors.Is(err, errBftFloorBreach):
+			// The state cannot be rolled back past a finished transaction;
+			// this build is abandoned and the next one leaves it out.
+			return err
 		case errors.Is(err, core.ErrNonceTooLow):
 			// New head notification data race between the transaction pool and miner, shift
 			log.Trace("Skipping transaction with low nonce", "hash", ltx.Hash, "sender", from, "nonce", tx.Nonce())

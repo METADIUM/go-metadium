@@ -1749,6 +1749,25 @@ func bftValidators(height *big.Int) ([][]byte, []common.Address, error) {
 	return keys, coinbases, nil
 }
 
+// bftRegistry returns the registry address as of the state at height. The
+// registry is found once and does not move; the governance contract it
+// names can, which is why callers resolve that one themselves.
+func bftRegistry(height *big.Int) (common.Address, error) {
+	if admin == nil || admin.registry == nil {
+		return common.Address{}, metaminer.ErrNotInitialized
+	}
+	if admin.registry.To != nil {
+		return *admin.registry.To, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addr, err := admin.getRegistryAddress(ctx, admin.cli, registryContract.Abi, height)
+	if err != nil {
+		return common.Address{}, err
+	}
+	return *addr, nil
+}
+
 func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, isPangyo bool) bool {
 	if admin == nil {
 		return false
@@ -2416,6 +2435,7 @@ func init() {
 	metaminer.HasMiningTokenFunc = hasMiningToken
 	metaminer.GetFinalizedBlockNumberFunc = getFinalizedBlockNumber
 	metaminer.BftValidatorsFunc = bftValidators
+	metaminer.BftRegistryFunc = bftRegistry
 	metaminer.GetTRSListMapFunc = getTRSListMap // Add TRS
 	metaapi.TRSInfo = TRSInfo                   // Add TRS
 	metaapi.Info = Info
