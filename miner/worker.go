@@ -187,8 +187,6 @@ type intervalAdjust struct {
 // worker is the main object which takes care of submitting new work to consensus engine
 // and gathering the sealing result.
 type worker struct {
-	bftExcl bftExclusions // PBFT: transactions left out of proposals
-
 	config      *Config
 	chainConfig *params.ChainConfig
 	engine      consensus.Engine

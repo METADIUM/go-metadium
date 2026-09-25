@@ -332,8 +332,12 @@ func TestBftAPI(t *testing.T) {
 		t.Errorf("round state before the node runs: %+v", rs)
 	}
 	st := api.Status()
-	if !st.Validator || st.Peers != 0 || st.LastRejection != nil {
+	if !st.Validator || st.Peers != 0 || st.LastRejection != nil || len(st.ExcludedTxs) != 0 {
 		t.Errorf("status: %+v", st)
+	}
+	s.engine.ExcludeTx(common.Hash{0xe1}, common.Address{0xa1}, 7, "leaves 3 governance nodes")
+	if ex := api.Status().ExcludedTxs; len(ex) != 1 || ex[0].Nonce != 7 || ex[0].From != (common.Address{0xa1}) {
+		t.Errorf("excluded transactions in status: %+v", ex)
 	}
 
 	r := api.Readiness()
