@@ -131,6 +131,15 @@ func TestBftServiceAdmitsValidatorsOnly(t *testing.T) {
 	if code, ok := next(300 * time.Millisecond); ok {
 		t.Fatalf("a non-validator was sent message %#x", code)
 	}
+	// A message it relays still counts: it was verified against the set
+	// before it got here, and the cache has recorded it, so dropping it
+	// would lose it for good (review on #156).
+	var delivered []*metabft.Message
+	s.deliver = func(m *metabft.Message) { delivered = append(delivered, m) }
+	relayed := &metabft.Message{Type: metabft.MsgPrepare, Height: 1}
+	if err := s.HandleConsensus(stranger, relayed); err != nil || len(delivered) != 1 || delivered[0] != relayed {
+		t.Fatalf("a verified message relayed by a non-admitted peer was not passed on: %v, %d", err, len(delivered))
+	}
 
 	// Governance adds it: admitted on the next head, and asked where it is.
 	pubs := [][]byte{crypto.FromECDSAPub(&outsider.PublicKey)[1:]}
@@ -259,7 +268,9 @@ func TestBftServiceBlockCreationTime(t *testing.T) {
 
 // TestPbftNodeStarts: with the startup guard gone, a node on a PBFT genesis
 // starts, runs the PBFT service, advertises metabft/1 and keeps its WAL in
-// the data directory.
+// the data directory. It advertises because governance cannot be read when
+// eth.New runs (the metadium admin starts later), not because it knows it is
+// a validator; peers admit it only once it is in their set.
 func TestPbftNodeStarts(t *testing.T) {
 	old := params.ConsensusMethod
 	params.ConsensusMethod = params.ConsensusPoA
