@@ -161,7 +161,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkBftNode(chainConfig, params.ConsensusMethod); err != nil {
+	if err := checkBftNode(chainConfig, params.ConsensusMethod, config.SyncMode); err != nil {
 		return nil, err
 	}
 	engine, err := ethconfig.CreateConsensusEngine(chainConfig, chainDb)

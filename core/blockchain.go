@@ -95,6 +95,7 @@ var (
 	errChainStopped         = errors.New("blockchain is stopped")
 	errInvalidOldChain      = errors.New("invalid old chain")
 	errInvalidNewChain      = errors.New("invalid new chain")
+	errReorgBelowFinal      = errors.New("reorg below the finalized PBFT chain")
 )
 
 const (
@@ -2255,6 +2256,14 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Block) error {
 		}
 	}
 
+	// PBFT (docs/pbft-consensus-design.md §5.4): a committed block is final,
+	// so no reorg may drop one, whatever the new chain's weight. Checked
+	// before anything is written.
+	if len(oldChain) > 0 {
+		if dropped := oldChain[len(oldChain)-1]; bc.chainConfig.IsBft(dropped.Number()) {
+			return fmt.Errorf("%w: would drop final block %d (%x)", errReorgBelowFinal, dropped.NumberU64(), dropped.Hash())
+		}
+	}
 	// Ensure the user sees large reorgs
 	if len(oldChain) > 0 && len(newChain) > 0 {
 		logFn := log.Info
