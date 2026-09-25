@@ -3,6 +3,8 @@ package eth
 import (
 	"crypto/ecdsa"
 	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,8 +15,11 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	bftproto "github.com/ethereum/go-ethereum/eth/protocols/metabft"
 	"github.com/ethereum/go-ethereum/event"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
+	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
@@ -234,5 +239,71 @@ func TestBftServicePrunesOnHead(t *testing.T) {
 	}
 	if n := s.cache.Len(); n > perHeight {
 		t.Errorf("%d entries left after %d heights", n, heights)
+	}
+}
+
+// TestBftServiceBlockCreationTime: governance's blockCreationTime longer
+// than the genesis empty-block interval is warned about, once per value
+// (design §4.5).
+func TestBftServiceBlockCreationTime(t *testing.T) {
+	s, _, _ := newTestBftService(t, 4) // emptyBlockInterval 5s
+	old := metaminer.GetBlockBuildParametersFunc
+	t.Cleanup(func() { metaminer.GetBlockBuildParametersFunc = old })
+	interval := int64(2000)
+	metaminer.GetBlockBuildParametersFunc = func(*big.Int) (int64, *big.Int, *big.Int, int64, int64, error) {
+		return interval, new(big.Int), new(big.Int), 0, 100, nil
+	}
+	head := big.NewInt(7)
+	if s.checkBlockCreationTime(head) {
+		t.Error("warned about 2s under a 5s empty-block interval")
+	}
+	interval = 10_000
+	if !s.checkBlockCreationTime(head) {
+		t.Error("no warning for 10s over a 5s empty-block interval")
+	}
+	if s.checkBlockCreationTime(head) {
+		t.Error("warned twice for the same value")
+	}
+}
+
+// TestPbftNodeStarts: with the startup guard gone, a node on a PBFT genesis
+// starts, runs the PBFT service, advertises metabft/1 and keeps its WAL in
+// the data directory. It advertises because governance cannot be read when
+// eth.New runs (the metadium admin starts later), not because it knows it is
+// a validator; peers admit it only once it is in their set.
+func TestPbftNodeStarts(t *testing.T) {
+	old := params.ConsensusMethod
+	params.ConsensusMethod = params.ConsensusPoA
+	t.Cleanup(func() { params.ConsensusMethod = old })
+
+	s, _, _ := newTestBftService(t, 4) // for its chain config
+	genesis := &core.Genesis{Config: s.bc.Config(), Difficulty: big.NewInt(1), GasLimit: 10_000_000}
+	dir := t.TempDir()
+	stack, err := node.New(&node.Config{DataDir: dir, P2P: p2p.Config{NoDiscovery: true, MaxPeers: 0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stack.Close()
+	config := ethconfig.Defaults
+	config.Genesis = genesis
+	backend, err := New(stack, &config)
+	if err != nil {
+		t.Fatalf("a node on a PBFT genesis: %v", err)
+	}
+	if backend.bft == nil {
+		t.Fatal("no PBFT service on a PBFT chain")
+	}
+	advertised := false
+	for _, p := range backend.Protocols() {
+		advertised = advertised || p.Name == bftproto.ProtocolName
+	}
+	if !advertised {
+		t.Error("metabft/1 not among the protocols")
+	}
+	if err := stack.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stack.ResolvePath(filepath.Join("metabft", "wal"))); err != nil {
+		t.Errorf("WAL: %v", err)
 	}
 }

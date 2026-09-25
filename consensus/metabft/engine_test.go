@@ -357,3 +357,25 @@ func TestEngineAssemblesVerifiableHeader(t *testing.T) {
 		t.Errorf("assembled header: %v", err)
 	}
 }
+
+// TestGovernanceValidatorsFloor: fewer than MinValidators governance nodes
+// is no validator set, so at bftBlock the chain stops rather than running
+// BFT with f = 0 (design §9.3).
+func TestGovernanceValidatorsFloor(t *testing.T) {
+	net := newTestNet(t, 4)
+	old := metaminer.BftValidatorsFunc
+	t.Cleanup(func() { metaminer.BftValidatorsFunc = old })
+	for _, n := range []int{4, 3} {
+		keys := make([][]byte, n)
+		for i := range keys {
+			keys[i] = pubKeyOf(net.keys[i])
+		}
+		metaminer.BftValidatorsFunc = func(*big.Int) ([][]byte, []common.Address, error) {
+			return keys, make([]common.Address, len(keys)), nil
+		}
+		set, err := GovernanceValidators(engineBftBlock)
+		if want := n < MinValidators; want != errors.Is(err, errTooFewValidators) || (!want && set.Size() != n) {
+			t.Errorf("%d governance nodes: %v, %v", n, set, err)
+		}
+	}
+}
