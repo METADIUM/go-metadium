@@ -46,7 +46,7 @@ func (c *memChain) header(n uint64) *types.Header {
 	return c.headers[n]
 }
 
-func (c *memChain) VerifyBlock(b *types.Block) error {
+func (c *memChain) VerifyBlock(b *types.Block, fresh bool) error {
 	if c.verify != nil {
 		return c.verify(b)
 	}

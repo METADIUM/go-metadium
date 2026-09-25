@@ -158,20 +158,19 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 | ID | Item | Design | Status |
 |----|------|--------|--------|
-| P5-23 | Register `metabft.MakeProtocols` in `eth/backend.go` `Protocols()` and wire its `Backend` to the core (from P4-02); call `Cache.Prune` on commit | §7.1 | [ ] |
 | P5-00 | Remove the `errBftNotImplemented` startup guard (`eth/bft_guard.go`) once a PBFT chain can produce blocks end to end (P5-07, P5-08, P5-23); P5-01 alone would let a node start on a chain that then stops at `bftBlock` | §9.3 | [ ] |
 | P5-01 | Wrapper engine `metabft.Engine` created in `CreateConsensusEngine` when the chain config has `bftBlock`; below it every call goes to the PoA engine (P5a) | §7.2 | [x] |
 | P5-02 | `VerifyHeader` pre-fork: `CommitSeals == nil && BftRound == 0` | §5.2, §5.3 | done in P1-06: the PoA engine enforces it for every height it verifies |
 | P5-03 | `VerifyHeader` post-fork: the PoA engine's header checks (`VerifyHeaderPBFT`, which covers the Camellia fields and `ParentBeaconRoot == nil`; `IsCamellia` is guaranteed by `checkBft`), plus `Time >= parent.Time` (P5a) | §5.3 | [x] |
 | P5-04 | `VerifyHeader` post-fork: `MinerNodeSig` over `keccak256(number ‖ root)` (the Pangyo form) by `MinerNodeId`, a validator of the parent state, and `Coinbase` that validator's governance coinbase; the PoA engine assembles this form at PBFT heights (P5a) | §5.3 | [x] |
 | P5-05 | `VerifyHeader` post-fork: `>= Quorum` distinct seals over `commitDigest(BlockHash, BftRound, ChainID)`, every seal valid (`VerifySeals`, P5a) | §5.3 | [x] |
-| P5-06 | PRE-PREPARE time bound `\|Time − localNow\| <= timeDrift` (not applied on sync) | §4.5 | [ ] |
+| P5-06 | PRE-PREPARE time bound `\|Time − localNow\| <= timeDrift` (not applied on sync) | §4.5 | [x] — fresh proposals only: a re-proposal of a prepared block keeps its original `Time`, which a quorum already checked, and the core says which is which (`VerifyProposal(p, fresh)`, P5c) |
 | P5-07 | Worker proposer gate via `IsBftProposer` (`miner/worker.go:1666-1681`) | §7.3 | [ ] |
-| P5-08 | Worker hands the block to the BFT core; backend writes on commit | §7.3 | [ ] — the node side is done in P5-24 (`SubmitBlock`, and `Commit` writes through `Chain.InsertBlock`); the worker side is open |
+| P5-08 | Worker hands the block to the BFT core; backend writes on commit | §7.3 | [ ] — the node side is done in P5-24 (`SubmitBlock`, and `Commit` writes through `Chain.InsertBlock`, which imports the block with its seals and posts it for broadcast, P5c); the worker side is open |
 | P5-09 | `LogBlock` / `ReleaseMiningToken` skipped post-fork (`miner/worker.go:1901-1910`) | §7.3 | [ ] |
 | P5-10 | Proposer timestamp `max(parent.Time, now)`; `timeIt` not used post-fork | §7.3 | [ ] |
-| P5-11 | Non-proposers validate via `ValidateBody` + `Process` + `ValidateState` | §7.3 | [ ] |
-| P5-12 | Rewards/Coinbase compared, not overwritten, post-fork (`consensus.go:741, 754`) | §7.5 | [ ] |
+| P5-11 | Non-proposers validate via `ValidateBody` + `Process` + `ValidateState` | §7.3 | [x] — `metabft.BlockChain.VerifyBlock`, on a copy of the head state; header through `Engine.VerifyProposal` (every import rule but the seals) (P5c) |
+| P5-12 | Rewards/Coinbase compared, not overwritten, post-fork (`consensus.go:741, 754`) | §7.5 | [x] — `Rewards` is compared with the distribution from the parent state and `Fees`, at import and on proposals; empty where governance has no distribution (`ErrNotInitialized`). `Coinbase` is the builder's governance coinbase (P5-04): the reward coinbase is overwritten by the signer's in `FinalizeAndAssemble` today, so it is not what the header carries (P5c) |
 | P5-13 | Block invalid if post-execution governance node count < 4; proposer drops the offending tx | §9.3.1 | [ ] |
 | P5-14 | `verifyMinerLimit` skipped post-fork | §4.3 | [x] — the PBFT engine never calls the PoA `verifyBlockSig`, where the limit lives (P5a) |
 | P5-15 | `getFinalizedBlockNumber` returns head post-fork (`metadium/admin.go:645`) | §7.4 | [ ] |
@@ -179,11 +178,12 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | P5-17 | `acceptUnverifiableBlock` forbidden post-fork | §7.7 | [x] — the PBFT engine reads the set through `BftValidators`, which has no fallback, and refuses a height it cannot read (P5a). Import verifies headers before their parents are executed, so while the parent state is not there yet the signer checks move to `VerifyUncles`, which `ValidateBody` runs once the parent is written; nothing is accepted without them |
 | P5-18 | Transition: halt at `BftBlock` if governance missing or `N < 4` | §9.3 | [ ] |
 | P5-19 | Blob sidecar fetched before PREPARE; PREPARE held until available | §12 | [ ] |
-| P5-20 | RPCs: `metabft_getValidators`, `_getRoundState`, `_status`, `_readiness`, `_getEvidence` | §6, §7.1, §9.3 | [ ] |
+| P5-20 | RPCs: `metabft_getValidators`, `_getRoundState`, `_status`, `_readiness`, `_getEvidence`; `Stats` also counts failed `InsertBlock`s (a deterministic failure leaves every validator waiting on a decided height) and messages dropped from the node's queue, so the status RPC shows them (review on #151) | §6, §7.1, §9.3 | [ ] |
 | P5-21 | Startup check: `EmptyBlockInterval >= blockCreationTime` (from P0-05) | §4.5 | [ ] |
 | P5-22 | Warn when `--metadium.block.emptyinterval` differs from `bft.emptyBlockInterval`; genesis wins (from P0-07) | §8.1 | [ ] |
 | P5-24 | `metabft.Node`: one event loop owns the core and feeds it messages, submitted blocks, heads and timeouts on the local monotonic clock; idle below `bftBlock`; asks the builder for blocks through `ProposalWanted` (round 0 waits for pending transactions or `EmptyBlockInterval`); retries a height whose validator set cannot be read yet (P5b) | §6, §7.3 | [x] |
-| P5-25 | Snap sync refused on a PBFT chain (full sync only): without state, no PBFT header can be verified (P5-17) | §7.7 | [ ] |
+| P5-25 | Snap sync refused on a PBFT chain (full sync only): without state, no PBFT header can be verified (P5-17); must land before any deployment, so the failure is an explicit error (review on #150) | §7.7 | [ ] |
+| P5-23 | Register `metabft/1` in `eth/backend.go` and implement its `Backend` on the node (reviews on #149, #151): call `Cache.Prune(height)` on every commit, since an unpruned cache fills at 65,536 entries and then drops every message (test: a few thousand heights without pruning stall); refuse peers whose node key is not in the current set, or treat `SyncReply` as a hint only, since sync messages are unsigned; a per-peer budget for messages from unknown signers, each of which costs an ecrecover; `Broadcast` through a per-peer send queue with a drop policy, since `p2p.Send` blocks on a slow peer | §7.1 | [ ] |
 
 **Check:** real block production on 4 local nodes, PoA → PBFT transition included.
 
@@ -230,3 +230,5 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | M-04 | Fixed-interval profile (`blockCreationTime = 2000`, no idleseal) | 2.0s interval holds | | [ ] |
 | M-05 | WAL fsync cost per block | recorded, included in M-01 | | [ ] |
 | M-06 | TPS vs Camellia (`scripts/rpc-test-full.sh`, `mixed-tx-e2e`) | no regression beyond agreed margin | | [ ] |
+| M-07 | Validator execution cost: each block runs twice (proposal check, then import); if it dominates M-01, keep the processed state for the import (review on #152) | recorded | | [ ] |
+| M-08 | Full-sync speed: `Engine.VerifyHeaders` checks a batch sequentially on one goroutine (review on #150) | recorded | | [ ] |

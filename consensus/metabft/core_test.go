@@ -111,7 +111,7 @@ type stubBackend struct {
 func (b *stubBackend) ChainID() uint64                              { return testChainID }
 func (b *stubBackend) Validators(uint64) (*ValidatorSet, error)     { return b.set, nil }
 func (b *stubBackend) DecodeProposal(data []byte) (Proposal, error) { return decodeSimBlock(data) }
-func (b *stubBackend) VerifyProposal(Proposal) error                { return nil }
+func (b *stubBackend) VerifyProposal(Proposal, bool) error          { return nil }
 func (b *stubBackend) RequestProposal(uint64, uint64)               { b.requested++ }
 func (b *stubBackend) Broadcast(m *Message)                         { b.sent = append(b.sent, m) }
 func (b *stubBackend) Commit(p Proposal, _ uint64, _ [][]byte)      { b.committed = p }

@@ -22,9 +22,13 @@ type Backend interface {
 	Validators(height uint64) (*ValidatorSet, error)
 	DecodeProposal(data []byte) (Proposal, error)
 	// VerifyProposal runs the chain-side checks of design §4.8 (header,
-	// timestamp bounds, execution, rewards, N >= 4). The parent must be the
-	// local head.
-	VerifyProposal(p Proposal) error
+	// timestamp bounds, execution, rewards; N >= 4 is P5-13). The parent must be the
+	// local head. fresh is false for a re-proposal of a prepared block: it
+	// keeps its original header, Time included, and a quorum already
+	// checked that time when it was new, so the local-clock bound (§4.5)
+	// does not apply to it again. Applying it could refuse the only block
+	// that may safely be proposed, round after round.
+	VerifyProposal(p Proposal, fresh bool) error
 	// RequestProposal asks for a new block for (height, round); the answer
 	// comes back through Core.Propose, whenever the block is ready.
 	RequestProposal(height, round uint64)
@@ -481,11 +485,14 @@ func (c *Core) handlePreprepare(m *Message, idx int, now time.Duration) error {
 			return err
 		}
 	}
+	// justify has checked that a proposal with a PREPARE certificate is the
+	// prepared block it names.
+	fresh := len(body.Prepares) == 0
 	if m.Round < c.round {
 		// Too late to vote on, but not to learn: the others may have decided
 		// this block in that round while this node's timer ran ahead, and a
 		// quorum of their COMMITs decides it here too, once the block is known.
-		if err := c.backend.VerifyProposal(block); err != nil {
+		if err := c.backend.VerifyProposal(block, fresh); err != nil {
 			return err
 		}
 		c.proposals[m.Round] = block
@@ -496,7 +503,7 @@ func (c *Core) handlePreprepare(m *Message, idx int, now time.Duration) error {
 		// A justified proposal for a later round moves this node there.
 		c.startRound(m.Round, now)
 	}
-	if err := c.backend.VerifyProposal(block); err != nil {
+	if err := c.backend.VerifyProposal(block, fresh); err != nil {
 		c.log.Warn("Invalid proposal", "height", c.height, "round", m.Round, "err", err)
 		c.moveToRound(c.round+1, now)
 		return err
