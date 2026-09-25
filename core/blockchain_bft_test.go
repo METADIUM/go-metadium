@@ -96,3 +96,22 @@ func TestBftNoReorgBelowFinal(t *testing.T) {
 		t.Errorf("extending the final chain: %v", err)
 	}
 }
+
+// TestBftNoReorgFromBelowSwitch: a fork rooted in the PoA segment, long
+// enough to reach past bftBlock, drops PoA and PBFT blocks together; its
+// lowest dropped block is a PoA one, but it is refused all the same. This
+// is the fork the rule exists for (review on #154).
+func TestBftNoReorgFromBelowSwitch(t *testing.T) {
+	bc, genesis := bftTestChain(t, 3)
+	if _, err := bc.InsertChain(fork(bc, genesis, 0, 4, 0xa)); err != nil { // 1..4; 3 and 4 are PBFT heights
+		t.Fatal(err)
+	}
+	final := bc.CurrentBlock()
+	heavier := fork(bc, genesis, 1, 6, 0xc) // 2..7: would drop 2 (PoA), 3 and 4 (PBFT)
+	if _, err := bc.InsertChain(heavier); !errors.Is(err, errReorgBelowFinal) {
+		t.Errorf("fork from below bftBlock: %v, want %v", err, errReorgBelowFinal)
+	}
+	if head := bc.CurrentBlock(); head.Hash() != final.Hash() {
+		t.Errorf("head moved to %d %x", head.Number, head.Hash())
+	}
+}

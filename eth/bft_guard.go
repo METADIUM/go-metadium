@@ -32,7 +32,8 @@ func checkBftNode(config *params.ChainConfig, consensusMethod int, syncMode down
 	}
 	// A PBFT header is verified against the validator set in its parent's
 	// state, and snap sync has no state for the headers it takes (§7.7), so
-	// it would fail on the first one; say so here instead.
+	// it would fail on the first one; say so here instead. Checked before
+	// errBftNotImplemented on purpose: it is the more useful message.
 	if syncMode == downloader.SnapSync {
 		return fmt.Errorf("chain config sets bftBlock %v, which needs --syncmode full; snap sync cannot verify PBFT headers",
 			config.BftBlock)
