@@ -16,6 +16,9 @@ const PubKeyLength = 64
 // Validator is one member of the validator set, identified by its node key.
 type Validator struct {
 	PubKey [PubKeyLength]byte
+	// Coinbase is the node's address in governance, which a block it builds
+	// names as its coinbase. Zero in a set built from keys alone.
+	Coinbase common.Address
 }
 
 // Address returns the account address derived from the validator's key.
@@ -62,6 +65,20 @@ func NewValidatorSet(pubKeys [][]byte) (*ValidatorSet, error) {
 		set.index[v.PubKey] = i
 	}
 	return set, nil
+}
+
+// WithCoinbases returns a copy of the set with each validator's coinbase,
+// in set order.
+func (s *ValidatorSet) WithCoinbases(coinbases []common.Address) (*ValidatorSet, error) {
+	if len(coinbases) != len(s.list) {
+		return nil, fmt.Errorf("%d coinbases for %d validators", len(coinbases), len(s.list))
+	}
+	cpy := &ValidatorSet{list: make([]Validator, len(s.list)), index: s.index}
+	for i, v := range s.list {
+		v.Coinbase = coinbases[i]
+		cpy.list[i] = v
+	}
+	return cpy, nil
 }
 
 // Size returns N.
