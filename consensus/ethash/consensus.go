@@ -129,6 +129,13 @@ func (ethash *Ethash) VerifyHeaderPBFT(chain consensus.ChainHeaderReader, header
 	return ethash.verifyHeader(chain, header, parent, false, time.Now().Unix(), true)
 }
 
+// VerifyHeaderWithParent is VerifyHeader against a given parent, which need
+// not be in the chain yet: the PBFT engine verifies a batch that mixes PoA
+// and PBFT heights one header at a time, each against the one before it.
+func (ethash *Ethash) VerifyHeaderWithParent(chain consensus.ChainHeaderReader, header, parent *types.Header) error {
+	return ethash.verifyHeader(chain, header, parent, false, time.Now().Unix(), false)
+}
+
 // VerifyHeaders is similar to VerifyHeader, but verifies a batch of headers
 // concurrently. The method returns a quit channel to abort the operations and
 // a results channel to retrieve the async verifications.

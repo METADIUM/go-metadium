@@ -357,3 +357,37 @@ func TestEngineAssemblesVerifiableHeader(t *testing.T) {
 		t.Errorf("assembled header: %v", err)
 	}
 }
+
+// TestEngineBatchAcrossSwitch: block import verifies a batch whose headers'
+// parents are earlier in the batch, not in the chain. That holds for the
+// PoA heights too: a batch of the bootstrap segment, running into the
+// switch, must verify (found on the private network, where sync stopped at
+// "unknown ancestor").
+func TestEngineBatchAcrossSwitch(t *testing.T) {
+	net, engine, chain, _ := newEngineChain(t)
+	old := metaminer.VerifyBlockSigFunc
+	metaminer.VerifyBlockSigFunc = func(*big.Int, common.Address, []byte, common.Hash, []byte, bool) bool { return true }
+	t.Cleanup(func() { metaminer.VerifyBlockSigFunc = old })
+
+	base := &types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1), GasLimit: 105_000_000,
+		Time: uint64(time.Now().Unix()) - 100, WithdrawalsHash: &types.EmptyWithdrawalsHash,
+		ExcessBlobGas: new(big.Int), BlobGasUsed: new(big.Int)}
+	chain.headers[base.Hash()] = base
+	batch := []*types.Header{}
+	parent := base
+	for n := int64(2); n < engineBftBlock; n++ { // PoA heights 2..4
+		h := &types.Header{ParentHash: parent.Hash(), UncleHash: types.EmptyUncleHash, Root: common.HexToHash("0x5157"),
+			TxHash: types.EmptyTxsHash, ReceiptHash: types.EmptyReceiptsHash, Difficulty: big.NewInt(1),
+			Number: big.NewInt(n), GasLimit: parent.GasLimit, Time: parent.Time + 1,
+			WithdrawalsHash: &types.EmptyWithdrawalsHash, ExcessBlobGas: new(big.Int), BlobGasUsed: new(big.Int)}
+		batch = append(batch, h)
+		parent = h
+	}
+	batch = append(batch, net.bftHeader(t, parent, 1, 0, []int{0, 1, 2})) // PBFT height 5
+	_, results := engine.VerifyHeaders(chain, batch)
+	for _, h := range batch {
+		if err := <-results; err != nil {
+			t.Errorf("header %d: %v", h.Number, err)
+		}
+	}
+}
