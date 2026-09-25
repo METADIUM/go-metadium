@@ -2,7 +2,6 @@ package eth
 
 import (
 	"crypto/ecdsa"
-	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -79,51 +78,86 @@ func testPeer(t *testing.T, s *bftService, key *ecdsa.PrivateKey, id byte) (*bft
 }
 
 // TestBftServiceAdmitsValidatorsOnly: any node can advertise metabft/1, so
-// only a peer whose node key is in the validator set is run (review on #149).
+// only a peer whose node key is in the validator set is sent to or heard
+// from (review on #149). One that is not stays connected, since ending the
+// protocol would end the peer's eth connection too, and is admitted once it
+// joins the set.
 func TestBftServiceAdmitsValidatorsOnly(t *testing.T) {
-	s, keys, _ := newTestBftService(t, 4)
+	s, _, set := newTestBftService(t, 4)
 	if !s.IsValidator() {
 		t.Fatal("a validator does not advertise metabft/1")
 	}
 	outsider, _ := crypto.GenerateKey()
-	stranger, _ := testPeer(t, s, outsider, 1)
-	refused := make(chan error, 1)
-	go func() {
-		refused <- s.RunPeer(stranger, func(*bftproto.Peer) error { return errors.New("handler ran") })
-	}()
-	select {
-	case err := <-refused:
-		if !errors.Is(err, errNotValidatorPeer) {
-			t.Fatalf("non-validator peer: %v", err)
-		}
-	case <-time.After(5 * time.Second): // admitted: blocked writing the sync request nobody reads
-		t.Fatal("non-validator peer admitted")
-	}
-
-	validator, remote := testPeer(t, s, keys[1], 2)
+	stranger, remote := testPeer(t, s, outsider, 1)
+	running, release := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- s.RunPeer(validator, func(*bftproto.Peer) error {
-			s.mu.RLock()
-			_, registered := s.peers[validator.ID()]
-			s.mu.RUnlock()
-			if !registered {
-				return errors.New("admitted peer not registered")
-			}
-			return nil
-		})
+		done <- s.RunPeer(stranger, func(*bftproto.Peer) error { close(running); <-release; return nil })
 	}()
-	msg, err := remote.ReadMsg() // the sync request sent on admission
-	if err != nil || msg.Code != bftproto.SyncRequestMsg {
-		t.Fatalf("first message to an admitted peer: %v, %v", msg.Code, err)
+	// Everything the stranger receives, in order.
+	received := make(chan uint64, 16)
+	go func() {
+		for {
+			msg, err := remote.ReadMsg()
+			if err != nil {
+				return
+			}
+			msg.Discard()
+			received <- msg.Code
+		}
+	}()
+	next := func(within time.Duration) (uint64, bool) {
+		select {
+		case code := <-received:
+			return code, true
+		case <-time.After(within):
+			return 0, false
+		}
 	}
-	msg.Discard()
+	select {
+	case <-running:
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer handler not run")
+	}
+	if s.peerAdmitted(stranger) {
+		t.Fatal("a non-validator peer is admitted")
+	}
+	s.broadcast(&metabft.Message{Type: metabft.MsgPrepare, Height: 1})
+	if code, ok := next(300 * time.Millisecond); ok {
+		t.Fatalf("a non-validator was sent message %#x", code)
+	}
+
+	// Governance adds it: admitted on the next head, and asked where it is.
+	pubs := [][]byte{crypto.FromECDSAPub(&outsider.PublicKey)[1:]}
+	for _, v := range set.Validators() {
+		pubs = append(pubs, append([]byte{}, v.PubKey[:]...))
+	}
+	grown, err := metabft.NewValidatorSet(pubs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.validators = func(uint64) (*metabft.ValidatorSet, error) { return grown, nil }
+	s.sets.Purge()
+	s.onHead(0)
+	if !s.peerAdmitted(stranger) {
+		t.Fatal("peer not admitted after joining the set")
+	}
+	if code, ok := next(5 * time.Second); !ok || code != bftproto.SyncRequestMsg {
+		t.Fatalf("first message to a newly admitted peer: %#x, %v", code, ok)
+	}
+	s.broadcast(&metabft.Message{Type: metabft.MsgPrepare, Height: 1})
+	if code, ok := next(5 * time.Second); !ok || code != bftproto.PrepareMsg {
+		t.Fatalf("broadcast to an admitted peer: %#x, %v", code, ok)
+	}
+
+	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
 	if len(s.peers) != 0 {
 		t.Error("peer still registered after it left")
 	}
+
 }
 
 // TestBftServiceBroadcastDoesNotBlock: a peer that reads nothing costs
@@ -132,6 +166,7 @@ func TestBftServiceBroadcastDoesNotBlock(t *testing.T) {
 	s, keys, _ := newTestBftService(t, 4)
 	peer, _ := testPeer(t, s, keys[1], 1)
 	stuck := &bftPeer{Peer: peer, queue: make(chan *metabft.Message, bftPeerQueue)} // nobody drains it
+	stuck.admitted.Store(true)
 	s.peers["stuck"] = stuck
 	done := make(chan struct{})
 	go func() {

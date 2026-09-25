@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -45,10 +46,13 @@ type bftService struct {
 	wg   sync.WaitGroup
 }
 
-// bftPeer is an admitted validator with its outbound queue.
+// bftPeer is a peer on metabft/1 with its outbound queue. Only an admitted
+// one, a validator in the current set, is sent to or listened to.
 type bftPeer struct {
 	*bftproto.Peer
-	queue chan *metabft.Message
+	key      []byte
+	admitted atomic.Bool
+	queue    chan *metabft.Message
 
 	mu           sync.Mutex
 	unknownStart time.Time
@@ -175,8 +179,44 @@ func (s *bftService) headLoop() {
 	}
 }
 
-// onHead drops cache entries below the height now being agreed on.
-func (s *bftService) onHead(head uint64) { s.cache.Prune(head + 1) }
+// onHead drops cache entries below the height now being agreed on, and
+// re-decides which peers are admitted: the set may have changed, and in the
+// PoA bootstrap it only becomes readable once governance is deployed.
+func (s *bftService) onHead(head uint64) {
+	s.cache.Prune(head + 1)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, p := range s.peers {
+		s.admit(p)
+	}
+}
+
+// admits reports whether key is in the current validator set.
+func (s *bftService) admits(key []byte) bool {
+	set, err := s.validatorSet(s.currentHeight())
+	if err != nil {
+		return false
+	}
+	_, ok := set.IndexOf(key)
+	return ok
+}
+
+// admit updates p's admission; a newly admitted peer is asked where it is.
+func (s *bftService) admit(p *bftPeer) {
+	now := s.admits(p.key)
+	if was := p.admitted.Swap(now); now && !was {
+		p.Log().Debug("metabft peer admitted")
+		go p.RequestSync() // not from under s.mu; a failure shows in the peer's read loop
+	}
+}
+
+// peerAdmitted reports whether messages from peer count.
+func (s *bftService) peerAdmitted(peer *bftproto.Peer) bool {
+	s.mu.RLock()
+	p := s.peers[peer.ID()]
+	s.mu.RUnlock()
+	return p != nil && p.admitted.Load()
+}
 
 // validatorSet is the node's ValidatorsFunc, cached by height.
 func (s *bftService) validatorSet(height uint64) (*metabft.ValidatorSet, error) {
@@ -205,6 +245,9 @@ func (s *bftService) broadcast(m *metabft.Message) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, p := range s.peers {
+		if !p.admitted.Load() {
+			continue
+		}
 		select {
 		case p.queue <- m:
 		default:
@@ -232,8 +275,10 @@ func (s *bftService) ValidatorSet(height uint64) (*metabft.ValidatorSet, bool) {
 	return set, err == nil
 }
 
-func (s *bftService) HandleConsensus(_ *bftproto.Peer, m *metabft.Message) error {
-	s.node.HandleMessage(m)
+func (s *bftService) HandleConsensus(peer *bftproto.Peer, m *metabft.Message) error {
+	if s.peerAdmitted(peer) {
+		s.node.HandleMessage(m)
+	}
 	return nil
 }
 
@@ -282,26 +327,27 @@ func (s *bftService) SyncStatus() (uint64, uint64) { return s.node.Status() }
 // HandleSyncReply only logs: the reply is unsigned, and blocks this node is
 // missing come through the eth protocol's sync anyway.
 func (s *bftService) HandleSyncReply(peer *bftproto.Peer, height, round uint64) {
+	if !s.peerAdmitted(peer) {
+		return
+	}
 	if cur, _ := s.node.Status(); height > cur+1 {
 		peer.Log().Info("PBFT peer is ahead; waiting for block sync", "peer", height, "local", cur)
 	}
 }
 
-// RunPeer admits a peer only if its node key is in the current validator
-// set (review on #149): anyone can advertise metabft/1.
+// RunPeer serves a peer, admitted only while its node key is in the current
+// validator set (review on #149): anyone can advertise metabft/1. A peer
+// that is not admitted is kept, not dropped, because returning here would
+// end the whole connection, eth sync included: in the PoA bootstrap no set
+// is readable yet, and every node would cut every other one off. It is sent
+// nothing and heard from only as far as the handler's checks go; admission
+// is re-decided on every head.
 func (s *bftService) RunPeer(peer *bftproto.Peer, handler func(*bftproto.Peer) error) error {
 	key := s.peerKey(peer)
 	if key == nil {
 		return fmt.Errorf("%w: no node key", errNotValidatorPeer)
 	}
-	set, err := s.validatorSet(s.currentHeight())
-	if err != nil {
-		return fmt.Errorf("%w: no validator set: %v", errNotValidatorPeer, err)
-	}
-	if _, ok := set.IndexOf(key); !ok {
-		return errNotValidatorPeer
-	}
-	p := &bftPeer{Peer: peer, queue: make(chan *metabft.Message, bftPeerQueue)}
+	p := &bftPeer{Peer: peer, key: key, queue: make(chan *metabft.Message, bftPeerQueue)}
 	s.mu.Lock()
 	if _, dup := s.peers[peer.ID()]; dup {
 		s.mu.Unlock()
@@ -318,9 +364,7 @@ func (s *bftService) RunPeer(peer *bftproto.Peer, handler func(*bftproto.Peer) e
 		s.mu.Unlock()
 		close(done)
 	}()
-	if err := peer.RequestSync(); err != nil {
-		return err
-	}
+	s.admit(p)
 	return handler(peer)
 }
 
