@@ -2,6 +2,7 @@
 data/
 genesis.json
 node-ids.txt
+keys.txt
 config.json
 passwords.txt
 .env

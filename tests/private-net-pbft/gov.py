@@ -10,7 +10,7 @@
   ./gov.py add N            propose adding node N back as a member, and vote
 
 Votes are sent from node1, the one node that allows unlocking over HTTP:
-the members' test keys (setup.sh) are imported into its keystore first.
+the members' test keys (keys.txt, from setup.sh) are imported into its keystore first.
 Selectors come from the node's web3_sha3: the standard library has no
 keccak.
 """
@@ -77,7 +77,8 @@ def gov_address():
 
 
 def keys():
-    return re.findall(r'^\s*"([0-9a-f]{64})"$', open("setup.sh").read(), re.M)
+    """The members' account keys, in node order, as setup.sh wrote them."""
+    return [line.split()[1] for line in open("keys.txt") if line.strip()]
 
 
 def send(n, to, data):
