@@ -16,6 +16,7 @@ NODES=7 ./setup.sh  # node keys and accounts, genesis (BFT_BLOCK=200 by default)
 ./pbft-test.sh      # switch, seals, rotation, agreement, finality, f and f+1 down
 ./faults.sh         # partition, kill -9 under load, WAL loss
 ./governance.sh     # NODES=5: remove a validator by ballot, try going below 4, add it back
+./byzantine.sh      # with a pbftfault build: wrong rewards, bad timestamps, equivocation, re-proposal
 ./measure.py        # latency, idle interval, load (§11.3); with NODE_ARGS="--metadium.block.idleseal 100"
                     # for the private operating profile
 ./stop.sh --clean   # remove containers, data and the generated files
@@ -72,3 +73,25 @@ A vote left out by the floor is listed in `metabft_status` (`excludedTxs`: hash,
 nonce, reason, retry time). It holds its sender's later transactions (nonce order) until a
 retry, every 30 s, finds it includable (its ballot over, it reverts); replacing that nonce
 frees them at once.
+
+`byzantine.sh` (§11.2 S-04, S-05, S-14, S-16) needs a build with fault injection, which
+the release build does not contain:
+
+```bash
+go build -tags pbftfault -o build/bin/gmet-fault ./cmd/geth
+GMET_BIN=../../build/bin/gmet-fault NODES=7 ./setup.sh ...
+```
+
+It switches one validator's fault on at a time through `METABFT_FAULT` (see
+`eth/bft_fault.go`), recreating that node's container, and every node back to normal at
+the end. A recreate drops the container's log, so every node's log is saved to
+`logs/byzantine/<step>-node<N>.log` before each one:
+- S-05: its proposals carry a wrong rewards field; the others refuse them ("rewards field
+  does not match"), none of its blocks commits, the chain continues;
+- S-14: its proposals are stamped before their parent, or 10 s ahead; the local-clock bound
+  refuses both (a fresh proposal meets it before the header rules; `Time >= parent.Time`
+  guards import and is covered by the engine tests);
+- S-04: it sends two PRE-PREPAREs for its rounds, B first to half its peers and A to all;
+  no block of its commits, the peers that saw both store the evidence;
+- S-16: every validator withholds its round-0 COMMIT at heights divisible by 10; such a
+  height commits in round 1, re-proposed unchanged, with round 0's proposer as its builder.

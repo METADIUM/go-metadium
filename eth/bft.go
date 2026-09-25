@@ -36,8 +36,9 @@ type bftService struct {
 	wal       *metabft.WAL
 	cache     *bftproto.Cache
 	evidence  *metabft.EvidenceStore
-	self      []byte // this node's public key
-	validator bool   // advertises metabft/1
+	self      []byte            // this node's public key
+	key       *ecdsa.PrivateKey // this node's key (the pbftfault build signs with it)
+	validator bool              // advertises metabft/1
 
 	validators metabft.ValidatorsFunc
 	sets       *lru.Cache[uint64, *metabft.ValidatorSet]
@@ -117,6 +118,7 @@ func newBftService(dir string, key *ecdsa.PrivateKey, bc *core.BlockChain, engin
 		cache:      bftproto.NewCache(bftproto.DefaultCacheSize),
 		evidence:   evidence,
 		self:       crypto.FromECDSAPub(&key.PublicKey)[1:],
+		key:        key,
 		validators: validators,
 		sets:       lru.NewCache[uint64, *metabft.ValidatorSet](bftSetCache),
 		peers:      make(map[string]*bftPeer),
@@ -148,7 +150,7 @@ func newBftService(dir string, key *ecdsa.PrivateKey, bc *core.BlockChain, engin
 		Broadcast:        s.broadcast,
 		OnProposalWanted: engine.WakeProposer,
 	}, s.chain)
-	engine.SetProposer(s.node)
+	engine.SetProposer(bftFaultProposer(s.node, s))
 	s.deliver = s.node.HandleMessage
 
 	// Capability advertisement is fixed at startup (MakeProtocols). A node
@@ -295,6 +297,9 @@ func (s *bftService) currentHeight() uint64 {
 
 // broadcast queues m for every admitted peer without blocking.
 func (s *bftService) broadcast(m *metabft.Message) {
+	if bftFaultBroadcast(s, m) {
+		return
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, p := range s.peers {
