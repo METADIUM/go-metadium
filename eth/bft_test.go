@@ -126,6 +126,15 @@ func TestBftServiceAdmitsValidatorsOnly(t *testing.T) {
 	if code, ok := next(300 * time.Millisecond); ok {
 		t.Fatalf("a non-validator was sent message %#x", code)
 	}
+	// A message it relays still counts: it was verified against the set
+	// before it got here, and the cache has recorded it, so dropping it
+	// would lose it for good (review on #156).
+	var delivered []*metabft.Message
+	s.deliver = func(m *metabft.Message) { delivered = append(delivered, m) }
+	relayed := &metabft.Message{Type: metabft.MsgPrepare, Height: 1}
+	if err := s.HandleConsensus(stranger, relayed); err != nil || len(delivered) != 1 || delivered[0] != relayed {
+		t.Fatalf("a verified message relayed by a non-admitted peer was not passed on: %v, %d", err, len(delivered))
+	}
 
 	// Governance adds it: admitted on the next head, and asked where it is.
 	pubs := [][]byte{crypto.FromECDSAPub(&outsider.PublicKey)[1:]}

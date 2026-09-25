@@ -38,6 +38,7 @@ type bftService struct {
 	validators metabft.ValidatorsFunc
 	sets       *lru.Cache[uint64, *metabft.ValidatorSet]
 	peerKey    func(*bftproto.Peer) []byte // the peer's node key; replaced in tests
+	deliver    func(*metabft.Message)      // to the consensus node; replaced in tests
 
 	mu    sync.RWMutex
 	peers map[string]*bftPeer
@@ -130,6 +131,7 @@ func newBftService(dir string, key *ecdsa.PrivateKey, bc *core.BlockChain, engin
 		OnProposalWanted: engine.WakeProposer,
 	}, metabft.NewBlockChain(bc, engine, mux))
 	engine.SetProposer(s.node)
+	s.deliver = s.node.HandleMessage
 
 	// Capability advertisement is fixed at startup (MakeProtocols). A node
 	// whose membership cannot be read yet, early in the PoA bootstrap,
@@ -184,9 +186,14 @@ func (s *bftService) headLoop() {
 // PoA bootstrap it only becomes readable once governance is deployed.
 func (s *bftService) onHead(head uint64) {
 	s.cache.Prune(head + 1)
+	// Not under s.mu: admit may read governance, and RunPeer would wait.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	peers := make([]*bftPeer, 0, len(s.peers))
 	for _, p := range s.peers {
+		peers = append(peers, p)
+	}
+	s.mu.RUnlock()
+	for _, p := range peers {
 		s.admit(p)
 	}
 }
@@ -218,7 +225,11 @@ func (s *bftService) peerAdmitted(peer *bftproto.Peer) bool {
 	return p != nil && p.admitted.Load()
 }
 
-// validatorSet is the node's ValidatorsFunc, cached by height.
+// validatorSet is the node's ValidatorsFunc, cached by height. The set for
+// height h comes from the state at h-1, final from bftBlock on. Below it
+// the PoA segment can still reorg, so a cached set there may be from a
+// block that lost; governance changes in that short segment are rare, and
+// only admission reads those heights (review on #156).
 func (s *bftService) validatorSet(height uint64) (*metabft.ValidatorSet, error) {
 	if set, ok := s.sets.Get(height); ok {
 		return set, nil
@@ -275,10 +286,14 @@ func (s *bftService) ValidatorSet(height uint64) (*metabft.ValidatorSet, bool) {
 	return set, err == nil
 }
 
-func (s *bftService) HandleConsensus(peer *bftproto.Peer, m *metabft.Message) error {
-	if s.peerAdmitted(peer) {
-		s.node.HandleMessage(m)
-	}
+// HandleConsensus passes on every message that reached it, whoever relayed
+// it: the handler has checked its signature against the set, so it is
+// authentic, and the dedup cache has already recorded it. Gating it on the
+// relaying peer's admission would lose it for good, since the same message
+// from an admitted peer is then a duplicate; admission lags a set change by
+// up to a head (review on #156).
+func (s *bftService) HandleConsensus(_ *bftproto.Peer, m *metabft.Message) error {
+	s.deliver(m)
 	return nil
 }
 
@@ -331,7 +346,7 @@ func (s *bftService) HandleSyncReply(peer *bftproto.Peer, height, round uint64) 
 		return
 	}
 	if cur, _ := s.node.Status(); height > cur+1 {
-		peer.Log().Info("PBFT peer is ahead; waiting for block sync", "peer", height, "local", cur)
+		peer.Log().Debug("PBFT peer is ahead; waiting for block sync", "peer", height, "local", cur)
 	}
 }
 
