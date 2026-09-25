@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
@@ -249,4 +250,24 @@ func BftValidators(height *big.Int) (nodeIds [][]byte, coinbases []common.Addres
 		return nil, nil, ErrNotInitialized
 	}
 	return BftValidatorsFunc(height)
+}
+
+// bftBlock is the chain's PBFT switch block (nil: no switch). The eth
+// service sets it at start-up, before the metadium admin starts, so the
+// admin can tell PoA heights from PBFT ones without the chain config.
+var bftBlock atomic.Pointer[big.Int]
+
+// SetBftBlock records the PBFT switch block.
+func SetBftBlock(b *big.Int) {
+	if b == nil {
+		bftBlock.Store(nil)
+		return
+	}
+	bftBlock.Store(new(big.Int).Set(b))
+}
+
+// IsBft reports whether height is a PBFT height.
+func IsBft(height *big.Int) bool {
+	b := bftBlock.Load()
+	return b != nil && height != nil && height.Cmp(b) >= 0
 }
