@@ -1,0 +1,360 @@
+package metabft
+
+import (
+	"crypto/ecdsa"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/mclock"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/rlp"
+)
+
+// Chain is what a Node needs from the blockchain (design §6: the core never
+// sees the chain; the node adapts it).
+type Chain interface {
+	CurrentHeader() *types.Header
+	// VerifyBlock runs the chain-side checks of design §4.8 (steps 3-6) on a
+	// proposal whose parent is the current head: header rules except the
+	// seals, timestamp bounds, execution, rewards, N >= 4.
+	VerifyBlock(block *types.Block) error
+	// InsertBlock writes a decided block, seals attached, as the new head.
+	InsertBlock(block *types.Block) error
+	// SubscribeHeads reports every new head, however the chain got it: this
+	// node's commits and blocks imported by sync alike.
+	SubscribeHeads(ch chan<- *types.Header) event.Subscription
+}
+
+// NodeConfig configures a Node.
+type NodeConfig struct {
+	Config   Config
+	ChainID  uint64
+	BftBlock uint64 // first PBFT height; below it the node stays idle
+	// Key signs messages; nil for a node that never signs.
+	Key *ecdsa.PrivateKey
+	// WAL and ObserverUntil come from OpenNodeWAL.
+	WAL           *WAL
+	ObserverUntil uint64
+	Validators    ValidatorsFunc
+	// Broadcast sends a signed message to the other validators. It must not
+	// block: it is called from the node's event loop.
+	Broadcast func(m *Message)
+	Clock     mclock.Clock // nil: the system's monotonic clock
+}
+
+// Node runs a Core against a Chain (design §7.3). One goroutine owns the
+// core and feeds it messages, blocks, heads and timeouts with the local
+// monotonic time; everything else talks to it through channels.
+//
+// Proposals are asynchronous: when the core asks for a block, ProposalWanted
+// tells the block builder (the miner) to build one on the head, and the
+// builder hands it back with SubmitBlock. A decided block is written by the
+// node, not by the builder, since it may be another validator's.
+type Node struct {
+	cfg   NodeConfig
+	chain Chain
+	clock mclock.Clock
+	core  *Core
+	log   log.Logger
+
+	msgs   chan *Message
+	blocks chan *types.Block
+	quit   chan struct{}
+	wg     sync.WaitGroup
+
+	// Loop-owned.
+	head      *types.Header
+	started   uint64        // the height the core was last started on; 0 before the switch
+	committed *types.Header // written by Commit, started once the core call returns
+
+	// Shared with ProposalWanted and Status.
+	mu          sync.Mutex
+	want        *proposalRequest
+	committedAt time.Duration
+	height      uint64
+	round       uint64
+}
+
+type proposalRequest struct{ height, round uint64 }
+
+const (
+	// msgQueue bounds messages waiting for the loop. The network layer has
+	// already verified and de-duplicated them, so a full queue means the
+	// loop is behind; dropping is safe, since round changes recover.
+	msgQueue = 1024
+
+	// validatorRetry is how often a height without a readable validator set
+	// is retried (governance not synced yet, design §7.7).
+	validatorRetry = time.Second
+)
+
+var errNodeStopped = errors.New("metabft node stopped")
+
+// NewNode creates a node; Start runs it.
+func NewNode(cfg NodeConfig, chain Chain) *Node {
+	if cfg.Clock == nil {
+		cfg.Clock = mclock.System{}
+	}
+	n := &Node{
+		cfg:    cfg,
+		chain:  chain,
+		clock:  cfg.Clock,
+		msgs:   make(chan *Message, msgQueue),
+		blocks: make(chan *types.Block, 1),
+		quit:   make(chan struct{}),
+		log:    log.New("module", "metabft"),
+	}
+	n.core = NewCore(cfg.Config, n, cfg.Key, cfg.WAL, cfg.ObserverUntil)
+	return n
+}
+
+// Start runs the event loop.
+func (n *Node) Start() {
+	n.wg.Add(1)
+	go n.loop()
+}
+
+// Stop ends the event loop and waits for it.
+func (n *Node) Stop() {
+	close(n.quit)
+	n.wg.Wait()
+}
+
+// HandleMessage queues a message from the network. It does not block.
+func (n *Node) HandleMessage(m *Message) {
+	select {
+	case n.msgs <- m:
+	default:
+		n.log.Warn("Consensus message queue full; dropping", "type", m.Type, "height", m.Height, "round", m.Round)
+	}
+}
+
+// ProposalWanted reports whether the block builder should build a block for
+// height now. Round 0 waits for pending transactions or, without them, for
+// EmptyBlockInterval since the parent became the head, so an idle chain
+// produces one empty block per interval (design §4.5). A later round wants
+// a block at once.
+func (n *Node) ProposalWanted(height uint64, pendingTxs bool) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	switch {
+	case n.want == nil || n.want.height != height:
+		return false
+	case n.want.round > 0 || pendingTxs:
+		return true
+	}
+	return n.now()-n.committedAt >= n.cfg.Config.EmptyBlockInterval
+}
+
+// SubmitBlock hands the core a block built for ProposalWanted. A block that
+// no longer fits (the head or the round moved on) is dropped by the loop.
+func (n *Node) SubmitBlock(block *types.Block) error {
+	select {
+	case <-n.quit:
+		return errNodeStopped
+	default:
+	}
+	select {
+	case n.blocks <- block:
+	default:
+		// A block is already waiting; the builder retries on its next cycle.
+	}
+	return nil
+}
+
+// Status returns the height and round being agreed on.
+func (n *Node) Status() (height, round uint64) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.height, n.round
+}
+
+func (n *Node) now() time.Duration { return time.Duration(n.clock.Now()) }
+
+func (n *Node) loop() {
+	defer n.wg.Done()
+
+	heads := make(chan *types.Header, 16)
+	sub := n.chain.SubscribeHeads(heads)
+	defer sub.Unsubscribe()
+
+	var (
+		timer    mclock.ChanTimer
+		timerC   <-chan mclock.AbsTime
+		armedFor time.Duration
+		armed    bool
+	)
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	n.onHead(n.chain.CurrentHeader())
+	for {
+		// The core calls Commit from inside its own handlers, so the next
+		// height starts here, after the call that decided it has returned.
+		if h := n.committed; h != nil {
+			n.committed = nil
+			n.onHead(h)
+		}
+		n.publish()
+
+		// One timer, re-armed only when the deadline moves.
+		d, ok := n.core.Deadline()
+		if !ok && n.started != 0 && !n.core.HasValidatorSet() {
+			// Keep an armed retry: re-arming on every event would never fire.
+			d, ok = armedFor, true
+			if !armed {
+				d = n.now() + validatorRetry
+			}
+		}
+		if ok != armed || d != armedFor {
+			if timer != nil {
+				timer.Stop()
+				timer, timerC = nil, nil
+			}
+			if ok {
+				wait := d - n.now()
+				if wait < 0 {
+					wait = 0
+				}
+				timer = n.clock.NewTimer(wait)
+				timerC = timer.C()
+			}
+			armed, armedFor = ok, d
+		}
+
+		select {
+		case h := <-heads:
+			n.onHead(h)
+		case m := <-n.msgs:
+			if err := n.core.HandleMessage(m, n.now()); err != nil {
+				n.log.Debug("Consensus message rejected", "type", m.Type, "height", m.Height, "round", m.Round, "err", err)
+			}
+		case b := <-n.blocks:
+			n.propose(b)
+		case <-timerC:
+			timer, timerC, armed = nil, nil, false
+			if n.started != 0 && !n.core.HasValidatorSet() {
+				n.core.NewHeight(n.started, n.now())
+			} else {
+				n.core.Tick(n.now())
+			}
+		case err := <-sub.Err():
+			if err != nil {
+				n.log.Error("Chain head subscription failed", "err", err)
+			}
+			return
+		case <-n.quit:
+			return
+		}
+	}
+}
+
+// onHead starts the height after a new head. Heads at or below the height
+// already running change nothing: this node's own commit arrives here too,
+// after Commit has already moved on.
+func (n *Node) onHead(h *types.Header) {
+	if h == nil {
+		return
+	}
+	next := h.Number.Uint64() + 1
+	if next < n.cfg.BftBlock || next <= n.started {
+		return
+	}
+	n.head, n.started = h, next
+	n.mu.Lock()
+	n.want = nil
+	n.committedAt = n.now()
+	n.mu.Unlock()
+	n.core.NewHeight(next, n.now())
+}
+
+func (n *Node) propose(b *types.Block) {
+	if n.head == nil || b.ParentHash() != n.head.Hash() {
+		n.log.Debug("Dropping a block built on a stale head", "number", b.Number(), "parent", b.ParentHash())
+		return
+	}
+	if err := n.core.Propose(blockProposal{b}, n.now()); err != nil {
+		n.log.Debug("Proposal not used", "number", b.Number(), "err", err)
+		return
+	}
+	n.mu.Lock()
+	n.want = nil
+	n.mu.Unlock()
+}
+
+// publish exposes the core's position to other goroutines and drops a
+// proposal request the core has moved past.
+func (n *Node) publish() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.height, n.round = n.core.Height(), n.core.Round()
+	if n.want != nil && (n.want.height != n.height || n.want.round != n.round) {
+		n.want = nil
+	}
+}
+
+// Backend, called from the loop only.
+
+func (n *Node) ChainID() uint64 { return n.cfg.ChainID }
+
+func (n *Node) Validators(height uint64) (*ValidatorSet, error) { return n.cfg.Validators(height) }
+
+func (n *Node) DecodeProposal(data []byte) (Proposal, error) {
+	b := new(types.Block)
+	if err := rlp.DecodeBytes(data, b); err != nil {
+		return nil, fmt.Errorf("%w: %v", errBadPayload, err)
+	}
+	// Not covered by the digest; the decided round and seals are set at
+	// commit, so a proposal carrying any is malformed.
+	if h := b.Header(); h.BftRound != 0 || len(h.CommitSeals) != 0 {
+		return nil, fmt.Errorf("%w: proposal carries commit data", errBadPayload)
+	}
+	return blockProposal{b}, nil
+}
+
+func (n *Node) VerifyProposal(p Proposal) error {
+	b := p.(blockProposal).Block
+	if n.head == nil || b.ParentHash() != n.head.Hash() {
+		return errors.New("proposal is not on the local head")
+	}
+	return n.chain.VerifyBlock(b)
+}
+
+func (n *Node) RequestProposal(height, round uint64) {
+	n.mu.Lock()
+	n.want = &proposalRequest{height, round}
+	n.mu.Unlock()
+}
+
+func (n *Node) Broadcast(m *Message) { n.cfg.Broadcast(m) }
+
+func (n *Node) Commit(p Proposal, round uint64, seals [][]byte) {
+	b := p.(blockProposal).Block
+	h := b.Header() // a copy
+	h.BftRound, h.CommitSeals = round, seals
+	sealed := b.WithSeal(h)
+	if err := n.chain.InsertBlock(sealed); err != nil {
+		// The height stays decided here; the block comes back through sync
+		// from a validator that wrote it.
+		n.log.Error("Cannot write the decided block", "number", sealed.Number(), "hash", sealed.Hash(), "err", err)
+		return
+	}
+	n.log.Info("Committed block", "number", sealed.Number(), "hash", sealed.Hash(), "round", round, "seals", len(seals), "txs", len(sealed.Transactions()))
+	n.committed = sealed.Header()
+}
+
+// blockProposal is a block as the core sees it.
+type blockProposal struct{ *types.Block }
+
+func (p blockProposal) Height() uint64          { return p.NumberU64() }
+func (p blockProposal) Encode() ([]byte, error) { return rlp.EncodeToBytes(p.Block) }
+
+// Hash is Header.Hash, which leaves out BftRound and CommitSeals (design §5.2).
+func (p blockProposal) Hash() common.Hash { return p.Block.Hash() }

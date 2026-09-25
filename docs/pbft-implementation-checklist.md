@@ -158,8 +158,8 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 | ID | Item | Design | Status |
 |----|------|--------|--------|
-| P5-00 | Remove the `errBftNotImplemented` startup guard (`eth/bft_guard.go`) in the same change that lands P5-01 | §9.3 | [ ] |
 | P5-23 | Register `metabft.MakeProtocols` in `eth/backend.go` `Protocols()` and wire its `Backend` to the core (from P4-02); call `Cache.Prune` on commit | §7.1 | [ ] |
+| P5-00 | Remove the `errBftNotImplemented` startup guard (`eth/bft_guard.go`) once a PBFT chain can produce blocks end to end (P5-07, P5-08, P5-23); P5-01 alone would let a node start on a chain that then stops at `bftBlock` | §9.3 | [ ] |
 | P5-01 | Wrapper engine `metabft.Engine` created in `CreateConsensusEngine` when the chain config has `bftBlock`; below it every call goes to the PoA engine (P5a) | §7.2 | [x] |
 | P5-02 | `VerifyHeader` pre-fork: `CommitSeals == nil && BftRound == 0` | §5.2, §5.3 | done in P1-06: the PoA engine enforces it for every height it verifies |
 | P5-03 | `VerifyHeader` post-fork: the PoA engine's header checks (`VerifyHeaderPBFT`, which covers the Camellia fields and `ParentBeaconRoot == nil`; `IsCamellia` is guaranteed by `checkBft`), plus `Time >= parent.Time` (P5a) | §5.3 | [x] |
@@ -167,7 +167,7 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | P5-05 | `VerifyHeader` post-fork: `>= Quorum` distinct seals over `commitDigest(BlockHash, BftRound, ChainID)`, every seal valid (`VerifySeals`, P5a) | §5.3 | [x] |
 | P5-06 | PRE-PREPARE time bound `\|Time − localNow\| <= timeDrift` (not applied on sync) | §4.5 | [ ] |
 | P5-07 | Worker proposer gate via `IsBftProposer` (`miner/worker.go:1666-1681`) | §7.3 | [ ] |
-| P5-08 | Worker hands the block to the BFT core; backend writes on commit | §7.3 | [ ] |
+| P5-08 | Worker hands the block to the BFT core; backend writes on commit | §7.3 | [ ] — the node side is done in P5-24 (`SubmitBlock`, and `Commit` writes through `Chain.InsertBlock`); the worker side is open |
 | P5-09 | `LogBlock` / `ReleaseMiningToken` skipped post-fork (`miner/worker.go:1901-1910`) | §7.3 | [ ] |
 | P5-10 | Proposer timestamp `max(parent.Time, now)`; `timeIt` not used post-fork | §7.3 | [ ] |
 | P5-11 | Non-proposers validate via `ValidateBody` + `Process` + `ValidateState` | §7.3 | [ ] |
@@ -182,6 +182,7 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | P5-20 | RPCs: `metabft_getValidators`, `_getRoundState`, `_status`, `_readiness`, `_getEvidence` | §6, §7.1, §9.3 | [ ] |
 | P5-21 | Startup check: `EmptyBlockInterval >= blockCreationTime` (from P0-05) | §4.5 | [ ] |
 | P5-22 | Warn when `--metadium.block.emptyinterval` differs from `bft.emptyBlockInterval`; genesis wins (from P0-07) | §8.1 | [ ] |
+| P5-24 | `metabft.Node`: one event loop owns the core and feeds it messages, submitted blocks, heads and timeouts on the local monotonic clock; idle below `bftBlock`; asks the builder for blocks through `ProposalWanted` (round 0 waits for pending transactions or `EmptyBlockInterval`); retries a height whose validator set cannot be read yet (P5b) | §6, §7.3 | [x] |
 | P5-25 | Snap sync refused on a PBFT chain (full sync only): without state, no PBFT header can be verified (P5-17) | §7.7 | [ ] |
 
 **Check:** real block production on 4 local nodes, PoA → PBFT transition included.
