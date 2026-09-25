@@ -10,8 +10,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -74,7 +77,7 @@ func (net *testNet) bftHeader(t *testing.T, parent *types.Header, builder int, r
 		BftRound:        round,
 	}
 	h.MinerNodeId = pubKeyOf(net.keys[builder])
-	sig, err := crypto.Sign(h.Root.Bytes(), net.keys[builder])
+	sig, err := crypto.Sign(ethash.BftBuilderSigHash(h.Number, h.Root), net.keys[builder])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +142,7 @@ func TestEngineVerifiesPBFTHeader(t *testing.T) {
 			outsider := newTestNet(t, 1)
 			h := net.bftHeader(t, parent, 1, 0, nil)
 			h.MinerNodeId = pubKeyOf(outsider.keys[0])
-			h.MinerNodeSig, _ = crypto.Sign(h.Root.Bytes(), outsider.keys[0])
+			h.MinerNodeSig, _ = crypto.Sign(ethash.BftBuilderSigHash(h.Number, h.Root), outsider.keys[0])
 			for _, i := range []int{0, 1, 2} {
 				seal, _ := SignCommitSeal(CommitDigest(h.Hash(), 0, testChainID), net.keys[i])
 				h.CommitSeals = append(h.CommitSeals, seal)
@@ -148,7 +151,7 @@ func TestEngineVerifiesPBFTHeader(t *testing.T) {
 		}, errBadProposer},
 		{"builder signature by someone else", func() *types.Header {
 			h := net.bftHeader(t, parent, 1, 0, nil)
-			h.MinerNodeSig, _ = crypto.Sign(h.Root.Bytes(), net.keys[2])
+			h.MinerNodeSig, _ = crypto.Sign(ethash.BftBuilderSigHash(h.Number, h.Root), net.keys[2])
 			for _, i := range []int{0, 1, 2} {
 				seal, _ := SignCommitSeal(CommitDigest(h.Hash(), 0, testChainID), net.keys[i])
 				h.CommitSeals = append(h.CommitSeals, seal)
@@ -158,7 +161,7 @@ func TestEngineVerifiesPBFTHeader(t *testing.T) {
 		{"timestamp before the parent", func() *types.Header {
 			h := net.bftHeader(t, parent, 1, 0, nil)
 			h.Time = parent.Time - 1
-			h.MinerNodeSig, _ = crypto.Sign(h.Root.Bytes(), net.keys[1])
+			h.MinerNodeSig, _ = crypto.Sign(ethash.BftBuilderSigHash(h.Number, h.Root), net.keys[1])
 			for _, i := range []int{0, 1, 2} {
 				seal, _ := SignCommitSeal(CommitDigest(h.Hash(), 0, testChainID), net.keys[i])
 				h.CommitSeals = append(h.CommitSeals, seal)
@@ -280,5 +283,77 @@ func TestEngineSignersWithParentState(t *testing.T) {
 	chain.hasState[sealed.Hash()] = true
 	if err := engine.VerifyUncles(chain, types.NewBlockWithHeader(h6)); !errors.Is(err, errNotEnoughSeals) {
 		t.Errorf("unsealed batch header at import: %v", err)
+	}
+}
+
+// TestEngineBuilderIdentity: the builder signs height and root, names
+// itself in MinerNodeId, and uses its own governance coinbase.
+func TestEngineBuilderIdentity(t *testing.T) {
+	net, _, chain, parent := newEngineChain(t)
+	coinbases := []common.Address{{0xc0}, {0xc1}, {0xc2}, {0xc3}}
+	set, err := net.set.WithCoinbases(coinbases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine(ethash.NewFaker(), func(uint64) (*ValidatorSet, error) { return set, nil })
+	build := func(coinbase common.Address, sign func(h *types.Header) []byte) *types.Header {
+		h := net.bftHeader(t, parent, 1, 0, nil)
+		h.Coinbase = coinbase
+		h.MinerNodeSig = sign(h)
+		for _, i := range []int{0, 1, 2} {
+			seal, _ := SignCommitSeal(CommitDigest(h.Hash(), 0, testChainID), net.keys[i])
+			h.CommitSeals = append(h.CommitSeals, seal)
+		}
+		return h
+	}
+	pangyo := func(h *types.Header) []byte {
+		sig, _ := crypto.Sign(ethash.BftBuilderSigHash(h.Number, h.Root), net.keys[1])
+		return sig
+	}
+	rootOnly := func(h *types.Header) []byte { // the pre-Pangyo form, not bound to the height
+		sig, _ := crypto.Sign(h.Root.Bytes(), net.keys[1])
+		return sig
+	}
+	if err := engine.VerifyHeader(chain, build(coinbases[1], pangyo)); err != nil {
+		t.Errorf("builder with its own coinbase: %v", err)
+	}
+	if err := engine.VerifyHeader(chain, build(coinbases[2], pangyo)); !errors.Is(err, errBadProposer) {
+		t.Errorf("builder naming another validator's coinbase: %v", err)
+	}
+	if err := engine.VerifyHeader(chain, build(coinbases[1], rootOnly)); !errors.Is(err, errBadProposer) {
+		t.Errorf("signature over the root alone: %v", err)
+	}
+}
+
+// TestEngineAssemblesVerifiableHeader: what the PoA engine assembles at a
+// PBFT height passes the PBFT builder check, with the node's signer as
+// metadium provides it (signBlock, Pangyo form).
+func TestEngineAssemblesVerifiableHeader(t *testing.T) {
+	net, engine, chain, parent := newEngineChain(t)
+	builder := net.keys[2]
+	coinbase := common.Address{0xc2}
+	oldSign := metaminer.SignBlockFunc
+	metaminer.SignBlockFunc = func(height *big.Int, hash common.Hash, isPangyo bool) (common.Address, []byte, []byte, error) {
+		if !isPangyo {
+			t.Errorf("block %v signed in the pre-Pangyo form", height)
+		}
+		sig, err := crypto.Sign(crypto.Keccak256(append(height.Bytes(), hash.Bytes()...)), builder)
+		return coinbase, nil, sig, err // signBlock leaves nodeId out after Pangyo
+	}
+	t.Cleanup(func() { metaminer.SignBlockFunc = oldSign })
+
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := &types.Header{ParentHash: parent.Hash(), Number: big.NewInt(engineBftBlock), Difficulty: big.NewInt(1),
+		GasLimit: parent.GasLimit, Time: parent.Time, ExcessBlobGas: new(big.Int), BlobGasUsed: new(big.Int)}
+	block, err := engine.FinalizeAndAssemble(chain, header, statedb, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := net.set.WithCoinbases([]common.Address{{}, {}, coinbase, {}})
+	if err := verifyProposerSig(block.Header(), set); err != nil {
+		t.Errorf("assembled header: %v", err)
 	}
 }

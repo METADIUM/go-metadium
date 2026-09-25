@@ -20,13 +20,18 @@ import (
 type ValidatorsFunc func(height uint64) (*ValidatorSet, error)
 
 // GovernanceValidators reads the set from the Metadium governance contract
-// (metadium/miner.BftValidators): the state at height-1, governance order.
+// (metadium/miner.BftValidators): the state at height-1, governance order,
+// with the nodes' coinbases.
 func GovernanceValidators(height uint64) (*ValidatorSet, error) {
-	keys, err := metaminer.BftValidators(new(big.Int).SetUint64(height))
+	keys, coinbases, err := metaminer.BftValidators(new(big.Int).SetUint64(height))
 	if err != nil {
 		return nil, err
 	}
-	return NewValidatorSet(keys)
+	set, err := NewValidatorSet(keys)
+	if err != nil {
+		return nil, err
+	}
+	return set.WithCoinbases(coinbases)
 }
 
 // Engine is the consensus engine of a PBFT network (design §7.2). One chain
@@ -167,21 +172,27 @@ func (e *Engine) verifySigners(chain consensus.ChainHeaderReader, header *types.
 	return VerifySeals(header, chain.Config().ChainID.Uint64(), set)
 }
 
-// verifyProposerSig checks MinerNodeSig, the block builder's signature over
-// the state root (the post-Pangyo form, with MinerNodeId set). The builder
-// may be a proposer of an earlier round than the committed one (a
-// re-proposal keeps the header byte for byte, design §4.5), so membership is
-// what is checked, not the committed round's proposer (design §5.3).
+// verifyProposerSig checks the block builder's identity (design §5.3):
+// MinerNodeId names a validator, MinerNodeSig is its signature over
+// keccak256(number || root) (ethash.BftBuilderSigHash, the Pangyo form),
+// and Coinbase is that validator's coinbase, as the PoA check binds it.
+// The builder may be a proposer of an earlier round than the committed one
+// (a re-proposal keeps the header byte for byte, design §4.5), so
+// membership is what is checked, not the committed round's proposer.
 func verifyProposerSig(header *types.Header, set *ValidatorSet) error {
 	if len(header.MinerNodeId) != PubKeyLength {
 		return fmt.Errorf("%w: minerNodeId has %d bytes", errBadProposer, len(header.MinerNodeId))
 	}
-	if _, ok := set.IndexOf(header.MinerNodeId); !ok {
+	idx, ok := set.IndexOf(header.MinerNodeId)
+	if !ok {
 		return errBadProposer
 	}
-	pub, err := crypto.Ecrecover(header.Root.Bytes(), header.MinerNodeSig)
+	pub, err := crypto.Ecrecover(ethash.BftBuilderSigHash(header.Number, header.Root), header.MinerNodeSig)
 	if err != nil || len(pub) != PubKeyLength+1 || !bytes.Equal(pub[1:], header.MinerNodeId) {
 		return fmt.Errorf("%w: signature does not match minerNodeId", errBadProposer)
+	}
+	if want := set.At(idx).Coinbase; header.Coinbase != want {
+		return fmt.Errorf("%w: coinbase %v, the builder's is %v", errBadProposer, header.Coinbase, want)
 	}
 	return nil
 }

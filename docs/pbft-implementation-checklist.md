@@ -162,7 +162,7 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | P5-01 | Wrapper engine `metabft.Engine` created in `CreateConsensusEngine` when the chain config has `bftBlock`; below it every call goes to the PoA engine (P5a) | §7.2 | [x] |
 | P5-02 | `VerifyHeader` pre-fork: `CommitSeals == nil && BftRound == 0` | §5.2, §5.3 | done in P1-06: the PoA engine enforces it for every height it verifies |
 | P5-03 | `VerifyHeader` post-fork: the PoA engine's header checks (`VerifyHeaderPBFT`, which covers the Camellia fields and `ParentBeaconRoot == nil`; `IsCamellia` is guaranteed by `checkBft`), plus `Time >= parent.Time` (P5a) | §5.3 | [x] |
-| P5-04 | `VerifyHeader` post-fork: `MinerNodeSig` over the state root by `MinerNodeId`, a validator of the parent state (P5a) | §5.3 | [x] |
+| P5-04 | `VerifyHeader` post-fork: `MinerNodeSig` over `keccak256(number ‖ root)` (the Pangyo form) by `MinerNodeId`, a validator of the parent state, and `Coinbase` that validator's governance coinbase; the PoA engine assembles this form at PBFT heights (P5a) | §5.3 | [x] |
 | P5-05 | `VerifyHeader` post-fork: `>= Quorum` distinct seals over `commitDigest(BlockHash, BftRound, ChainID)`, every seal valid (`VerifySeals`, P5a) | §5.3 | [x] |
 | P5-06 | PRE-PREPARE time bound `\|Time − localNow\| <= timeDrift` (not applied on sync) | §4.5 | [ ] |
 | P5-07 | Worker proposer gate via `IsBftProposer` (`miner/worker.go:1666-1681`) | §7.3 | [ ] |

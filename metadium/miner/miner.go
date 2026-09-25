@@ -52,8 +52,9 @@ var (
 
 	// BftValidatorsFunc returns the PBFT validator set for height: the
 	// governance nodes' enode public keys (64 bytes each) in governance order,
-	// read from the state at height-1 (docs/pbft-consensus-design.md §4.2).
-	BftValidatorsFunc func(height *big.Int) ([][]byte, error)
+	// with each node's coinbase, read from the state at height-1
+	// (docs/pbft-consensus-design.md §4.2).
+	BftValidatorsFunc func(height *big.Int) (nodeIds [][]byte, coinbases []common.Address, err error)
 	// Add TRS
 	GetTRSListMapFunc func(height *big.Int) (trsListMap map[common.Address]bool, trsSubscribe bool, err error)
 )
@@ -231,9 +232,9 @@ func TRSRestricted(trsListMap map[common.Address]bool, from common.Address, to *
 // EOF
 
 // BftValidators returns the PBFT validator set for height (BftValidatorsFunc).
-func BftValidators(height *big.Int) ([][]byte, error) {
+func BftValidators(height *big.Int) (nodeIds [][]byte, coinbases []common.Address, err error) {
 	if BftValidatorsFunc == nil {
-		return nil, ErrNotInitialized
+		return nil, nil, ErrNotInitialized
 	}
 	return BftValidatorsFunc(height)
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
@@ -667,9 +668,20 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 
 	// Metadium PoA: sign header.Root with this node's private key.
 	if !metaminer.IsPoW() {
-		coinbase, nodeId, sig, err := metaminer.SignBlock(header.Number, header.Root, chain.Config().IsPangyo(header.Number))
+		isBft := chain.Config().IsBft(header.Number)
+		coinbase, nodeId, sig, err := metaminer.SignBlock(header.Number, header.Root, chain.Config().IsPangyo(header.Number) || isBft)
 		if err != nil {
 			return nil, err
+		}
+		if isBft {
+			// PBFT form (docs/pbft-consensus-design.md §5.3): the Pangyo
+			// signature over height and root, and the builder names itself in
+			// MinerNodeId, since the validator set is keyed by node key.
+			pub, err := crypto.Ecrecover(BftBuilderSigHash(header.Number, header.Root), sig)
+			if err != nil {
+				return nil, fmt.Errorf("builder signature for block %v: %w", header.Number, err)
+			}
+			nodeId = pub[1:]
 		}
 		header.Coinbase = coinbase
 		header.MinerNodeId = nodeId
@@ -734,6 +746,13 @@ var (
 	u256_8  = uint256.NewInt(8)
 	u256_32 = uint256.NewInt(32)
 )
+
+// BftBuilderSigHash is what a PBFT block's builder signs as MinerNodeSig:
+// keccak256(number || root), the Pangyo form (metadium signBlock), which
+// ties the signature to the height.
+func BftBuilderSigHash(number *big.Int, root common.Hash) []byte {
+	return crypto.Keccak256(append(number.Bytes(), root.Bytes()...))
+}
 
 // AccumulateRewards credits the coinbase of the given block with the mining
 // reward. The total reward consists of the static block reward and rewards for
