@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"math/big"
 	"path/filepath"
 	"sync"
 	"time"
@@ -15,8 +16,10 @@ import (
 	bftproto "github.com/ethereum/go-ethereum/eth/protocols/metabft"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // bftService runs PBFT consensus on a PBFT chain: it owns the consensus node,
@@ -43,6 +46,9 @@ type bftService struct {
 
 	quit chan struct{}
 	wg   sync.WaitGroup
+
+	emptyInterval     time.Duration // bft.emptyBlockInterval, from the genesis
+	blockIntervalSeen int64         // last governance blockCreationTime checked, ms
 }
 
 // bftPeer is an admitted validator with its outbound queue.
@@ -109,6 +115,15 @@ func newBftService(dir string, key *ecdsa.PrivateKey, bc *core.BlockChain, engin
 		peers:      make(map[string]*bftPeer),
 		quit:       make(chan struct{}),
 		peerKey:    nodeKeyOf,
+
+		emptyInterval: time.Duration(config.Bft.EmptyBlockInterval) * time.Second,
+	}
+	// The genesis sets the empty-block interval of a PBFT chain: it enters
+	// every validator's round-0 timeout, so it must not differ between nodes
+	// (design §4.5, §8.1). The flag only applies to the PoA segment.
+	if params.BlockEmptyInterval > 0 && params.BlockEmptyInterval != int64(config.Bft.EmptyBlockInterval) {
+		log.Warn("--metadium.block.emptyinterval differs from the genesis bft.emptyBlockInterval; the genesis applies from bftBlock",
+			"flag", params.BlockEmptyInterval, "genesis", config.Bft.EmptyBlockInterval, "bftBlock", bftBlock)
 	}
 	s.node = metabft.NewNode(metabft.NodeConfig{
 		Config: metabft.Config{
@@ -167,6 +182,7 @@ func (s *bftService) headLoop() {
 		select {
 		case ev := <-heads:
 			s.onHead(ev.Block.NumberU64())
+			s.checkBlockCreationTime(ev.Block.Number())
 		case <-sub.Err():
 			return
 		case <-s.quit:
@@ -177,6 +193,26 @@ func (s *bftService) headLoop() {
 
 // onHead drops cache entries below the height now being agreed on.
 func (s *bftService) onHead(head uint64) { s.cache.Prune(head + 1) }
+
+// checkBlockCreationTime warns when governance's blockCreationTime is longer
+// than the empty-block interval (design §4.5): the proposer then waits for
+// the former, and the round-0 timeout, measured from the latter, fires
+// before an idle chain's empty block. It is read from governance, so it is
+// checked as heads arrive and logged once per value.
+// It reports whether it warned.
+func (s *bftService) checkBlockCreationTime(head *big.Int) bool {
+	interval, _, _, _, _, err := metaminer.GetBlockBuildParameters(head)
+	if err != nil || interval == s.blockIntervalSeen {
+		return false
+	}
+	s.blockIntervalSeen = interval
+	if time.Duration(interval)*time.Millisecond <= s.emptyInterval {
+		return false
+	}
+	log.Warn("Governance blockCreationTime is longer than the PBFT empty-block interval",
+		"blockCreationTime", time.Duration(interval)*time.Millisecond, "emptyBlockInterval", s.emptyInterval)
+	return true
+}
 
 // validatorSet is the node's ValidatorsFunc, cached by height.
 func (s *bftService) validatorSet(height uint64) (*metabft.ValidatorSet, error) {

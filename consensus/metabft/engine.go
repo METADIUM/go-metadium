@@ -23,10 +23,17 @@ type ValidatorsFunc func(height uint64) (*ValidatorSet, error)
 // GovernanceValidators reads the set from the Metadium governance contract
 // (metadium/miner.BftValidators): the state at height-1, governance order,
 // with the nodes' coinbases.
+//
+// Fewer than MinValidators nodes is no set at all: at bftBlock that stops
+// the chain rather than letting it run BFT with f = 0 (design §9.3); after
+// the switch VerifyPostState keeps it from happening (§9.3.1).
 func GovernanceValidators(height uint64) (*ValidatorSet, error) {
 	keys, coinbases, err := metaminer.BftValidators(new(big.Int).SetUint64(height))
 	if err != nil {
 		return nil, err
+	}
+	if len(keys) < MinValidators {
+		return nil, fmt.Errorf("%w: %d governance nodes at block %d, PBFT needs %d", errTooFewValidators, len(keys), height-1, MinValidators)
 	}
 	set, err := NewValidatorSet(keys)
 	if err != nil {
