@@ -185,7 +185,7 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | P5-25 | Snap sync refused on a PBFT chain (full sync only): without state, no PBFT header can be verified (P5-17); must land before any deployment, so the failure is an explicit error (review on #150) | §7.7 | [x] — `checkBftNode` refuses `--syncmode snap` at startup with that reason; full is the Metadium default (P5e) |
 | P5-23 | Register `metabft/1` in `eth/backend.go` and implement its `Backend` on the node (reviews on #149, #151): call `Cache.Prune(height)` on every commit, since an unpruned cache fills at 65,536 entries and then drops every message (test: a few thousand heights without pruning stall); refuse peers whose node key is not in the current set, or treat `SyncReply` as a hint only, since sync messages are unsigned; a per-peer budget for messages from unknown signers, each of which costs an ecrecover; `Broadcast` through a per-peer send queue with a drop policy, since `p2p.Send` blocks on a slow peer | §7.1 | [ ] |
 
-**Check:** real block production on 4 local nodes, PoA → PBFT transition included.
+**Check:** real block production on 4 local nodes, PoA → PBFT transition included. — passed on `tests/private-net-pbft` (`pbft-test.sh`): switch at `bftBlock`, a quorum of seals on every block, all four proposing, agreement and finality, one node down, two down and back. The run found two bugs, fixed in #158: PoA heights of a batch verified without their in-batch parent (sync of the bootstrap stopped), and PBFT proposals without the PoA seal fields (every proposal failed the mixHash check). Governance's real paths ran there: validator set, rewards comparison, node-count floor.
 
 ---
 
