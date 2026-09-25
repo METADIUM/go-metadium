@@ -1332,8 +1332,13 @@ func StartAdmin(stack *node.Node, datadir string) {
 	go func() {
 		peerTime := time.Now()
 		for {
+			// From bftBlock on, consensus replaces the etcd mining token and
+			// work log (docs/pbft-consensus-design.md §7.6): nothing more
+			// to start or to check against. The etcd server stays up for
+			// the membership RPCs; mining and the peer mesh continue.
+			pbft := admin.atPbftHeight()
 			if admin.amPartner() {
-				if admin.self != nil && !admin.etcdIsLeader() {
+				if admin.self != nil && !pbft && !admin.etcdIsLeader() {
 					EtcdStart()
 				}
 				admin.checkMining()
@@ -1349,11 +1354,29 @@ func StartAdmin(stack *node.Node, datadir string) {
 					}
 				}
 			}
-			syncCheck()
+			if !pbft {
+				syncCheck()
+			}
 
 			time.Sleep(5 * time.Second)
 		}
 	}()
+}
+
+// atPbftHeight reports whether the next block is a PBFT one. On a chain
+// without a switch block it answers without asking the node, so the admin
+// loop of Mainnet and Testnet does what it did before (review on #161).
+func (ma *metaAdmin) atPbftHeight() bool {
+	if !metaminer.HasBftBlock() {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	header, err := ma.cli.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return false
+	}
+	return metaminer.IsBft(new(big.Int).Add(header.Number, common.Big1))
 }
 
 func (ma *metaAdmin) addPeer(node *metaNode) error {

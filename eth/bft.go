@@ -95,6 +95,7 @@ func newBftService(dir string, key *ecdsa.PrivateKey, bc *core.BlockChain, engin
 	}
 	head := bc.CurrentBlock().Number.Uint64()
 	bftBlock := config.BftBlock.Uint64()
+	metaminer.SetBftBlock(config.BftBlock) // for the metadium admin, which has no chain config
 	wal, observerUntil, err := metabft.OpenNodeWAL(filepath.Join(dir, "wal"), head, bftBlock)
 	if err != nil {
 		return nil, fmt.Errorf("PBFT WAL: %w", err)
