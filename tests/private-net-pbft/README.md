@@ -22,3 +22,13 @@ cd tests/private-net-pbft
 - every node has the same block, and the finalized block is the head
 - with one node stopped, production continues; restarted, it catches up
 - with two nodes stopped (more than f = 1), production stops; with the quorum back, it resumes, and every node agrees afterwards
+
+Notes:
+- RPC is published on `127.0.0.1` only; node1 runs with an unlocked account.
+- Only node1 runs etcd. The PoA bootstrap takes its mining token from it
+  (Bokbunja), and the other nodes' etcd never joins, so they log
+  `etcd failed to start ... cannot fetch cluster info` during the
+  bootstrap. That is expected here and irrelevant from `bftBlock` on, where
+  PBFT replaces the token.
+- `pbft-test.sh` stops nodes with `docker stop --time 60`, giving the node
+  time to close its databases.

@@ -61,7 +61,7 @@ head=$(block_number 8645)
 (( head - fin <= 1 )) && pass "finalized block $fin is the head ($head)" || fail "finalized $fin lags head $head"
 
 # 3. S-01: one validator down, production continues with 3 seals.
-docker stop gmet-pbft-node4 >/dev/null
+docker stop --time 60 gmet-pbft-node4 >/dev/null
 start=$(block_number 8645)
 wait_height 8645 $((start + 10)) 120 && pass "10 blocks with node4 stopped" || fail "no progress with node4 stopped"
 docker start gmet-pbft-node4 >/dev/null
@@ -71,7 +71,7 @@ target=$(( $(block_number 8645) + 5 ))
 wait_height 8648 "$target" 180 && pass "node4 caught up after restart" || fail "node4 did not catch up"
 
 # 4. S-03: two down (> f), production stops; restarting resumes it.
-docker stop gmet-pbft-node3 gmet-pbft-node4 >/dev/null
+docker stop --time 60 gmet-pbft-node3 gmet-pbft-node4 >/dev/null
 sleep 5
 stalled=$(block_number 8645)
 sleep 30

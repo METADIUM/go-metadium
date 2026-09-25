@@ -1,6 +1,7 @@
 # go-metadium 4-node private network: PoA bootstrap, then PBFT from bftBlock
 # (docs/pbft-consensus-design.md §9). Prerequisites: ./setup.sh
 # Start: ./start.sh   Governance: ./deploy.sh   Test: ./pbft-test.sh   Stop: ./stop.sh
+# RPC is bound to 127.0.0.1 only: node1 runs with an unlocked account.
 
 networks:
   gmet-pbft-net:
@@ -26,7 +27,7 @@ services:
       - ./genesis.json:/data/genesis.json:ro
       - ./data/node1:/data/geth
     ports:
-      - "8645:8545"
+      - "127.0.0.1:8645:8545"
     networks:
       gmet-pbft-net:
         ipv4_address: 172.32.0.11
@@ -62,7 +63,7 @@ services:
       - ./genesis.json:/data/genesis.json:ro
       - ./data/node2:/data/geth
     ports:
-      - "8646:8545"
+      - "127.0.0.1:8646:8545"
     networks:
       gmet-pbft-net:
         ipv4_address: 172.32.0.12
@@ -94,7 +95,7 @@ services:
       - ./genesis.json:/data/genesis.json:ro
       - ./data/node3:/data/geth
     ports:
-      - "8647:8545"
+      - "127.0.0.1:8647:8545"
     networks:
       gmet-pbft-net:
         ipv4_address: 172.32.0.13
@@ -126,7 +127,7 @@ services:
       - ./genesis.json:/data/genesis.json:ro
       - ./data/node4:/data/geth
     ports:
-      - "8648:8545"
+      - "127.0.0.1:8648:8545"
     networks:
       gmet-pbft-net:
         ipv4_address: 172.32.0.14

@@ -58,7 +58,10 @@ for i in 0 1 2 3; do
   mkdir -p "data/$node/gmet" "data/$node/geth"
   KEYFILE=$(mktemp)
   echo "${PRIVKEYS[$i]}" > "$KEYFILE"
-  "$GMET_BIN" account import --datadir "data/$node" --password passwords.txt --lightkdf "$KEYFILE" >/dev/null 2>&1 || true
+  if ! "$GMET_BIN" account import --datadir "data/$node" --password passwords.txt --lightkdf "$KEYFILE" >/dev/null 2>&1; then
+    rm -f "$KEYFILE"
+    err "account import failed for $node"
+  fi
   rm -f "$KEYFILE"
   # The instance directory is geth/ or gmet/ depending on the binary; write both.
   "$BOOTNODE_BIN" -genkey "data/$node/geth/nodekey"
