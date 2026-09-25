@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # pbft-test.sh - check the PoA -> PBFT switch and PBFT behaviour on the
-# running 4-node network (checklist P5 check, §11.2 S-01..S-03).
+# running network (checklist P5 check; §11.2 S-01, S-02, S-03).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 source ./lib.sh
 
 BFT_BLOCK=$(python3 -c "import json; print(json.load(open('genesis.json'))['config']['bftBlock'])")
+P1=$(port_of 1)
 FAIL=0
 pass() { log "PASS  $*"; }
 fail() { log "FAIL  $*"; FAIL=1; }
@@ -17,8 +18,7 @@ block() {
 import sys, json
 b = json.load(sys.stdin)
 print(json.dumps({"hash": b["hash"], "round": int(b.get("bftRound", "0x0"), 16),
-                  "seals": len(b.get("commitSeals") or []), "miner": (b.get("minerNodeId") or "")[:18],
-                  "coinbase": b["miner"], "time": int(b["timestamp"], 16)}))'
+                  "seals": len(b.get("commitSeals") or []), "miner": (b.get("minerNodeId") or "")[:18]}))'
 }
 field() { python3 -c "import sys,json; print(json.load(sys.stdin)['$1'])"; }
 
@@ -31,65 +31,86 @@ wait_height() { # PORT HEIGHT TIMEOUT_S
   return 1
 }
 
-log "=== PBFT checks (bftBlock $BFT_BLOCK) ==="
-wait_height 8645 $((BFT_BLOCK + 20)) 900 || { fail "no progress past bftBlock + 20"; exit 1; }
-pass "chain passed bftBlock + 20"
+agree() { # LABEL: every node has node1's block two below its head
+  local h ref port
+  h=$(( $(block_number "$P1") - 2 ))
+  ref=$(block "$P1" "$h" | field hash)
+  for n in $(seq 2 "$NODES"); do
+    port=$(port_of "$n")
+    wait_height "$port" "$h" 180 || true
+    [[ $(block "$port" "$h" | field hash) == "$ref" ]] || { fail "node$n disagrees at $h $1"; return; }
+  done
+  pass "all $NODES nodes agree at block $h $1"
+}
 
-# 1. The switch: PoA below, sealed PBFT from bftBlock on.
-pre=$(block 8645 $((BFT_BLOCK - 1)))
-[[ $(field seals <<<"$pre") == 0 ]] && pass "block $((BFT_BLOCK - 1)) is PoA (no seals)" || fail "block $((BFT_BLOCK - 1)) carries seals"
+stop_nodes() { local c=(); for n in "$@"; do c+=("$(container "$n")"); done; docker stop --time 60 "${c[@]}" >/dev/null; }
+start_nodes() {
+  local c=(); for n in "$@"; do c+=("$(container "$n")"); done
+  docker start "${c[@]}" >/dev/null
+  sleep 5
+  mesh $(seq 1 "$NODES")
+}
+
+WINDOW=$(( 3 * NODES > 20 ? 3 * NODES : 20 ))
+log "=== PBFT checks: N=$NODES f=$F quorum=$QUORUM, bftBlock $BFT_BLOCK ==="
+wait_height "$P1" $((BFT_BLOCK + WINDOW)) 1200 || { fail "no progress past bftBlock + $WINDOW"; exit 1; }
+pass "chain passed bftBlock + $WINDOW"
+
+# The switch: PoA below, sealed PBFT from bftBlock on, every validator proposing.
+[[ $(block "$P1" $((BFT_BLOCK - 1)) | field seals) == 0 ]] && pass "block $((BFT_BLOCK - 1)) is PoA (no seals)" || fail "block $((BFT_BLOCK - 1)) carries seals"
 miners=""
-for n in $(seq "$BFT_BLOCK" $((BFT_BLOCK + 19))); do
-  b=$(block 8645 "$n")
-  seals=$(field seals <<<"$b")
-  (( seals >= 3 )) || fail "block $n has $seals commit seals, quorum is 3"
+for n in $(seq "$BFT_BLOCK" $((BFT_BLOCK + WINDOW - 1))); do
+  b=$(block "$P1" "$n")
+  (( $(field seals <<<"$b") >= QUORUM )) || fail "block $n has $(field seals <<<"$b") commit seals, quorum is $QUORUM"
   miners+="$(field miner <<<"$b")"$'\n'
 done
-pass "blocks $BFT_BLOCK..$((BFT_BLOCK + 19)) each carry >= 3 commit seals"
+pass "blocks $BFT_BLOCK..$((BFT_BLOCK + WINDOW - 1)) each carry >= $QUORUM commit seals"
 distinct=$(sort -u <<<"$miners" | grep -c . || true)
-(( distinct == 4 )) && pass "all 4 validators proposed in those 20 blocks" || fail "only $distinct distinct proposers in 20 blocks"
-
-# 2. Agreement and finality.
-h=$(( $(block_number 8645) - 2 ))
-ref=$(block 8645 "$h" | field hash)
-for port in 8646 8647 8648; do
-  [[ $(block "$port" "$h" | field hash) == "$ref" ]] || fail "node :$port disagrees at $h"
-done
-pass "all nodes agree at block $h"
-fin=$(rpc 8645 eth_getBlockByNumber '["finalized", false]' | python3 -c "import sys,json; print(int(json.load(sys.stdin)['number'],16))")
-head=$(block_number 8645)
+(( distinct == NODES )) && pass "all $NODES validators proposed in $WINDOW blocks" || fail "only $distinct distinct proposers in $WINDOW blocks"
+agree ""
+fin=$(rpc "$P1" eth_getBlockByNumber '["finalized", false]' | python3 -c "import sys,json; print(int(json.load(sys.stdin)['number'],16))")
+head=$(block_number "$P1")
 (( head - fin <= 1 )) && pass "finalized block $fin is the head ($head)" || fail "finalized $fin lags head $head"
 
-# 3. S-01: one validator down, production continues with 3 seals.
-docker stop --time 60 gmet-pbft-node4 >/dev/null
-start=$(block_number 8645)
-wait_height 8645 $((start + 10)) 120 && pass "10 blocks with node4 stopped" || fail "no progress with node4 stopped"
-docker start gmet-pbft-node4 >/dev/null
-sleep 5
-rpc 8648 admin_addPeer "[\"$(enode_of 1)\"]" >/dev/null 2>&1 || true
-target=$(( $(block_number 8645) + 5 ))
-wait_height 8648 "$target" 180 && pass "node4 caught up after restart" || fail "node4 did not catch up"
+# S-01 / S-02: up to f validators down, production continues.
+for k in $(seq 1 "$F"); do
+  down=$(seq $((NODES - k + 1)) "$NODES")
+  stop_nodes $down
+  start=$(block_number "$P1")
+  wait_height "$P1" $((start + 2 * NODES)) $((60 + 30 * NODES)) && pass "$((2 * NODES)) blocks with $k of $NODES stopped" || fail "no progress with $k stopped"
+  start_nodes $down
+  target=$(( $(block_number "$P1") + 3 ))
+  for n in $down; do
+    wait_height "$(port_of "$n")" "$target" 240 && pass "node$n caught up after restart" || fail "node$n did not catch up"
+  done
+done
 
-# 4. S-03: two down (> f), production stops; restarting resumes it.
-docker stop --time 60 gmet-pbft-node3 gmet-pbft-node4 >/dev/null
+# S-03: f+1 down, production stops; the quorum back, it resumes, no fork.
+down=$(seq $((NODES - F)) "$NODES")
+stop_nodes $down
 sleep 5
-stalled=$(block_number 8645)
+stalled=$(block_number "$P1")
 sleep 30
-now=$(block_number 8645)
-(( now <= stalled + 1 )) && pass "no progress with 2 of 4 stopped ($stalled -> $now)" || fail "progress without a quorum ($stalled -> $now)"
-docker start gmet-pbft-node3 gmet-pbft-node4 >/dev/null
-sleep 5
-for n in 3 4; do
-  for m in 1 2; do rpc "${PORTS[$((n - 1))]}" admin_addPeer "[\"$(enode_of $m)\"]" >/dev/null 2>&1 || true; done
+now=$(block_number "$P1")
+(( now <= stalled + 1 )) && pass "no progress with $((F + 1)) of $NODES stopped ($stalled -> $now)" || fail "progress without a quorum ($stalled -> $now)"
+start_nodes $down
+wait_height "$P1" $((now + 10)) 400 && pass "production resumed after the quorum returned" || fail "no progress after restart"
+agree "after recovery"
+
+# A block committed after a round change (the fault windows force them)
+# carries seals for its commit round and imports on every node. It is a new
+# proposal of the later round, not a re-proposal of a prepared block, which
+# S-16 needs and the simulator covers.
+reproposed=""
+for n in $(seq "$BFT_BLOCK" $(( $(block_number "$P1") - 1 ))); do
+  b=$(block "$P1" "$n")
+  if (( $(field round <<<"$b") > 0 )); then reproposed="$n $(field round <<<"$b")"; break; fi
 done
-wait_height 8645 $((now + 10)) 300 && pass "production resumed after the quorum returned" || fail "no progress after restart"
-h=$(( $(block_number 8645) - 2 ))
-ref=$(block 8645 "$h" | field hash)
-for port in 8646 8647 8648; do
-  wait_height "$port" "$h" 120 || true
-  [[ $(block "$port" "$h" | field hash) == "$ref" ]] || fail "node :$port disagrees at $h after recovery"
-done
-pass "all nodes agree at block $h after recovery"
+if [[ -n "$reproposed" ]]; then
+  pass "block ${reproposed% *} committed in round ${reproposed#* } imported on every node"
+else
+  fail "no block above round 0 during the fault windows"
+fi
 
 status
 (( FAIL == 0 )) && log "=== ALL PASSED ===" || { log "=== FAILURES ==="; exit 1; }

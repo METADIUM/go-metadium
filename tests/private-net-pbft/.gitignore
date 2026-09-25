@@ -5,3 +5,4 @@ node-ids.txt
 config.json
 passwords.txt
 .env
+docker-compose.yml
