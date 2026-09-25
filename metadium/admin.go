@@ -1363,8 +1363,13 @@ func StartAdmin(stack *node.Node, datadir string) {
 	}()
 }
 
-// atPbftHeight reports whether the next block is a PBFT one.
+// atPbftHeight reports whether the next block is a PBFT one. On a chain
+// without a switch block it answers without asking the node, so the admin
+// loop of Mainnet and Testnet does what it did before (review on #161).
 func (ma *metaAdmin) atPbftHeight() bool {
+	if !metaminer.HasBftBlock() {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	header, err := ma.cli.HeaderByNumber(ctx, nil)

@@ -266,6 +266,10 @@ func SetBftBlock(b *big.Int) {
 	bftBlock.Store(new(big.Int).Set(b))
 }
 
+// HasBftBlock reports whether a switch block is recorded, i.e. whether this
+// is a PBFT chain at all.
+func HasBftBlock() bool { return bftBlock.Load() != nil }
+
 // IsBft reports whether height is a PBFT height.
 func IsBft(height *big.Int) bool {
 	b := bftBlock.Load()
