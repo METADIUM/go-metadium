@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -54,11 +55,59 @@ type Engine struct {
 	legacy     *ethash.Ethash
 	validators ValidatorsFunc
 	rewards    RewardsFunc
+
+	mu       sync.RWMutex
+	proposer Proposer
+	wake     chan struct{}
+}
+
+// Proposer is the consensus side of block production (Node): it says when
+// this node should build a block, and takes the block once built.
+type Proposer interface {
+	ProposalWanted(height uint64, pendingTxs bool) bool
+	SubmitBlock(block *types.Block) error
 }
 
 // NewEngine wraps the PoA engine.
 func NewEngine(legacy *ethash.Ethash, validators ValidatorsFunc) *Engine {
-	return &Engine{legacy: legacy, validators: validators, rewards: GovernanceRewards}
+	return &Engine{legacy: legacy, validators: validators, rewards: GovernanceRewards, wake: make(chan struct{}, 1)}
+}
+
+// SetProposer connects the node that runs consensus. Until it is set, the
+// engine wants no blocks and refuses to seal at PBFT heights.
+func (e *Engine) SetProposer(p Proposer) {
+	e.mu.Lock()
+	e.proposer = p
+	e.mu.Unlock()
+	e.WakeProposer()
+}
+
+func (e *Engine) getProposer() Proposer {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.proposer
+}
+
+// ProposalWanted reports whether the miner should build a block for height
+// now (Node.ProposalWanted).
+func (e *Engine) ProposalWanted(height uint64, pendingTxs bool) bool {
+	if p := e.getProposer(); p != nil {
+		return p.ProposalWanted(height, pendingTxs)
+	}
+	return false
+}
+
+// ProposalWake fires when ProposalWanted may have become true, so the miner
+// need not poll for it. It is created with the engine, before any node is
+// connected, so the miner can take it at start-up.
+func (e *Engine) ProposalWake() <-chan struct{} { return e.wake }
+
+// WakeProposer signals ProposalWake without blocking; wake-ups collapse.
+func (e *Engine) WakeProposer() {
+	select {
+	case e.wake <- struct{}{}:
+	default:
+	}
 }
 
 var (
@@ -71,7 +120,7 @@ var (
 	errUnclesAtPBFT      = errors.New("metabft: uncles at a PBFT height")
 	errBadRewards        = errors.New("metabft: rewards field does not match the reward distribution")
 	errSealedProposal    = errors.New("metabft: proposal carries commit data")
-	errSealingNotRunning = errors.New("metabft: PBFT sealing is not wired to the miner yet")
+	errSealingNotRunning = errors.New("metabft: no consensus node connected")
 )
 
 func isBft(chain consensus.ChainHeaderReader, number *big.Int) bool {
@@ -339,13 +388,19 @@ func (e *Engine) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	return e.legacy.FinalizeAndAssemble(chain, header, state, txs, uncles, receipts, withdrawals)
 }
 
-// Seal implements consensus.Engine. At PBFT heights a block is decided by the
-// core, not sealed here; until that is wired (P5b) sealing refuses.
+// Seal implements consensus.Engine. At PBFT heights a block is not sealed
+// here but proposed: it goes to the node, which decides it with the other
+// validators and writes it itself. Nothing is ever sent on results then;
+// the miner must not wait for it (design §7.3).
 func (e *Engine) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
 	if !isBft(chain, block.Number()) {
 		return e.legacy.Seal(chain, block, results, stop)
 	}
-	return errSealingNotRunning
+	p := e.getProposer()
+	if p == nil {
+		return errSealingNotRunning
+	}
+	return p.SubmitBlock(block)
 }
 
 // SealHash implements consensus.Engine.
