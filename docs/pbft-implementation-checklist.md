@@ -135,22 +135,22 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 | ID | Item | Design | Status |
 |----|------|--------|--------|
-| P4-01 | `p2p.Protocol{Name: "metabft", Version: 1, Length: 8}`, validators only | §7.1 | [ ] |
-| P4-02 | Registered in `Protocols()` in `eth/backend.go` | §7.1 | [ ] |
-| P4-03 | Message codes `0x00`–`0x05` incl. `SyncRequestMsg`/`SyncReplyMsg` | §7.1, §7.7 | [ ] |
-| P4-04 | Order: verify signature → check validator → cache lookup | §7.1 | [ ] |
-| P4-05 | Cache `(sender, height, round, type)` → first digest; different digest → evidence + alarm | §7.1 | [ ] |
-| P4-06 | Cache pruned on commit | §7.1 | [ ] |
+| P4-01 | `p2p.Protocol{Name: "metabft", Version: 1, Length: 8}`; `MakeProtocols` returns nothing on a non-validator (fixed at startup) | §7.1 | [x] |
+| P4-02 | Registered in `Protocols()` in `eth/backend.go` | §7.1 | moved to P5 — nothing can consume the messages until the engine exists |
+| P4-03 | Message codes `0x00`–`0x05`; the code must match the message type; `SyncRequest`/`SyncReply` carry (height, round), blocks come by eth sync | §7.1, §7.7 | [x] |
+| P4-04 | Order: decode → `Verify(Direct)` (signature, chain ID, membership, attachment) → cache; broken or foreign-chain messages drop the peer, unknown signers and heights are dropped quietly | §7.1 | [x] |
+| P4-05 | Cache `(signer, height, round, type)` → first message; different digest (ROUND-CHANGE: different signed content) → evidence to the backend, not forwarded | §7.1 | [x] |
+| P4-06 | `Cache.Prune(height)` for the engine to call on commit; size-bounded backstop | §7.1 | [x] |
 
 **Tests**
 
 | ID | Test | Status |
 |----|------|--------|
-| P4-T1 | Two-node message round trip | [ ] |
-| P4-T2 | Forged signature rejected before it reaches the cache | [ ] |
-| P4-T3 | Forged sender cannot pre-empt a genuine message | [ ] |
-| P4-T4 | Two digests from one sender → evidence stored, first message still counted | [ ] |
-| P4-T5 | Non-validator peers do not negotiate `metabft/1` | [ ] |
+| P4-T1 | Round trip of all four message types over `p2p.MsgPipe`; sync request/reply | [x] |
+| P4-T2 | Forged signature rejected before it reaches the cache; a broken signature drops the peer | [x] |
+| P4-T3 | Forged sender cannot pre-empt a genuine message; nor can a relayed ROUND-CHANGE with its attachment stripped or altered | [x] |
+| P4-T4 | Two digests from one sender (and two ROUND-CHANGE contents) → evidence, first message still counted | [x] |
+| P4-T5 | Non-validator nodes do not advertise `metabft/1` | [x] |
 
 ---
 
