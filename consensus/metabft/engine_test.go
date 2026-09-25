@@ -221,3 +221,64 @@ type fakeChainReader struct{ *fakeChain }
 func (fakeChainReader) GetBlock(common.Hash, uint64) *types.Block { return nil }
 
 var _ consensus.ChainReader = fakeChainReader{}
+
+// stateChain says which blocks have their state, as core.BlockChain does.
+type stateChain struct {
+	fakeChainReader
+	hasState map[common.Hash]bool
+}
+
+func (c stateChain) HasBlockAndState(h common.Hash, n uint64) bool { return c.hasState[h] }
+
+// TestEngineSignersWithParentState: block import verifies headers before
+// their parents are executed, so without the parent state the signer checks
+// wait for VerifyUncles, which import runs once the parent is written; with
+// it, both paths check.
+func TestEngineSignersWithParentState(t *testing.T) {
+	net, engine, fc, parent := newEngineChain(t)
+	chain := stateChain{fakeChainReader{fc}, map[common.Hash]bool{}}
+	unsealed := net.bftHeader(t, parent, 1, 0, nil)
+	sealed := net.bftHeader(t, parent, 1, 0, []int{0, 1, 2})
+
+	// Parent not executed yet: nothing that needs its state is decided.
+	if err := engine.VerifyHeader(chain, unsealed); err != nil {
+		t.Errorf("header ahead of its parent's state: %v", err)
+	}
+	if err := engine.VerifyUncles(chain, types.NewBlockWithHeader(unsealed)); err != nil {
+		t.Errorf("body ahead of its parent's state: %v, want nil so ValidateBody reports the ancestor", err)
+	}
+	// Header rules that need no state still apply.
+	early := net.bftHeader(t, parent, 1, 0, nil)
+	early.Time = parent.Time - 1
+	if err := engine.VerifyHeader(chain, early); !errors.Is(err, errTimeBeforeParent) {
+		t.Errorf("stateless rule without the parent state: %v", err)
+	}
+
+	chain.hasState[parent.Hash()] = true
+	for name, verify := range map[string]func(*types.Header) error{
+		"VerifyHeader": func(h *types.Header) error { return engine.VerifyHeader(chain, h) },
+		"VerifyUncles": func(h *types.Header) error { return engine.VerifyUncles(chain, types.NewBlockWithHeader(h)) },
+	} {
+		if err := verify(unsealed); !errors.Is(err, errNotEnoughSeals) {
+			t.Errorf("%s, unsealed, parent state present: %v", name, err)
+		}
+		if err := verify(sealed); err != nil {
+			t.Errorf("%s, sealed, parent state present: %v", name, err)
+		}
+	}
+
+	// In a batch, a header whose parent is earlier in the batch has no
+	// parent state yet; import checks it in VerifyUncles.
+	h6 := net.bftHeader(t, sealed, 2, 0, nil)
+	_, results := engine.VerifyHeaders(chain, []*types.Header{sealed, h6})
+	for i := 0; i < 2; i++ {
+		if err := <-results; err != nil {
+			t.Errorf("batch header %d: %v", i, err)
+		}
+	}
+	fc.headers[sealed.Hash()] = sealed
+	chain.hasState[sealed.Hash()] = true
+	if err := engine.VerifyUncles(chain, types.NewBlockWithHeader(h6)); !errors.Is(err, errNotEnoughSeals) {
+		t.Errorf("unsealed batch header at import: %v", err)
+	}
+}

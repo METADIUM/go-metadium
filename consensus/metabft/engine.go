@@ -115,8 +115,18 @@ func (e *Engine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*typ
 
 // verifyBftHeader applies design §5.3 at a PBFT height: the PoA engine's own
 // header checks, then the proposer signature and the commit seals against
-// the validator set of the parent state. A height whose set cannot be read
-// is not accepted (design §7.7): there is no bootstrap fallback here.
+// the validator set of the parent state.
+//
+// The set is read from the parent state, and block import verifies headers
+// ahead of executing them: InsertChain checks a whole batch while the first
+// block is still being processed. So when the chain says the parent state
+// is not there yet, the signer checks are left to VerifyUncles, which block
+// import runs on each block once its parent is written (core.BlockValidator
+// .ValidateBody). Nothing is accepted on that basis alone: a block reaches
+// the chain's state only through ValidateBody. This is not the PoA
+// engine's fallback (acceptUnverifiableBlock), which accepts the block
+// unverified; where the state is there but no set can be read, the height
+// is refused (design §7.7).
 func (e *Engine) verifyBftHeader(chain consensus.ChainHeaderReader, header, parent *types.Header) error {
 	if err := e.legacy.VerifyHeaderPBFT(chain, header, parent); err != nil {
 		return err
@@ -124,6 +134,29 @@ func (e *Engine) verifyBftHeader(chain consensus.ChainHeaderReader, header, pare
 	if header.Time < parent.Time {
 		return fmt.Errorf("%w: %d < %d", errTimeBeforeParent, header.Time, parent.Time)
 	}
+	if parentStateMissing(chain, parent) {
+		return nil
+	}
+	return e.verifySigners(chain, header)
+}
+
+// stateReader is implemented by core.BlockChain.
+type stateReader interface {
+	HasBlockAndState(hash common.Hash, number uint64) bool
+}
+
+// parentStateMissing reports whether the chain says parent's state is not
+// available (yet). A chain that cannot say, such as the header chain of a
+// header-only sync, gets the full check, which then needs the state.
+func parentStateMissing(chain consensus.ChainHeaderReader, parent *types.Header) bool {
+	sr, ok := chain.(stateReader)
+	return ok && !sr.HasBlockAndState(parent.Hash(), parent.Number.Uint64())
+}
+
+// verifySigners checks the proposer signature and the commit seals against
+// the validator set of the parent state. A height whose set cannot be read
+// is not accepted: there is no bootstrap fallback here.
+func (e *Engine) verifySigners(chain consensus.ChainHeaderReader, header *types.Header) error {
 	set, err := e.validators(header.Number.Uint64())
 	if err != nil {
 		return fmt.Errorf("%w: %v", errNoValidatorSet, err)
@@ -180,6 +213,13 @@ func VerifySeals(header *types.Header, chainID uint64, set *ValidatorSet) error 
 }
 
 // VerifyUncles implements consensus.Engine. PBFT blocks have none.
+//
+// Block import calls it from ValidateBody, one block at a time after the
+// parent is written, so this is also where the signer checks run with the
+// parent state in place (see verifyBftHeader). They run whether or not
+// VerifyHeader already ran them. Without the parent state it returns nil:
+// ValidateBody then reports the missing ancestor itself, which is what
+// import uses to tell a side chain from a gap.
 func (e *Engine) VerifyUncles(chain consensus.ChainReader, block *types.Block) error {
 	if !isBft(chain, block.Number()) {
 		return e.legacy.VerifyUncles(chain, block)
@@ -187,7 +227,11 @@ func (e *Engine) VerifyUncles(chain consensus.ChainReader, block *types.Block) e
 	if len(block.Uncles()) > 0 {
 		return errUnclesAtPBFT
 	}
-	return nil
+	parent := chain.GetHeader(block.ParentHash(), block.NumberU64()-1)
+	if parent == nil || parentStateMissing(chain, parent) {
+		return nil
+	}
+	return e.verifySigners(chain, block.Header())
 }
 
 // Prepare implements consensus.Engine.
