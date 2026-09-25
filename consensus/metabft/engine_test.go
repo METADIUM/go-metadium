@@ -356,6 +356,69 @@ func TestEngineAssemblesVerifiableHeader(t *testing.T) {
 	if err := verifyProposerSig(block.Header(), set); err != nil {
 		t.Errorf("assembled header: %v", err)
 	}
+
+	// From Avocado on, the header carries the PoA seal fields, which the PoA
+	// engine's Seal sets; a proposal goes through Engine.Seal instead, which
+	// must set them too (found on the private network: every proposal failed
+	// with "invalid mix digest").
+	chain.config.AvocadoBlock = big.NewInt(0)
+	engine = NewEngine(ethash.NewFaker(), func(uint64) (*ValidatorSet, error) { return set, nil })
+	if err := engine.VerifyProposal(chain, block.Header()); err == nil || !strings.Contains(err.Error(), "mix digest") {
+		t.Fatalf("an unsealed proposal after Avocado: %v, want the mix digest check", err)
+	}
+	proposer := &captureProposer{}
+	engine.SetProposer(proposer)
+	if err := engine.Seal(chain, block, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if proposer.got == nil {
+		t.Fatal("no block submitted")
+	}
+	if err := engine.VerifyProposal(chain, proposer.got.Header()); err != nil {
+		t.Errorf("the submitted proposal: %v", err)
+	}
+}
+
+type captureProposer struct{ got *types.Block }
+
+func (*captureProposer) ProposalWanted(uint64, bool) bool { return false }
+func (p *captureProposer) SubmitBlock(b *types.Block) error {
+	p.got = b
+	return nil
+}
+
+// TestEngineBatchAcrossSwitch: block import verifies a batch whose headers'
+// parents are earlier in the batch, not in the chain. That holds for the
+// PoA heights too: a batch of the bootstrap segment, running into the
+// switch, must verify (found on the private network, where sync stopped at
+// "unknown ancestor").
+func TestEngineBatchAcrossSwitch(t *testing.T) {
+	net, engine, chain, _ := newEngineChain(t)
+	old := metaminer.VerifyBlockSigFunc
+	metaminer.VerifyBlockSigFunc = func(*big.Int, common.Address, []byte, common.Hash, []byte, bool) bool { return true }
+	t.Cleanup(func() { metaminer.VerifyBlockSigFunc = old })
+
+	base := &types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1), GasLimit: 105_000_000,
+		Time: uint64(time.Now().Unix()) - 100, WithdrawalsHash: &types.EmptyWithdrawalsHash,
+		ExcessBlobGas: new(big.Int), BlobGasUsed: new(big.Int)}
+	chain.headers[base.Hash()] = base
+	batch := []*types.Header{}
+	parent := base
+	for n := int64(2); n < engineBftBlock; n++ { // PoA heights 2..4
+		h := &types.Header{ParentHash: parent.Hash(), UncleHash: types.EmptyUncleHash, Root: common.HexToHash("0x5157"),
+			TxHash: types.EmptyTxsHash, ReceiptHash: types.EmptyReceiptsHash, Difficulty: big.NewInt(1),
+			Number: big.NewInt(n), GasLimit: parent.GasLimit, Time: parent.Time + 1,
+			WithdrawalsHash: &types.EmptyWithdrawalsHash, ExcessBlobGas: new(big.Int), BlobGasUsed: new(big.Int)}
+		batch = append(batch, h)
+		parent = h
+	}
+	batch = append(batch, net.bftHeader(t, parent, 1, 0, []int{0, 1, 2})) // PBFT height 5
+	_, results := engine.VerifyHeaders(chain, batch)
+	for _, h := range batch {
+		if err := <-results; err != nil {
+			t.Errorf("header %d: %v", h.Number, err)
+		}
+	}
 }
 
 // TestGovernanceValidatorsFloor: fewer than MinValidators governance nodes
