@@ -270,9 +270,20 @@ func (bc *BlockChain) GetReceiptsByHash(hash common.Hash) types.Receipts {
 func (bc *BlockChain) GetBlobSidecars(hash common.Hash) []*types.BlobTxSidecar {
 	number := rawdb.ReadHeaderNumber(bc.db, hash)
 	if number == nil {
-		return nil
+		// Not written yet: a PBFT proposal's, if one was recorded.
+		sidecars, _ := bc.proposalSidecars.Get(hash)
+		return sidecars
 	}
 	return rawdb.ReadBlobSidecars(bc.db, hash, *number)
+}
+
+// AddProposalSidecars records the blob sidecars of a PBFT proposal that is
+// not written yet, so GetBlobSidecars serves them by its hash. A few
+// proposals are kept; a decided one is written with its block.
+func (bc *BlockChain) AddProposalSidecars(hash common.Hash, sidecars []*types.BlobTxSidecar) {
+	if len(sidecars) > 0 {
+		bc.proposalSidecars.Add(hash, sidecars)
+	}
 }
 
 // GetUnclesInChain retrieves all the uncles from a given block backwards until

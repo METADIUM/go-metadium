@@ -288,3 +288,46 @@ func TestBlockChainValidatorFloor(t *testing.T) {
 		t.Errorf("head %d, want 1", head)
 	}
 }
+
+// TestBlockChainSidecars: a validator holds a proposal's blob sidecars before
+// it votes: from the pool, from an earlier fetch, or fetched now; without
+// them the proposal is refused (design §12).
+func TestBlockChainSidecars(t *testing.T) {
+	env := newChainEnv(t)
+	bc, engine := env.newChain()
+	chain := NewBlockChain(bc, engine, nil)
+	blobTx := types.NewTx(&types.BlobTx{BlobHashes: []common.Hash{{1}}})
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1)}).WithBody(types.Transactions{blobTx}, nil)
+
+	if err := chain.haveSidecars(types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1)})); err != nil {
+		t.Fatalf("a block without blob txs: %v", err)
+	}
+	if err := chain.haveSidecars(block); !errors.Is(err, errSidecarUnavailable) {
+		t.Fatalf("no pool, no fetcher: %v", err)
+	}
+	fetched := 0
+	chain.FetchSidecars = func(b *types.Block, deadline time.Time) error {
+		fetched++
+		if b.Hash() != block.Hash() || time.Until(deadline) <= 0 {
+			t.Errorf("fetch for %x by %v", b.Hash(), deadline)
+		}
+		return errors.New("no peer has them")
+	}
+	if err := chain.haveSidecars(block); !errors.Is(err, errSidecarUnavailable) || fetched != 1 {
+		t.Fatalf("fetch failing: %v after %d fetches", err, fetched)
+	}
+	chain.FetchSidecars = func(*types.Block, time.Time) error { fetched++; return nil }
+	if err := chain.haveSidecars(block); err != nil || fetched != 2 {
+		t.Fatalf("fetch succeeding: %v after %d fetches", err, fetched)
+	}
+	// Held already: no fetch.
+	bc.AddProposalSidecars(block.Hash(), []*types.BlobTxSidecar{{}})
+	if err := chain.haveSidecars(block); err != nil || fetched != 2 {
+		t.Errorf("sidecars recorded for the proposal: %v after %d fetches", err, fetched)
+	}
+	other := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(2)}).WithBody(types.Transactions{blobTx}, nil)
+	bc.BlobSidecarFn = func(common.Hash) *types.BlobTxSidecar { return &types.BlobTxSidecar{} }
+	if err := chain.haveSidecars(other); err != nil || fetched != 2 {
+		t.Errorf("sidecars in the pool: %v after %d fetches", err, fetched)
+	}
+}

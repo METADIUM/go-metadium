@@ -99,13 +99,14 @@ var (
 )
 
 const (
-	bodyCacheLimit      = 256
-	blockCacheLimit     = 256
-	receiptsCacheLimit  = 32
-	txLookupCacheLimit  = 1024
-	maxFutureBlocks     = 256
-	maxTimeFutureBlocks = 30
-	TriesInMemory       = 128
+	bodyCacheLimit       = 256
+	proposalSidecarLimit = 16 // PBFT proposals whose blob sidecars are kept unwritten
+	blockCacheLimit      = 256
+	receiptsCacheLimit   = 32
+	txLookupCacheLimit   = 1024
+	maxFutureBlocks      = 256
+	maxTimeFutureBlocks  = 30
+	TriesInMemory        = 128
 
 	// BlockChainVersion ensures that an incompatible database forces a resync from scratch.
 	//
@@ -233,6 +234,12 @@ type BlockChain struct {
 	// block. Set externally after construction; nil disables wire fetching.
 	MissingBlobSidecarFn func(block *types.Block)
 
+	// proposalSidecars holds the blob sidecars of PBFT proposals, blocks
+	// agreed on before they are written, so GetBlobSidecars can serve them
+	// by hash to the validators that need them before voting
+	// (docs/pbft-consensus-design.md §12). Unused without PBFT.
+	proposalSidecars *lru.Cache[common.Hash, []*types.BlobTxSidecar]
+
 	hc            *HeaderChain
 	rmLogsFeed    event.Feed
 	chainFeed     event.Feed
@@ -300,21 +307,23 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	log.Info("")
 
 	bc := &BlockChain{
-		chainConfig:   chainConfig,
-		cacheConfig:   cacheConfig,
-		db:            db,
-		triedb:        triedb,
-		triegc:        prque.New[int64, common.Hash](nil),
-		quit:          make(chan struct{}),
-		chainmu:       syncx.NewClosableMutex(),
-		bodyCache:     lru.NewCache[common.Hash, *types.Body](bodyCacheLimit),
-		bodyRLPCache:  lru.NewCache[common.Hash, rlp.RawValue](bodyCacheLimit),
-		receiptsCache: lru.NewCache[common.Hash, []*types.Receipt](receiptsCacheLimit),
-		blockCache:    lru.NewCache[common.Hash, *types.Block](blockCacheLimit),
-		txLookupCache: lru.NewCache[common.Hash, txLookup](txLookupCacheLimit),
-		futureBlocks:  lru.NewCache[common.Hash, *types.Block](maxFutureBlocks),
-		engine:        engine,
-		vmConfig:      vmConfig,
+		chainConfig: chainConfig,
+		cacheConfig: cacheConfig,
+		db:          db,
+		triedb:      triedb,
+		triegc:      prque.New[int64, common.Hash](nil),
+		quit:        make(chan struct{}),
+		chainmu:     syncx.NewClosableMutex(),
+		bodyCache:   lru.NewCache[common.Hash, *types.Body](bodyCacheLimit),
+
+		proposalSidecars: lru.NewCache[common.Hash, []*types.BlobTxSidecar](proposalSidecarLimit),
+		bodyRLPCache:     lru.NewCache[common.Hash, rlp.RawValue](bodyCacheLimit),
+		receiptsCache:    lru.NewCache[common.Hash, []*types.Receipt](receiptsCacheLimit),
+		blockCache:       lru.NewCache[common.Hash, *types.Block](blockCacheLimit),
+		txLookupCache:    lru.NewCache[common.Hash, txLookup](txLookupCacheLimit),
+		futureBlocks:     lru.NewCache[common.Hash, *types.Block](maxFutureBlocks),
+		engine:           engine,
+		vmConfig:         vmConfig,
 	}
 	bc.flushInterval.Store(int64(cacheConfig.TrieTimeLimit))
 	bc.forker = NewForkChoice(bc, shouldPreserve)

@@ -115,3 +115,22 @@ func TestBftNoReorgFromBelowSwitch(t *testing.T) {
 		t.Errorf("head moved to %d %x", head.Number, head.Hash())
 	}
 }
+
+// TestProposalSidecars: a PBFT proposal's blob sidecars are served by hash
+// before the block is written (design §12).
+func TestProposalSidecars(t *testing.T) {
+	bc, _ := bftTestChain(t, 3)
+	hash := common.Hash{0xb1}
+	if got := bc.GetBlobSidecars(hash); got != nil {
+		t.Fatalf("sidecars for an unknown block: %v", got)
+	}
+	bc.AddProposalSidecars(hash, nil)
+	if got := bc.GetBlobSidecars(hash); got != nil {
+		t.Fatalf("an empty set was recorded: %v", got)
+	}
+	sc := []*types.BlobTxSidecar{{}}
+	bc.AddProposalSidecars(hash, sc)
+	if got := bc.GetBlobSidecars(hash); len(got) != 1 {
+		t.Errorf("proposal sidecars: %v", got)
+	}
+}

@@ -119,7 +119,7 @@ func (h *handler) fetchBlobSidecars(block *types.Block) {
 		}
 		tried[peer.ID()] = struct{}{}
 
-		sidecars, err := h.requestBlobSidecars(peer, block.Hash())
+		sidecars, err := h.requestBlobSidecars(peer, block.Hash(), blobSidecarFetchTimeout)
 		if err != nil {
 			if errors.Is(err, errBlobFetchQuit) {
 				return
@@ -140,9 +140,57 @@ func (h *handler) fetchBlobSidecars(block *types.Block) {
 	log.Debug("Gave up fetching blob sidecars", "number", block.NumberU64(), "hash", block.Hash())
 }
 
+// fetchBlobSidecarsBy obtains a block's blob sidecars before the block is
+// written, for a PBFT proposal (docs/pbft-consensus-design.md §12): a
+// validator must hold them before it PREPAREs. Only the proposer has them
+// under the block's hash yet, so every meta/69 peer is tried in turn, not a
+// sample, until one answers with a valid set or the deadline passes. The set
+// is stored under the block's hash, which the decision does not change.
+func (h *handler) fetchBlobSidecarsBy(block *types.Block, deadline time.Time) error {
+	var blobTxs []*types.Transaction
+	for _, tx := range block.Transactions() {
+		if tx.Type() == types.BlobTxType {
+			blobTxs = append(blobTxs, tx)
+		}
+	}
+	if len(blobTxs) == 0 {
+		return nil
+	}
+	tried := make(map[string]struct{})
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return errBlobFetchTimeout
+		}
+		peer := h.randomBlobSidecarPeer(tried)
+		if peer == nil {
+			return errors.New("no meta/69 peer has the blob sidecars")
+		}
+		tried[peer.ID()] = struct{}{}
+		sidecars, err := h.requestBlobSidecars(peer, block.Hash(), min(remaining, blobSidecarFetchTimeout))
+		if err != nil {
+			if errors.Is(err, errBlobFetchQuit) {
+				return err
+			}
+			continue
+		}
+		if len(sidecars) == 0 {
+			continue // this peer does not have them; the proposer does
+		}
+		if err := validateBlobSidecarsForBlock(blobTxs, sidecars); err != nil {
+			peer.Log().Warn("Dropping peer for invalid blob sidecars", "number", block.NumberU64(), "err", err)
+			h.removePeer(peer.ID())
+			continue
+		}
+		rawdb.WriteBlobSidecars(h.database, block.Hash(), block.NumberU64(), sidecars)
+		h.chain.AddProposalSidecars(block.Hash(), sidecars) // for a re-proposal, and to serve other validators
+		return nil
+	}
+}
+
 // requestBlobSidecars sends a single-block GetBlobSidecars request and waits for
-// the correlated reply, bounded by blobSidecarFetchTimeout.
-func (h *handler) requestBlobSidecars(peer *ethPeer, hash common.Hash) ([]*types.BlobTxSidecar, error) {
+// the correlated reply, bounded by timeout.
+func (h *handler) requestBlobSidecars(peer *ethPeer, hash common.Hash, timeout time.Duration) ([]*types.BlobTxSidecar, error) {
 	id := h.blobReqIDGen.Add(1)
 	req := &blobSidecarRequest{deliver: make(chan []*types.BlobTxSidecar, 1)}
 
@@ -158,7 +206,7 @@ func (h *handler) requestBlobSidecars(peer *ethPeer, hash common.Hash) ([]*types
 	if err := peer.RequestBlobSidecars(id, []common.Hash{hash}); err != nil {
 		return nil, err
 	}
-	timer := time.NewTimer(blobSidecarFetchTimeout)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case sidecars := <-req.deliver:

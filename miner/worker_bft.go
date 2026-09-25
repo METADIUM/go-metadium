@@ -158,7 +158,10 @@ func (w *worker) proposeBft(block *types.Block, env *environment, start time.Tim
 		return
 	}
 	if len(env.sidecars) > 0 {
+		// Written for the block once decided (the hash is final), and kept
+		// in memory for the validators who fetch them before voting.
 		rawdb.WriteBlobSidecars(w.chain.ChainDb(), block.Hash(), block.NumberU64(), env.sidecars)
+		w.chain.AddProposalSidecars(block.Hash(), env.sidecars)
 	}
 	log.Info("Proposed block", "number", block.Number(), "hash", block.Hash(), "txs", env.tcount,
 		"gas", block.GasUsed(), "elapsed", common.PrettyDuration(time.Since(start)))

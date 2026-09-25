@@ -30,6 +30,7 @@ import (
 type bftService struct {
 	chainID   uint64
 	bc        *core.BlockChain
+	chain     *metabft.BlockChain // the node's view of bc
 	engine    *metabft.Engine
 	node      *metabft.Node
 	wal       *metabft.WAL
@@ -130,6 +131,7 @@ func newBftService(dir string, key *ecdsa.PrivateKey, bc *core.BlockChain, engin
 		log.Warn("--metadium.block.emptyinterval differs from the genesis bft.emptyBlockInterval; the genesis applies from bftBlock",
 			"flag", params.BlockEmptyInterval, "genesis", config.Bft.EmptyBlockInterval, "bftBlock", bftBlock)
 	}
+	s.chain = metabft.NewBlockChain(bc, engine, mux)
 	s.node = metabft.NewNode(metabft.NodeConfig{
 		Config: metabft.Config{
 			EmptyBlockInterval: time.Duration(config.Bft.EmptyBlockInterval) * time.Second,
@@ -144,7 +146,7 @@ func newBftService(dir string, key *ecdsa.PrivateKey, bc *core.BlockChain, engin
 		Validators:       s.validatorSet,
 		Broadcast:        s.broadcast,
 		OnProposalWanted: engine.WakeProposer,
-	}, metabft.NewBlockChain(bc, engine, mux))
+	}, s.chain)
 	engine.SetProposer(s.node)
 	s.deliver = s.node.HandleMessage
 

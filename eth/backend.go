@@ -305,6 +305,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		return nil, err
 	}
 
+	if eth.bft != nil {
+		// A validator fetches a proposal's missing blob sidecars before it
+		// votes (docs/pbft-consensus-design.md §12).
+		eth.bft.chain.FetchSidecars = eth.handler.fetchBlobSidecarsBy
+	}
+
 	eth.miner = miner.New(eth, &config.Miner, eth.blockchain.Config(), eth.EventMux(), eth.engine, eth.isLocalBlock)
 	eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
 

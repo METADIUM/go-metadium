@@ -19,9 +19,21 @@ type BlockChain struct {
 	drift  time.Duration
 	mux    *event.TypeMux
 	now    func() time.Time
+
+	// FetchSidecars obtains a proposal's missing blob sidecars from peers
+	// by deadline and stores them (the eth handler, over meta/69). Nil: a
+	// proposal whose sidecars are not held locally is refused.
+	FetchSidecars func(block *types.Block, deadline time.Time) error
 }
 
-var errTimeDrift = errors.New("metabft: proposal timestamp too far from the local clock")
+// sidecarWait bounds how long a validator waits for a proposal's missing
+// blob sidecars; it is well inside the round's timeout.
+const sidecarWait = 2 * time.Second
+
+var (
+	errTimeDrift          = errors.New("metabft: proposal timestamp too far from the local clock")
+	errSidecarUnavailable = errors.New("metabft: proposal's blob sidecars unavailable")
+)
 
 // NewBlockChain adapts bc, whose engine is engine. A decided block is posted
 // on mux as a core.NewMinedBlockEvent, which the eth handler broadcasts to
@@ -86,6 +98,9 @@ func (c *BlockChain) VerifyBlock(block *types.Block, fresh bool) error {
 	if err := c.body.ValidateBody(block); err != nil {
 		return err
 	}
+	if err := c.haveSidecars(block); err != nil {
+		return err
+	}
 	parent := c.bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 	statedb, err := c.bc.StateAt(parent.Root)
 	if err != nil {
@@ -96,6 +111,37 @@ func (c *BlockChain) VerifyBlock(block *types.Block, fresh bool) error {
 		return err
 	}
 	return c.bc.Validator().ValidateState(block, statedb, receipts, usedGas, fees)
+}
+
+// haveSidecars makes sure this node holds the blob sidecars of a proposal
+// before it votes for it (design §12): a quorum must not decide a block
+// whose blob data no honest validator can serve. They come from the blob
+// pool, from an earlier fetch, or from peers now.
+func (c *BlockChain) haveSidecars(block *types.Block) error {
+	var missing bool
+	blobs := 0
+	for _, tx := range block.Transactions() {
+		if tx.Type() != types.BlobTxType {
+			continue
+		}
+		blobs++
+		if c.bc.BlobSidecarFn == nil || c.bc.BlobSidecarFn(tx.Hash()) == nil {
+			missing = true
+		}
+	}
+	if !missing {
+		return nil
+	}
+	if stored := c.bc.GetBlobSidecars(block.Hash()); len(stored) >= blobs {
+		return nil
+	}
+	if c.FetchSidecars == nil {
+		return errSidecarUnavailable
+	}
+	if err := c.FetchSidecars(block, c.now().Add(sidecarWait)); err != nil {
+		return fmt.Errorf("%w: %v", errSidecarUnavailable, err)
+	}
+	return nil
 }
 
 // InsertBlock implements Chain. The block goes through full import, seals
