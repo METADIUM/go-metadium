@@ -19,10 +19,11 @@ import (
 // sees the chain; the node adapts it).
 type Chain interface {
 	CurrentHeader() *types.Header
-	// VerifyBlock runs the chain-side checks of design §4.8 (steps 3-6) on a
+	// VerifyBlock runs the chain-side checks of design §4.8 (steps 3-5) on a
 	// proposal whose parent is the current head: header rules except the
 	// seals, timestamp bounds (fresh proposals only, see
-	// Backend.VerifyProposal), execution, rewards, N >= 4.
+	// Backend.VerifyProposal), execution, rewards. Step 6, N >= 4 after
+	// execution, is not implemented yet (checklist P5-13).
 	VerifyBlock(block *types.Block, fresh bool) error
 	// InsertBlock writes a decided block, seals attached, as the new head.
 	InsertBlock(block *types.Block) error

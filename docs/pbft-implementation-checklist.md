@@ -178,11 +178,12 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | P5-17 | `acceptUnverifiableBlock` forbidden post-fork | §7.7 | [x] — the PBFT engine reads the set through `BftValidators`, which has no fallback, and refuses a height it cannot read (P5a). Import verifies headers before their parents are executed, so while the parent state is not there yet the signer checks move to `VerifyUncles`, which `ValidateBody` runs once the parent is written; nothing is accepted without them |
 | P5-18 | Transition: halt at `BftBlock` if governance missing or `N < 4` | §9.3 | [ ] |
 | P5-19 | Blob sidecar fetched before PREPARE; PREPARE held until available | §12 | [ ] |
-| P5-20 | RPCs: `metabft_getValidators`, `_getRoundState`, `_status`, `_readiness`, `_getEvidence` | §6, §7.1, §9.3 | [ ] |
+| P5-20 | RPCs: `metabft_getValidators`, `_getRoundState`, `_status`, `_readiness`, `_getEvidence`; `Stats` also counts failed `InsertBlock`s (a deterministic failure leaves every validator waiting on a decided height) and messages dropped from the node's queue, so the status RPC shows them (review on #151) | §6, §7.1, §9.3 | [ ] |
 | P5-21 | Startup check: `EmptyBlockInterval >= blockCreationTime` (from P0-05) | §4.5 | [ ] |
 | P5-22 | Warn when `--metadium.block.emptyinterval` differs from `bft.emptyBlockInterval`; genesis wins (from P0-07) | §8.1 | [ ] |
 | P5-24 | `metabft.Node`: one event loop owns the core and feeds it messages, submitted blocks, heads and timeouts on the local monotonic clock; idle below `bftBlock`; asks the builder for blocks through `ProposalWanted` (round 0 waits for pending transactions or `EmptyBlockInterval`); retries a height whose validator set cannot be read yet (P5b) | §6, §7.3 | [x] |
-| P5-25 | Snap sync refused on a PBFT chain (full sync only): without state, no PBFT header can be verified (P5-17) | §7.7 | [ ] |
+| P5-25 | Snap sync refused on a PBFT chain (full sync only): without state, no PBFT header can be verified (P5-17); must land before any deployment, so the failure is an explicit error (review on #150) | §7.7 | [ ] |
+| P5-23 | Register `metabft/1` in `eth/backend.go` and implement its `Backend` on the node (reviews on #149, #151): call `Cache.Prune(height)` on every commit, since an unpruned cache fills at 65,536 entries and then drops every message (test: a few thousand heights without pruning stall); refuse peers whose node key is not in the current set, or treat `SyncReply` as a hint only, since sync messages are unsigned; a per-peer budget for messages from unknown signers, each of which costs an ecrecover; `Broadcast` through a per-peer send queue with a drop policy, since `p2p.Send` blocks on a slow peer | §7.1 | [ ] |
 
 **Check:** real block production on 4 local nodes, PoA → PBFT transition included.
 
@@ -229,3 +230,5 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 | M-04 | Fixed-interval profile (`blockCreationTime = 2000`, no idleseal) | 2.0s interval holds | | [ ] |
 | M-05 | WAL fsync cost per block | recorded, included in M-01 | | [ ] |
 | M-06 | TPS vs Camellia (`scripts/rpc-test-full.sh`, `mixed-tx-e2e`) | no regression beyond agreed margin | | [ ] |
+| M-07 | Validator execution cost: each block runs twice (proposal check, then import); if it dominates M-01, keep the processed state for the import (review on #152) | recorded | | [ ] |
+| M-08 | Full-sync speed: `Engine.VerifyHeaders` checks a batch sequentially on one goroutine (review on #150) | recorded | | [ ] |
