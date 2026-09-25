@@ -24,6 +24,8 @@ cd tests/private-net-pbft
 - with two nodes stopped (more than f = 1), production stops; with the quorum back, it resumes, and every node agrees afterwards
 
 Notes:
+- The `metabft` RPC namespace is enabled on every node: `metabft_readiness` before
+  the switch, `metabft_status` and `metabft_getRoundState` after it.
 - RPC is published on `127.0.0.1` only; node1 runs with an unlocked account.
 - Only node1 runs etcd. The PoA bootstrap takes its mining token from it
   (Bokbunja), and the other nodes' etcd never joins, so they log

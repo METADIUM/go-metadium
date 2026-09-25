@@ -88,7 +88,28 @@ type Node struct {
 	committedAt time.Duration
 	height      uint64
 	round       uint64
+	observer    bool
+	lastReject  *Rejection
 	emptyTimer  mclock.Timer // wakes the builder when EmptyBlockInterval passes
+}
+
+// Rejection is the last proposal this node refused, for the status RPC
+// (design §9.3.1: every rejection leaves a reason in metabft_status).
+type Rejection struct {
+	Height uint64
+	Hash   common.Hash
+	Reason string
+	At     time.Time
+}
+
+// NodeStatus is a node's state for the status RPC.
+type NodeStatus struct {
+	Height, Round uint64
+	// Observer: signing nothing until Height commits without this node
+	// (a missing or corrupt WAL, design §6.1).
+	Observer      bool
+	LastRejection *Rejection
+	NodeCounters
 }
 
 type proposalRequest struct{ height, round uint64 }
@@ -200,6 +221,13 @@ type NodeCounters struct {
 // Counters returns the failure counters.
 func (n *Node) Counters() NodeCounters {
 	return NodeCounters{InsertFailures: n.insertFailures.Load(), DroppedMessages: n.droppedMsgs.Load()}
+}
+
+// FullStatus returns the node's state for the status RPC.
+func (n *Node) FullStatus() NodeStatus {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return NodeStatus{Height: n.height, Round: n.round, Observer: n.observer, LastRejection: n.lastReject, NodeCounters: n.Counters()}
 }
 
 // Status returns the height and round being agreed on.
@@ -330,6 +358,7 @@ func (n *Node) publish() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.height, n.round = n.core.Height(), n.core.Round()
+	n.observer = n.core.Observer()
 	if n.want != nil && (n.want.height != n.height || n.want.round != n.round) {
 		n.want = nil
 	}
@@ -359,7 +388,13 @@ func (n *Node) VerifyProposal(p Proposal, fresh bool) error {
 	if n.head == nil || b.ParentHash() != n.head.Hash() {
 		return errors.New("proposal is not on the local head")
 	}
-	return n.chain.VerifyBlock(b, fresh)
+	err := n.chain.VerifyBlock(b, fresh)
+	if err != nil {
+		n.mu.Lock()
+		n.lastReject = &Rejection{Height: b.NumberU64(), Hash: b.Hash(), Reason: err.Error(), At: time.Now()}
+		n.mu.Unlock()
+	}
+	return err
 }
 
 func (n *Node) RequestProposal(height, round uint64) {
