@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -26,13 +28,14 @@ type chainEnv struct {
 	coinbases []common.Address
 	set       *ValidatorSet
 	genesis   *core.Genesis
-	builder   int // whose key SignBlock uses
+	builder   int    // whose key SignBlock uses
+	nodes     uint64 // governance node count every block leaves
 }
 
 func newChainEnv(t *testing.T) *chainEnv {
 	t.Helper()
 	usePoAMode(t)
-	env := &chainEnv{t: t, net: newTestNet(t, 4)}
+	env := &chainEnv{t: t, net: newTestNet(t, 4), nodes: 4}
 	for i := range env.net.keys {
 		env.coinbases = append(env.coinbases, common.Address{0xc0 + byte(i)})
 	}
@@ -60,6 +63,9 @@ func newChainEnv(t *testing.T) *chainEnv {
 func (env *chainEnv) newChain() (*core.BlockChain, *Engine) {
 	env.t.Helper()
 	engine := NewEngine(ethash.NewFaker(), func(uint64) (*ValidatorSet, error) { return env.set, nil })
+	engine.SetNodeCount(func(consensus.ChainHeaderReader, consensus.Engine, *types.Header, *state.StateDB) (uint64, error) {
+		return env.nodes, nil
+	})
 	bc, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), nil, env.genesis, nil, engine, vm.Config{}, nil, nil)
 	if err != nil {
 		env.t.Fatal(err)
@@ -250,5 +256,35 @@ func TestBlockChainInsertBlock(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("decided block not posted for broadcast")
+	}
+}
+
+// TestBlockChainValidatorFloor: a block that leaves governance with fewer
+// than MinValidators nodes is refused as a proposal and at import (design
+// §9.3.1), and the chain before it is untouched.
+func TestBlockChainValidatorFloor(t *testing.T) {
+	env := newChainEnv(t)
+	src, srcEngine := env.newChain()
+	blocks := env.build(src, srcEngine, 2)
+
+	env.nodes = 3 // from here on every block would leave three
+	proposal := env.propose(src, srcEngine, src.CurrentBlock(), 3)
+	chain := NewBlockChain(src, srcEngine, nil)
+	chain.now = func() time.Time { return time.Unix(int64(proposal.Time()), 0) }
+	if err := chain.VerifyBlock(proposal, true); !errors.Is(err, errTooFewValidators) {
+		t.Errorf("proposal leaving 3 nodes: %v", err)
+	}
+
+	env.nodes = 4
+	dst, _ := env.newChain()
+	if _, err := dst.InsertChain(blocks[:1]); err != nil {
+		t.Fatal(err)
+	}
+	env.nodes = 3
+	if n, err := dst.InsertChain(blocks[1:]); !errors.Is(err, errTooFewValidators) || n != 0 {
+		t.Errorf("importing a block that leaves 3 nodes: %d, %v", n, err)
+	}
+	if head := dst.CurrentBlock().Number.Uint64(); head != 1 {
+		t.Errorf("head %d, want 1", head)
 	}
 }

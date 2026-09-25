@@ -55,6 +55,7 @@ type Engine struct {
 	legacy     *ethash.Ethash
 	validators ValidatorsFunc
 	rewards    RewardsFunc
+	nodeCount  NodeCountFunc
 
 	mu       sync.RWMutex
 	proposer Proposer
@@ -70,7 +71,32 @@ type Proposer interface {
 
 // NewEngine wraps the PoA engine.
 func NewEngine(legacy *ethash.Ethash, validators ValidatorsFunc) *Engine {
-	return &Engine{legacy: legacy, validators: validators, rewards: GovernanceRewards, wake: make(chan struct{}, 1)}
+	return &Engine{legacy: legacy, validators: validators, rewards: GovernanceRewards, nodeCount: GovernanceNodeCount,
+		wake: make(chan struct{}, 1)}
+}
+
+// SetNodeCount replaces how the post-execution governance node count is
+// read (GovernanceNodeCount), for tests and tools without governance.
+func (e *Engine) SetNodeCount(f NodeCountFunc) { e.nodeCount = f }
+
+// VerifyPostState implements consensus.PostStateVerifier: at a PBFT height,
+// the state a block leaves must keep at least MinValidators governance nodes
+// (design §9.3.1, §4.8 step 6). Block import runs it in ValidateState, and
+// so does proposal verification; the miner runs it after each transaction
+// and leaves out one that would break it. A count that cannot be read is a
+// failure too: there is no fallback, as for the validator set.
+func (e *Engine) VerifyPostState(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB) error {
+	if !isBft(chain, header.Number) {
+		return nil
+	}
+	n, err := e.nodeCount(chain, e, header, statedb)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errNodeCountUnreadable, err)
+	}
+	if n < MinValidators {
+		return fmt.Errorf("%w: %d, minimum %d", errTooFewValidators, n, MinValidators)
+	}
+	return nil
 }
 
 // SetProposer connects the node that runs consensus. Until it is set, the
@@ -418,4 +444,7 @@ func (e *Engine) APIs(chain consensus.ChainHeaderReader) []rpc.API { return e.le
 // Close implements consensus.Engine.
 func (e *Engine) Close() error { return e.legacy.Close() }
 
-var _ consensus.Engine = (*Engine)(nil)
+var (
+	_ consensus.Engine            = (*Engine)(nil)
+	_ consensus.PostStateVerifier = (*Engine)(nil)
+)

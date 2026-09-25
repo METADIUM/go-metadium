@@ -55,6 +55,10 @@ var (
 	// with each node's coinbase, read from the state at height-1
 	// (docs/pbft-consensus-design.md §4.2).
 	BftValidatorsFunc func(height *big.Int) (nodeIds [][]byte, coinbases []common.Address, err error)
+	// BftRegistryFunc returns the governance registry's address as of the
+	// state at height, for reading governance from a state that is not
+	// committed yet (docs/pbft-consensus-design.md §9.3.1).
+	BftRegistryFunc func(height *big.Int) (common.Address, error)
 	// Add TRS
 	GetTRSListMapFunc func(height *big.Int) (trsListMap map[common.Address]bool, trsSubscribe bool, err error)
 )
@@ -230,6 +234,14 @@ func TRSRestricted(trsListMap map[common.Address]bool, from common.Address, to *
 }
 
 // EOF
+
+// BftRegistry returns the governance registry address (BftRegistryFunc).
+func BftRegistry(height *big.Int) (common.Address, error) {
+	if BftRegistryFunc == nil {
+		return common.Address{}, ErrNotInitialized
+	}
+	return BftRegistryFunc(height)
+}
 
 // BftValidators returns the PBFT validator set for height (BftValidatorsFunc).
 func BftValidators(height *big.Int) (nodeIds [][]byte, coinbases []common.Address, err error) {

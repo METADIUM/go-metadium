@@ -150,6 +150,13 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	if root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number)); header.Root != root {
 		return fmt.Errorf("invalid merkle root (remote: %x local: %x) dberr: %w", header.Root, root, statedb.Error())
 	}
+	// Engine rules on the resulting state (Metadium PBFT: the validator
+	// floor, docs/pbft-consensus-design.md §9.3.1).
+	if pv, ok := v.engine.(consensus.PostStateVerifier); ok {
+		if err := pv.VerifyPostState(v.bc, header, statedb); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
