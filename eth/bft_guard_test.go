@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -23,17 +24,20 @@ func TestCheckBftNode(t *testing.T) {
 		name   string
 		config *params.ChainConfig
 		method int
+		sync   downloader.SyncMode
 		is     error  // errors.Is target
 		want   string // substring otherwise; empty with nil is means accepted
 	}{
-		{"mainnet", params.MetadiumMainnetChainConfig, params.ConsensusPoA, nil, ""},
-		{"testnet", params.MetadiumTestnetChainConfig, params.ConsensusPoA, nil, ""},
-		{"PoW dev chain", params.AllEthashProtocolChanges, params.ConsensusPoW, nil, ""},
-		{"PBFT chain on PoA", bft, params.ConsensusPoA, errBftNotImplemented, ""},
-		{"PBFT chain on PoW", bft, params.ConsensusPoW, nil, "--consensusmethod 2"},
-		{"PBFT chain with invalid parameters", &broken, params.ConsensusPoA, nil, "parameters are missing"},
+		{"mainnet", params.MetadiumMainnetChainConfig, params.ConsensusPoA, downloader.FullSync, nil, ""},
+		{"mainnet, snap sync", params.MetadiumMainnetChainConfig, params.ConsensusPoA, downloader.SnapSync, nil, ""},
+		{"testnet", params.MetadiumTestnetChainConfig, params.ConsensusPoA, downloader.FullSync, nil, ""},
+		{"PoW dev chain", params.AllEthashProtocolChanges, params.ConsensusPoW, downloader.FullSync, nil, ""},
+		{"PBFT chain on PoA", bft, params.ConsensusPoA, downloader.FullSync, errBftNotImplemented, ""},
+		{"PBFT chain on PoW", bft, params.ConsensusPoW, downloader.FullSync, nil, "--consensusmethod 2"},
+		{"PBFT chain, snap sync", bft, params.ConsensusPoA, downloader.SnapSync, nil, "--syncmode full"},
+		{"PBFT chain with invalid parameters", &broken, params.ConsensusPoA, downloader.FullSync, nil, "parameters are missing"},
 	} {
-		err := checkBftNode(tt.config, tt.method)
+		err := checkBftNode(tt.config, tt.method, tt.sync)
 		switch {
 		case tt.is != nil:
 			if !errors.Is(err, tt.is) {

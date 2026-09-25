@@ -79,10 +79,16 @@ func (bc *BlockChain) CurrentSafeBlock() *types.Header {
 // the metadium admin for the finalized block number (BFT majority lookback)
 // and resolving it locally. Returns nil during early startup before the admin
 // has loaded governance state, or when head is shallower than the lookback.
+//
+// On a PBFT chain every committed block is final, so from bftBlock on the
+// head is (docs/pbft-consensus-design.md §7.4).
 func (bc *BlockChain) metaFinalHeader() *types.Header {
 	head := bc.currentBlock.Load()
 	if head == nil {
 		return nil
+	}
+	if bc.chainConfig.IsBft(head.Number) {
+		return head
 	}
 	num := metaminer.GetFinalizedBlockNumber(head.Number)
 	if num == nil {
