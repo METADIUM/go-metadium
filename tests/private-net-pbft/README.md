@@ -3,7 +3,7 @@
 A local network that bootstraps on PoA and switches to PBFT at `bftBlock`
 (docs/pbft-consensus-design.md §9.2). The PoA network next door
 (`../private-net-poa`) is unchanged; this one reuses its Dockerfile and
-entrypoint.
+entrypoint (its own Dockerfile adds iptables).
 
 ```bash
 go build -o build/bin/gmet ./cmd/geth          # from the repository root
@@ -39,6 +39,12 @@ With N nodes, f = floor((N-1)/3) and the quorum is ceil(2N/3).
   evidence on any node, and every node agrees.
 - S-12: a validator restarted without its WAL reports observer mode, leaves it once a height
   commits, and every node agrees.
+- S-06, true split: iptables inside the containers (the image has it, the nodes run with
+  NET_ADMIN) cut the last f+1 validators off from the rest while each side keeps its own links
+  (4:3 at N=7). Neither side commits, although the minority exchanges its votes; healed, the
+  chain resumes, every node agrees and no evidence exists.
+- S-09: a node that is not a validator joins after the switch, syncs from genesis (the PoA
+  segment, then every commit seal) and reaches the validators' head on the same chain.
 
 Notes:
 - The `metabft` RPC namespace is enabled on every node: `metabft_readiness` before
