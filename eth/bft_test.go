@@ -1,7 +1,10 @@
 package eth
 
 import (
+	"bytes"
 	"crypto/ecdsa"
+	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -23,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const bftTestChainID = 638200003
@@ -305,5 +309,65 @@ func TestPbftNodeStarts(t *testing.T) {
 	}
 	if _, err := os.Stat(stack.ResolvePath(filepath.Join("metabft", "wal"))); err != nil {
 		t.Errorf("WAL: %v", err)
+	}
+}
+
+// TestBftAPI: the metabft namespace on a node before the switch.
+func TestBftAPI(t *testing.T) {
+	s, keys, set := newTestBftService(t, 4)
+	api := &BftAPI{s}
+
+	vals, err := api.GetValidators(nil)
+	if err != nil || len(vals) != 4 || !bytes.Equal(vals[0].NodeID, crypto.FromECDSAPub(&keys[0].PublicKey)[1:]) {
+		t.Fatalf("validators: %v, %v", vals, err)
+	}
+	if rs := api.GetRoundState(); rs.Height != 0 || rs.Proposer != nil {
+		t.Errorf("round state before the node runs: %+v", rs)
+	}
+	st := api.Status()
+	if !st.Validator || st.Peers != 0 || st.LastRejection != nil {
+		t.Errorf("status: %+v", st)
+	}
+
+	r := api.Readiness()
+	if !r.Ready || !r.Governance || r.Validators != 4 || !r.InSet || r.BlocksLeft != 1 {
+		t.Errorf("readiness with four validators: %+v", r)
+	}
+	// Three governance nodes: the switch would stop the chain (design §9.3).
+	s.validators = func(uint64) (*metabft.ValidatorSet, error) {
+		return nil, fmt.Errorf("%w: 3 governance nodes", metabft.ErrTooFewValidators)
+	}
+	if r := api.Readiness(); r.Ready || !r.Governance || len(r.Problems) != 1 {
+		t.Errorf("readiness with three: %+v", r)
+	}
+	s.validators = func(uint64) (*metabft.ValidatorSet, error) { return nil, errors.New("not initialized") }
+	if r := api.Readiness(); r.Ready || r.Governance {
+		t.Errorf("readiness without governance: %+v", r)
+	}
+
+	if ev, err := api.GetEvidence(); err != nil || len(ev) != 0 {
+		t.Fatalf("evidence on a fresh node: %v, %v", ev, err)
+	}
+	a := &metabft.Message{Type: metabft.MsgPrepare, Height: 3, ChainID: bftTestChainID, Digest: common.Hash{1}}
+	b := &metabft.Message{Type: metabft.MsgPrepare, Height: 3, ChainID: bftTestChainID, Digest: common.Hash{2}}
+	a.Sign(keys[1])
+	b.Sign(keys[1])
+	s.validators = func(uint64) (*metabft.ValidatorSet, error) { return set, nil }
+	s.sets.Purge()
+	s.HandleEvidence(&metabft.Evidence{First: *a, Second: *b})
+	ev, err := api.GetEvidence()
+	if err != nil || len(ev) != 1 || ev[0].First != a.Digest || ev[0].Second != b.Digest || ev[0].Type != "PREPARE" {
+		t.Fatalf("evidence after an equivocation: %v, %v", ev, err)
+	}
+	if !bytes.Equal(ev[0].Signer, crypto.FromECDSAPub(&keys[1].PublicKey)[1:]) {
+		t.Errorf("evidence signer %x", ev[0].Signer)
+	}
+	// Raw is the evidence itself: it decodes and verifies on its own.
+	var decoded metabft.Evidence
+	if err := rlp.DecodeBytes(ev[0].Raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decoded.Verify(bftTestChainID, set); err != nil {
+		t.Errorf("raw evidence does not verify: %v", err)
 	}
 }

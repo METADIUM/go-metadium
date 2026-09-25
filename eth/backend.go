@@ -362,6 +362,9 @@ func (s *Ethereum) APIs() []rpc.API {
 
 	// Append any APIs exposed explicitly by the consensus engine
 	apis = append(apis, s.engine.APIs(s.BlockChain())...)
+	if s.bft != nil {
+		apis = append(apis, s.bft.apis()...)
+	}
 
 	// Append all the local APIs and return
 	return append(apis, []rpc.API{
