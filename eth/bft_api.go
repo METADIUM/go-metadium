@@ -27,11 +27,17 @@ type BftValidator struct {
 // on it, read from the state at height-1. Without a height, the one being
 // agreed on now.
 func (api *BftAPI) GetValidators(height *hexutil.Uint64) ([]BftValidator, error) {
-	h := api.s.currentHeight()
+	var (
+		set *metabft.ValidatorSet
+		err error
+	)
 	if height != nil {
-		h = uint64(*height)
+		// Read directly: operator queries over many heights must not evict
+		// the consensus path's cached sets (review on #162).
+		set, err = api.s.validators(uint64(*height))
+	} else {
+		set, err = api.s.validatorSet(api.s.currentHeight())
 	}
-	set, err := api.s.validatorSet(h)
 	if err != nil {
 		return nil, err
 	}

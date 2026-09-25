@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/consensus/metabft"
 	"github.com/ethereum/go-ethereum/core"
@@ -320,6 +321,12 @@ func TestBftAPI(t *testing.T) {
 	vals, err := api.GetValidators(nil)
 	if err != nil || len(vals) != 4 || !bytes.Equal(vals[0].NodeID, crypto.FromECDSAPub(&keys[0].PublicKey)[1:]) {
 		t.Fatalf("validators: %v, %v", vals, err)
+	}
+	// A historical query reads governance directly, leaving the cache alone.
+	before := s.sets.Len()
+	h := hexutil.Uint64(7)
+	if vals, err := api.GetValidators(&h); err != nil || len(vals) != 4 || s.sets.Len() != before {
+		t.Errorf("validators at 7: %d, %v; cache %d -> %d", len(vals), err, before, s.sets.Len())
 	}
 	if rs := api.GetRoundState(); rs.Height != 0 || rs.Proposer != nil {
 		t.Errorf("round state before the node runs: %+v", rs)
