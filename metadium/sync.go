@@ -30,6 +30,9 @@ type coinbaseEnodeEntry struct {
 }
 
 const (
+	// metaWorkKey holds the last block produced under the PoA token. On a
+	// PBFT chain it stops at the last PoA height: nothing writes it from
+	// bftBlock on, so it is not where the network is (review on #161).
 	metaWorkKey       = "metadium-work"
 	metaTokenKey      = "token"
 	MiningTokenTTL    = 10 // seconds

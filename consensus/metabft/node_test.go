@@ -342,3 +342,22 @@ func TestNodeCounters(t *testing.T) {
 		t.Errorf("counters %+v, want 2 dropped and 1 insert failure", c)
 	}
 }
+
+// TestNodeRecordsRejection: the last proposal a node refused, and why, is
+// kept for the status RPC (design §9.3.1).
+func TestNodeRecordsRejection(t *testing.T) {
+	net := newTestNet(t, 4)
+	chain := newMemChain()
+	chain.verify = func(*types.Block) error { return errors.New("leaves 3 governance nodes") }
+	n := NewNode(NodeConfig{Config: nodeTestConfig, ChainID: testChainID, BftBlock: 1,
+		Validators: func(uint64) (*ValidatorSet, error) { return net.set, nil }, Broadcast: func(*Message) {}}, chain)
+	n.head = chain.CurrentHeader() // loop-owned; the loop is not running
+	block := types.NewBlockWithHeader(&types.Header{ParentHash: n.head.Hash(), Number: big.NewInt(1), Difficulty: big.NewInt(1)})
+	if err := n.VerifyProposal(blockProposal{block}, true); err == nil {
+		t.Fatal("proposal accepted")
+	}
+	r := n.FullStatus().LastRejection
+	if r == nil || r.Height != 1 || r.Hash != block.Hash() || r.Reason != "leaves 3 governance nodes" {
+		t.Errorf("last rejection %+v", r)
+	}
+}
