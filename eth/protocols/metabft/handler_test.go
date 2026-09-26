@@ -31,7 +31,7 @@ func (b *testBackend) ChainID() uint64   { return testChainID }
 func (b *testBackend) ValidatorSet(h uint64) (*metabft.ValidatorSet, bool) {
 	return b.set, h == b.height || h == b.height+1
 }
-func (b *testBackend) HandleConsensus(_ *Peer, m *metabft.Message) error {
+func (b *testBackend) HandleConsensus(_ *Peer, _ []byte, m *metabft.Message) error {
 	b.received = append(b.received, m)
 	return nil
 }

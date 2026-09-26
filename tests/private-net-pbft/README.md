@@ -17,6 +17,7 @@ NODES=7 ./setup.sh  # node keys and accounts, genesis (BFT_BLOCK=200 by default)
 ./faults.sh         # partition, kill -9 under load, WAL loss
 ./governance.sh     # NODES=5: remove a validator by ballot, try going below 4, add it back
 ./byzantine.sh      # with a pbftfault build: wrong rewards, bad timestamps, equivocation, re-proposal
+./twin.sh           # NODES=7: node2's key on a second server
 ./measure.py        # latency, idle interval, load (§11.3); with NODE_ARGS="--metadium.block.idleseal 100"
                     # for the private operating profile
 ./stop.sh --clean   # remove containers, data and the generated files
@@ -92,6 +93,17 @@ the end. A recreate drops the container's log, so every node's log is saved to
   refuses both (a fresh proposal meets it before the header rules; `Time >= parent.Time`
   guards import and is covered by the engine tests);
 - S-04: it sends two PRE-PREPAREs for its rounds, B first to half its peers and A to all;
-  no block of its commits, the peers that saw both store the evidence;
+  no block of its commits; the peers that saw both store the evidence and relay the pair,
+  so every node ends up with it;
 - S-16: every validator withholds its round-0 COMMIT at heights divisible by 10; such a
   height commits in round 1, re-proposed unchanged, with round 0's proposer as its builder.
+
+`twin.sh` (NODES=7, §11.2 S-13) copies node2's data directory, node key and WAL included, to a
+second server and starts it next to node2. devp2p keeps one connection per node ID, so each
+validator is connected to only one of the two. The script lets that split happen on its own, then
+forces one: node2 with node1/3/4, the twin with node5/6/7. At each of node2's proposer slots the
+two servers propose and prepare different blocks. Validators relay votes, and relay both messages
+of a new evidence pair, so the conflicting PREPAREs reach every node. Checks:
+- the chain continues and every node, the twin included, has the same blocks;
+- every other validator stores the same evidence against node2's key;
+- both servers log that their key signed two different messages.
