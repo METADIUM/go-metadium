@@ -144,4 +144,4 @@ For the fixed-interval profile (M-04), deploy with `BLOCK_CREATION_TIME=2000` an
 - The validators above the quorum are stopped, so every block needs node3's vote.
 - node3's links are then slowed both ways, for each one-way delay / rate in `PROFILES`, and `PER`
   full-blob blocks are sent (2 × 128 KiB).
-- It reports node3's fetch time, and checks that the blocks commit.
+- It reports node3's fetch time, counting only successful fetches. A block that does not commit is a failure, and so is a proposal node3 refuses for its sidecars. node3's log is saved to `logs/sidecar-node3.log` before it is recreated without the fault.

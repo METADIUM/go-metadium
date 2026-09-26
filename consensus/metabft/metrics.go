@@ -12,6 +12,7 @@ var (
 	// decided block repeats (chain/execution, chain/validation).
 	proposalVerifyTimer  = metrics.NewRegisteredTimer("metabft/proposal/verify", nil)
 	proposalExecuteTimer = metrics.NewRegisteredTimer("metabft/proposal/execute", nil)
-	// M-10: waiting for a proposal's blob sidecars from peers.
+	// M-10: fetching a proposal's blob sidecars from peers, when it
+	// succeeds; a failure is the proposal's refusal (metabft_status).
 	sidecarFetchTimer = metrics.NewRegisteredTimer("metabft/proposal/sidecars", nil)
 )

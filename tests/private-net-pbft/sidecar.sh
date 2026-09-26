@@ -53,6 +53,7 @@ sleep 8
 mesh $(seq 1 "$NODES")
 for _ in $(seq 1 30); do (( $(block_number "$(port_of $FAR)" 2>/dev/null || echo 0) >= $(block_number "$P1") - 1 )) && break; sleep 2; done
 
+refused=""
 for n in $DOWN; do docker stop "$(container "$n")" >/dev/null; done
 log "stopped $(echo $DOWN | sed 's/[0-9]*/node&/g'): $QUORUM of $NODES validators left, the quorum, node$FAR among them"
 
@@ -75,14 +76,20 @@ for profile in $PROFILES; do
   else
     log "M-10 $profile: node$FAR fetched nothing (it proposed, or the blocks were not blob blocks); rounds ${rounds[*]}"
   fi
-  r=$(status_of $FAR | python3 -c "import sys,json; print((json.load(sys.stdin).get('lastRejection') or {}).get('reason',''))")
-  if [[ $r == *sidecar* ]]; then
-    log "  $profile: node$FAR refused a proposal for its sidecars: ${r:0:160}"
-  fi
+  # the last refusal, "at reason", compared with the one before this profile
+  r=$(status_of $FAR | python3 -c "import sys,json; x=json.load(sys.stdin).get('lastRejection') or {}; print(x.get('at',''), x.get('reason',''))")
   (( n > 0 )) && pass "$profile: node$FAR fetched the sidecars of $n blob block(s)" || fail "$profile: node$FAR fetched none"
+  if [[ $r == *sidecar* && $r != "$refused" ]]; then
+    fail "$profile: node$FAR refused a proposal for its sidecars: ${r:0:200}"
+  else
+    pass "$profile: node$FAR refused no proposal for its sidecars"
+  fi
+  refused=$r
 done
 fast
 for n in $DOWN; do docker start "$(container "$n")" >/dev/null; done
+# The recreate drops node FAR's log, refusals included: keep it.
+mkdir -p logs && docker logs "$(container $FAR)" >"logs/sidecar-node$FAR.log" 2>&1 || true
 env FAULT_node$FAR= docker compose up -d --force-recreate node$FAR >/dev/null 2>&1
 sleep 8
 mesh $(seq 1 "$NODES")

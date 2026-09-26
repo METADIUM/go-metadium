@@ -161,11 +161,10 @@ func (c *BlockChain) haveSidecars(block *types.Block) error {
 		return errSidecarUnavailable
 	}
 	start := time.Now()
-	err := c.FetchSidecars(block, c.now().Add(sidecarWait))
-	sidecarFetchTimer.UpdateSince(start)
-	if err != nil {
+	if err := c.FetchSidecars(block, c.now().Add(sidecarWait)); err != nil {
 		return fmt.Errorf("%w: %v", errSidecarUnavailable, err)
 	}
+	sidecarFetchTimer.UpdateSince(start) // successful fetches only (review on #175)
 	return nil
 }
 
