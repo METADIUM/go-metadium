@@ -12,6 +12,8 @@ package eth
 //	time-future      its proposals are stamped 10 s ahead (S-14)
 //	clock-ahead      its clock is 5 min ahead: its proposals are stamped
 //	                 so, and it checks the others' against it (S-07)
+//	sidecar-fetch    it disregards its blob pool when checking a proposal,
+//	                 so it fetches the sidecars from its peers (M-10)
 //	equivocate       it sends two different PRE-PREPAREs for its rounds:
 //	                 B first to half its peers, then A to all (S-04)
 //	withhold-commit  it sends no round-0 COMMIT at heights divisible by 10,
@@ -49,13 +51,15 @@ type faultProposer struct {
 	s *bftService
 }
 
-// bftFaultProposer also sets clock-ahead's offset on the chain, which is
-// built by then and not started yet.
+// bftFaultProposer also sets up clock-ahead and sidecar-fetch on the chain,
+// which is built by then and not started yet.
 func bftFaultProposer(p metabft.Proposer, s *bftService) metabft.Proposer {
 	switch bftFault {
 	case "clock-ahead":
 		s.chain.SetClockOffset(bftClockSkew)
 		return &faultProposer{p, s}
+	case "sidecar-fetch":
+		s.chain.IgnorePoolSidecars()
 	case "bad-rewards", "time-past", "time-future":
 		return &faultProposer{p, s}
 	}

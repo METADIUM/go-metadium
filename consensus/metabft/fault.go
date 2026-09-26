@@ -47,3 +47,9 @@ func Equivocate(m *Message, key *ecdsa.PrivateKey, reseal func(*types.Block) *ty
 func (c *BlockChain) SetClockOffset(d time.Duration) {
 	c.now = func() time.Time { return time.Now().Add(d) }
 }
+
+// IgnorePoolSidecars makes c fetch every proposal's blob sidecars from its
+// peers, as a validator does whose pool has not received them yet (§11.3
+// M-10). Fault injection only (build tag pbftfault); call it before the
+// node starts.
+func (c *BlockChain) IgnorePoolSidecars() { c.ignorePool = true }
