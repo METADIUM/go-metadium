@@ -391,6 +391,11 @@ The round in which the block was first proposed is not recorded (not needed for 
 - **Fork choice is decided by finality, not total difficulty.** On the `insertChain` path, reorg requests
   with `blockNumber <= finalizedNumber` are rejected. Committed blocks are final, so this cannot happen
   in normal operation; if it does, it is an attack or a bug.
+- As implemented, `reorg` refuses a change of head that would drop a PBFT block (`errReorgBelowFinal`).
+  The refused fork's blocks are still written as a side chain first, because `writeBlockWithState`
+  runs before `reorg`, as in upstream geth. The insert fails, so the sync layer drops the peer that
+  served the fork. The side-chain blocks never become canonical. They are expected, not a leftover
+  to clean up (review on #154).
 
 ---
 
