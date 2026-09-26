@@ -24,6 +24,10 @@ type BlockChain struct {
 	// by deadline and stores them (the eth handler, over meta/69). Nil: a
 	// proposal whose sidecars are not held locally is refused.
 	FetchSidecars func(block *types.Block, deadline time.Time) error
+
+	// ignorePool makes haveSidecars disregard the blob pool, so every
+	// proposal's sidecars are fetched (pbftfault sidecar-fetch, §11.3 M-10).
+	ignorePool bool
 }
 
 // sidecarWait bounds how long a validator waits for a proposal's missing
@@ -120,20 +124,34 @@ func (c *BlockChain) VerifyBlock(block *types.Block, fresh bool) error {
 // haveSidecars makes sure this node holds the blob sidecars of a proposal
 // before it votes for it (design §12): a quorum must not decide a block
 // whose blob data no honest validator can serve. They come from the blob
-// pool, from an earlier fetch, or from peers now.
+// pool, from an earlier fetch, or from peers now. Found in the pool, they
+// are recorded under the block's hash as well, so this node can serve them
+// to a validator that is fetching them: otherwise only the proposer could,
+// and a re-proposal after a round change would have no one (§11.3 M-10).
 func (c *BlockChain) haveSidecars(block *types.Block) error {
-	var missing bool
+	var (
+		missing  bool
+		fromPool []*types.BlobTxSidecar
+	)
 	blobs := 0
 	for _, tx := range block.Transactions() {
 		if tx.Type() != types.BlobTxType {
 			continue
 		}
 		blobs++
-		if c.bc.BlobSidecarFn == nil || c.bc.BlobSidecarFn(tx.Hash()) == nil {
+		var sc *types.BlobTxSidecar
+		if !c.ignorePool && c.bc.BlobSidecarFn != nil {
+			sc = c.bc.BlobSidecarFn(tx.Hash())
+		}
+		if sc == nil {
 			missing = true
 		}
+		fromPool = append(fromPool, sc)
 	}
 	if !missing {
+		if blobs > 0 {
+			c.bc.AddProposalSidecars(block.Hash(), fromPool)
+		}
 		return nil
 	}
 	if stored := c.bc.GetBlobSidecars(block.Hash()); len(stored) >= blobs {

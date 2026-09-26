@@ -186,17 +186,37 @@ func bftWindow(blockIntervalMs int64, timeDrift uint64) time.Duration {
 // The block is written by the node once it is decided, whoever proposed it;
 // this node's blob sidecars are stored now, under the block hash, which the
 // decision does not change (commit seals are outside it).
+//
+// The seal gives the block its final hash (the PoA nonce is random), so the
+// sidecars are recorded under the sealed block's hash, and before it is
+// submitted: validators ask for them as soon as the proposal reaches them.
+// Recorded under the unsealed hash, no validator missing them in its pool
+// could ever get them from the proposer, and a height that needs such a
+// validator's vote stalled (§11.3 M-10).
 func (w *worker) proposeBft(block *types.Block, env *environment, start time.Time) {
-	if err := w.engine.Seal(w.chain, block, nil, nil); err != nil {
-		log.Warn("PBFT proposal refused", "number", block.Number(), "err", err)
+	sealer, ok := w.engine.(bftSealer)
+	if !ok {
+		log.Error("PBFT proposal without a PBFT engine", "number", block.Number())
 		return
 	}
+	block = sealer.SealProposal(block)
 	if len(env.sidecars) > 0 {
 		// Written for the block once decided (the hash is final), and kept
 		// in memory for the validators who fetch them before voting.
 		rawdb.WriteBlobSidecars(w.chain.ChainDb(), block.Hash(), block.NumberU64(), env.sidecars)
 		w.chain.AddProposalSidecars(block.Hash(), env.sidecars)
 	}
+	if err := sealer.SubmitProposal(block); err != nil {
+		log.Warn("PBFT proposal refused", "number", block.Number(), "err", err)
+		return
+	}
 	log.Info("Proposed block", "number", block.Number(), "hash", block.Hash(), "txs", env.tcount,
 		"gas", block.GasUsed(), "elapsed", common.PrettyDuration(time.Since(start)))
+}
+
+// bftSealer is how the worker hands a proposal to the PBFT engine
+// (consensus/metabft.Engine): seal first, then submit.
+type bftSealer interface {
+	SealProposal(block *types.Block) *types.Block
+	SubmitProposal(block *types.Block) error
 }
