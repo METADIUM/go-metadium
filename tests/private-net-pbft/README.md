@@ -152,5 +152,7 @@ For the fixed-interval profile (M-04), deploy with `BLOCK_CREATION_TIME=2000` an
 - It then recovers the way §9.3 says, with a new genesis, and goes through §9.2 step by step to the switch.
 
 `BFT_BLOCK=off ./setup.sh` writes a plain PoA genesis without `bftBlock`, for a PoA baseline on the same 4–9 nodes (checklist G-03, G-04). The Camellia and e2e tests take the RPC URL:
-`RPC=http://localhost:8645 ../private-net-poa/camellia-test.sh`,
+`RPC=http://localhost:8645 ../private-net-poa/camellia-test.sh`
+(run it once the chain is past `camelliaBlock`, 100 by default: below it `camellia-test.sh` reports
+"Block is below 100" and the pool rejects blob transactions),
 `go run ./tests/private-net-poa/blob-tx-e2e/ http://localhost:8645`, and likewise for `mixed-tx-e2e`.
