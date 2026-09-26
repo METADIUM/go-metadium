@@ -534,7 +534,9 @@ and the proposer sends it to everyone itself.
 - **Cost.** Each vote goes out (N−1)(N−2) more times across the network, 30 at N = 7. Each node
   relays the other validators' 2(N−1) votes per height to N−2 peers each. At N = 7 with 100 ms blocks
   that is about 600 more small messages per second per node, on the order of 100 KB/s. Each relayed
-  copy costs its receiver one signature recovery before the cache drops it.
+  copy costs its receiver one signature recovery before the cache drops it. Measured on the private
+  network (N = 7, idle seal 100 ms): confirmation latency p50 205 / p99 235 ms against 198 / 220 ms
+  without relaying, and ~860 transfers/s under load with no round changes.
 - The message shapes and protocol version do not change: a node that does not relay is still
   compatible, it just cannot detect a split twin.
 
