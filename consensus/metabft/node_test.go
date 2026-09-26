@@ -149,7 +149,7 @@ func (c *nodeCluster) builder(i int) {
 		}
 		head := c.chains[i].CurrentHeader()
 		next := head.Number.Uint64() + 1
-		if !c.nodes[i].ProposalWanted(next, false) {
+		if !c.nodes[i].ProposalWanted(next, false, 0) {
 			continue
 		}
 		h := &types.Header{
@@ -268,16 +268,16 @@ func TestNodeEmptyBlockInterval(t *testing.T) {
 	nd.Start()
 	defer nd.Stop()
 	deadline := time.Now().Add(5 * time.Second)
-	for !nd.ProposalWanted(1, true) {
+	for !nd.ProposalWanted(1, true, 0) {
 		if time.Now().After(deadline) {
 			t.Fatal("the round-0 proposer never asked for a block")
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if nd.ProposalWanted(1, false) {
+	if nd.ProposalWanted(1, false, 0) {
 		t.Fatal("an empty block wanted before EmptyBlockInterval")
 	}
-	if nd.ProposalWanted(2, true) {
+	if nd.ProposalWanted(2, true, 0) {
 		t.Fatal("a block wanted for a height not running")
 	}
 	// The builder is woken for the request, and again when the empty block
@@ -287,11 +287,53 @@ func TestNodeEmptyBlockInterval(t *testing.T) {
 		t.Fatal("builder not woken for the request")
 	}
 	c.clock.Run(nodeTestConfig.EmptyBlockInterval)
-	if !nd.ProposalWanted(1, false) {
+	if !nd.ProposalWanted(1, false, 0) {
 		t.Fatal("no empty block wanted after EmptyBlockInterval")
 	}
 	if wakes.Load() == requested {
 		t.Fatal("builder not woken when the empty block became due")
+	}
+}
+
+// TestNodePacesRound0: with a minimum gap (governance's blockCreationTime
+// less the build window, §11.3 M-04), pending transactions want a block
+// only once the gap since the parent has passed, and the builder is woken
+// then. A later round is not paced.
+func TestNodePacesRound0(t *testing.T) {
+	net := newTestNet(t, 4)
+	proposer, _ := indexOfProposer(net, 1)
+	down := map[int]bool{}
+	for i := range net.keys {
+		down[i] = true
+	}
+	c := newNodeCluster(t, net, 1, down, nil)
+	nd := c.nodes[proposer]
+	var wakes atomic.Int64
+	nd.cfg.OnProposalWanted = func() { wakes.Add(1) }
+	nd.Start()
+	defer nd.Stop()
+	deadline := time.Now().Add(5 * time.Second)
+	for !nd.ProposalWanted(1, true, 0) {
+		if time.Now().After(deadline) {
+			t.Fatal("the round-0 proposer never asked for a block")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	gap := time.Second
+	if nd.ProposalWanted(1, true, gap) {
+		t.Fatal("a paced block wanted before the gap")
+	}
+	before := wakes.Load()
+	c.clock.Run(gap)
+	if !nd.ProposalWanted(1, true, gap) {
+		t.Fatal("no block wanted after the gap")
+	}
+	if wakes.Load() == before {
+		t.Fatal("builder not woken when the gap passed")
+	}
+	nd.RequestProposal(1, 1)
+	if !nd.ProposalWanted(1, true, time.Hour) {
+		t.Fatal("a later round was paced")
 	}
 }
 
