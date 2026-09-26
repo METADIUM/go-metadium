@@ -83,6 +83,7 @@ func (c *BlockChain) SubscribeHeads(ch chan<- *types.Header) event.Subscription 
 // parent is the head. The block is executed on a copy of the parent state,
 // which is dropped; InsertBlock executes it again once it is decided.
 func (c *BlockChain) VerifyBlock(block *types.Block, fresh bool) error {
+	defer proposalVerifyTimer.UpdateSince(time.Now())
 	header := block.Header()
 	if fresh {
 		// Wall clock, not the monotonic one: header time is wall time. Only
@@ -106,11 +107,14 @@ func (c *BlockChain) VerifyBlock(block *types.Block, fresh bool) error {
 	if err != nil {
 		return err
 	}
+	start := time.Now()
 	receipts, _, usedGas, fees, err := c.bc.Processor().Process(block, statedb, *c.bc.GetVMConfig())
 	if err != nil {
 		return err
 	}
-	return c.bc.Validator().ValidateState(block, statedb, receipts, usedGas, fees)
+	err = c.bc.Validator().ValidateState(block, statedb, receipts, usedGas, fees)
+	proposalExecuteTimer.UpdateSince(start)
+	return err
 }
 
 // haveSidecars makes sure this node holds the blob sidecars of a proposal
@@ -138,7 +142,10 @@ func (c *BlockChain) haveSidecars(block *types.Block) error {
 	if c.FetchSidecars == nil {
 		return errSidecarUnavailable
 	}
-	if err := c.FetchSidecars(block, c.now().Add(sidecarWait)); err != nil {
+	start := time.Now()
+	err := c.FetchSidecars(block, c.now().Add(sidecarWait))
+	sidecarFetchTimer.UpdateSince(start)
+	if err != nil {
 		return fmt.Errorf("%w: %v", errSidecarUnavailable, err)
 	}
 	return nil

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -267,9 +268,11 @@ func (w *WAL) append(rec *Record) error {
 	if _, err := w.f.Write(frame); err != nil {
 		return err
 	}
+	start := time.Now()
 	if err := w.f.Sync(); err != nil {
 		return err
 	}
+	walSyncTimer.UpdateSince(start)
 	w.state.apply(*rec)
 	return nil
 }
