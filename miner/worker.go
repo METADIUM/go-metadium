@@ -1763,8 +1763,10 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 		return
 	}
 	if !metaminer.IsPoW() { // Metadium
-		coinbase, err := metaminer.GetCoinbase(work.header.Number)
-		if err == nil {
+		// cbErr, not err: the TRS condition below reads err, which is
+		// prepareWork's, as it did before PBFT (review on #178).
+		coinbase, cbErr := metaminer.GetCoinbase(work.header.Number)
+		if cbErr == nil {
 			work.coinbase = coinbase
 		}
 		if w.chainConfig.IsBft(work.header.Number) {
@@ -1772,8 +1774,8 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 			// which must be this node's governance coinbase (the builder
 			// check). Set it before the transactions run, which read it and
 			// pay to it, not only when the block is signed.
-			if err != nil {
-				log.Warn("No governance coinbase; not proposing", "number", work.header.Number, "err", err)
+			if cbErr != nil {
+				log.Warn("No governance coinbase; not proposing", "number", work.header.Number, "err", cbErr)
 				work.discard()
 				return
 			}
