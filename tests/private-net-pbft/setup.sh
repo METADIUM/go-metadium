@@ -6,7 +6,9 @@
 # Options: GMET_BIN=/path/to/gmet  BOOTNODE_BIN=/path/to/bootnode
 #          NODES=4 (4..9; all of them governance members and validators)
 #          NODE_ARGS="--metadium.block.idleseal 100" (extra flags for every node)
-#          BFT_BLOCK=200 (the switch; governance must be deployed before it)
+#          BFT_BLOCK=200 (the switch; governance must be deployed before it;
+#                         "off" for a plain PoA network, the 7-node baseline of
+#                         checklist G-03/G-04)
 #          CAMELLIA_BLOCK=100 (must not be after BFT_BLOCK)
 #
 # Node keys are generated here (bootnode -genkey), so every node's ID is
@@ -30,7 +32,14 @@ err()  { echo "[ERROR] $*" >&2; exit 1; }
 
 [[ -x "$GMET_BIN" ]] || err "gmet binary not found: $GMET_BIN"
 [[ -x "$BOOTNODE_BIN" ]] || err "bootnode binary not found: $BOOTNODE_BIN (go build -o build/bin/bootnode ./cmd/bootnode)"
-(( CAMELLIA_BLOCK <= BFT_BLOCK )) || err "CAMELLIA_BLOCK ($CAMELLIA_BLOCK) must not be after BFT_BLOCK ($BFT_BLOCK)"
+if [[ $BFT_BLOCK == off ]]; then
+  BFT_CONFIG=""
+else
+  (( CAMELLIA_BLOCK <= BFT_BLOCK )) || err "CAMELLIA_BLOCK ($CAMELLIA_BLOCK) must not be after BFT_BLOCK ($BFT_BLOCK)"
+  BFT_CONFIG=",
+    \"bftBlock\": $BFT_BLOCK,
+    \"bft\": { \"emptyBlockInterval\": 5, \"baseTimeout\": 2, \"maxBackoffExp\": 5, \"timeDrift\": 2 }"
+fi
 
 log "=== PBFT private network initialisation (chainId=1337, camelliaBlock=$CAMELLIA_BLOCK, bftBlock=$BFT_BLOCK) ==="
 
@@ -110,9 +119,7 @@ $ALLOC
     "pangyoBlock": 0,
     "applepieBlock": 0,
     "bokbunjaBlock": 0,
-    "camelliaBlock": $CAMELLIA_BLOCK,
-    "bftBlock": $BFT_BLOCK,
-    "bft": { "emptyBlockInterval": 5, "baseTimeout": 2, "maxBackoffExp": 5, "timeDrift": 2 }
+    "camelliaBlock": $CAMELLIA_BLOCK$BFT_CONFIG
   },
   "difficulty": "0x1",
   "extraData": "0x${NODE1_ID}",

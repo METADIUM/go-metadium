@@ -14,8 +14,8 @@
 |----|------|--------|--------|
 | G-01 | The external requirement's wording is confirmed and one branch of the §13 decision table is chosen | §13 | [ ] |
 | G-02 | Operations sign-off on the availability trade-off (a 4:3 split halts; downtime figures) | §9.6, §11.2 #6 | [ ] |
-| G-03 | `tests/private-net-poa` extended from 3 to 7 nodes (node4–node7, ports 8548–8551) | §11.1 | [ ] |
-| G-04 | Baseline on 7 nodes: `camellia-test.sh`, `blob-tx-e2e`, `mixed-tx-e2e` pass before any PBFT change | §11.1 | [ ] |
+| G-03 | `tests/private-net-poa` extended from 3 to 7 nodes (node4–node7, ports 8548–8551) | §11.1 | [x] — met by `tests/private-net-pbft` with `BFT_BLOCK=off`, a plain PoA genesis (no `bftBlock`) on 4–9 nodes (8645–8653), rather than rewriting `private-net-poa`'s fixed 3-node layout. `deploy.sh` and every client test take the RPC URL |
+| G-04 | Baseline on 7 nodes: `camellia-test.sh`, `blob-tx-e2e`, `mixed-tx-e2e` pass before any PBFT change | §11.1 | [x] — run after the fact, on the same 7-node PoA network: `master` (v1.1.4, before any PBFT change) and this branch. Both: `camellia-test.sh` 14 PASS / 0 FAIL / 3 SKIP, `blob-tx-e2e` and `mixed-tx-e2e` ALL PASS |
 
 G-01 decides whether the phases below run at all; P0–P3 do not touch block production and can
 start before it if the schedule needs them.
@@ -33,8 +33,8 @@ start before it if the schedule needs them.
 | P0-05 | Startup check: `EmptyBlockInterval >= blockCreationTime` | §4.5 | moved to P5-21 — `blockCreationTime` is read from governance at runtime |
 | P0-06 | A chain config with `bftBlock` refuses to start unless the node runs `ConsensusPoA` (`eth/bft_guard.go`); the CLI keeps rejecting 3 and 4 | §8.2 | [x] |
 | P0-07 | `--metadium.block.emptyinterval` vs `bft.emptyBlockInterval`: warn, genesis wins | §8.1 | moved to P5-22 — only meaningful once the engine reads the value |
-| P0-08 | `init` warns on chain ID `11`, `12` or a known public-registry value | §9.5 | [ ] P0b |
-| P0-09 | `metadium/scripts/genesis-template.json`: `chainId` becomes a placeholder; `init` refuses it unfilled | §9.5 | [ ] P0b |
+| P0-08 | `init` warns on chain ID `11`, `12` or a known public-registry value | §9.5 | [x] (#145) — `cmd/geth/chainid_guard.go`: `init` refuses chain ID 0 and warns on Metadium mainnet/testnet, the Ethereum networks and the local defaults (1337, 31337); `TestCheckGenesisChainID` |
+| P0-09 | `metadium/scripts/genesis-template.json`: `chainId` becomes a placeholder; `init` refuses it unfilled | §9.5 | [x] (#145) — the template carries `0`; `gmet metadium genesis` takes the value from the data file (`chainId`) and refuses a result without one; `TestApplyGenesisChainID`, `TestConfigExampleChainID` |
 
 **Guard until P5:** a chain config with `bftBlock` refuses to start (`errBftNotImplemented` in
 `eth/bft_guard.go`), so no build keeps sealing PoA past the switch block (§9.3). Removed by P5-00.
@@ -221,8 +221,8 @@ public configs pinned to no PBFT (`params/metadium_config_test.go`), `init` path
 
 | ID | Item | Status |
 |----|------|--------|
-| R-01 | Bootstrap → governance → readiness → `BftBlock` switch, following §9.2 step by step | [ ] |
-| R-02 | Transition failure (`N < 4` at `BftBlock-1`) halts with a clear error; genesis rebuild recovers | [ ] |
+| R-01 | Bootstrap → governance → readiness → `BftBlock` switch, following §9.2 step by step | [x] — `transition.sh`, N=7, bftBlock 120: the genesis fixes chainId, bftBlock and `bft.*` (step 0); full mesh, 6 peers each (step 2; NTP is the host clock here, to be confirmed on servers); `metabft_readiness` ready on all 7 nodes (7 validators, each in the set and advertising metabft/1) (step 3); block 119 PoA without seals, block 120 with 5 seals, committed in round 0 and built by `validators[120 % 7]`, all 7 agree (step 4) |
+| R-02 | Transition failure (`N < 4` at `BftBlock-1`) halts with a clear error; genesis rebuild recovers | [x] — `transition.sh`: 7 nodes, governance with 3 members (`deploy.sh MEMBERS=3`), bftBlock 80. Readiness on every node reports too few governance nodes beforehand. Every node stops at 79 for 60 s instead of continuing on PoA, with the reason logged: "No validator set; not participating … 3 governance nodes at block 79, PBFT needs 4". The recovery is the R-01 run on a new genesis |
 
 ### Performance (design §11.3)
 

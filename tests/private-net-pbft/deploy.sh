@@ -4,6 +4,8 @@
 #
 # Options: GMET_BIN=/path/to/gmet
 #          BLOCK_CREATION_TIME=1000 (ms; must not exceed bft.emptyBlockInterval)
+#          MEMBERS=N (register only node1..nodeN; default every node. Fewer
+#                     than 4 is how transition.sh makes the switch fail, R-02)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -15,13 +17,15 @@ DEPLOY_JS="$SCRIPT_DIR/../../metadium/scripts/deploy-governance.js"
 PASSWORD="privatenet123"
 [[ -x "$GMET_BIN" ]] || err "gmet binary not found: $GMET_BIN"
 
-BFT_BLOCK=$(python3 -c "import json; print(json.load(open('genesis.json'))['config']['bftBlock'])")
+BFT_BLOCK=$(python3 -c "import json; print(json.load(open('genesis.json'))['config'].get('bftBlock', 'off'))")
 HEAD=$(block_number 8645) || err "node1 RPC not responding; run start.sh first"
-(( HEAD + 20 < BFT_BLOCK )) || err "head $HEAD is too close to bftBlock $BFT_BLOCK; start over with a later BFT_BLOCK"
+[[ $BFT_BLOCK == off ]] || (( HEAD + 20 < BFT_BLOCK )) || err "head $HEAD is too close to bftBlock $BFT_BLOCK; start over with a later BFT_BLOCK"
 log "=== Deploying governance at block $HEAD (bftBlock $BFT_BLOCK) ==="
 
+MEMBERS=${MEMBERS:-$NODES}
+(( MEMBERS >= 1 && MEMBERS <= NODES )) || err "MEMBERS must be 1..$NODES, have $MEMBERS"
 members=""
-for n in $(seq 1 "$NODES"); do
+for n in $(seq 1 "$MEMBERS"); do
   boot=""; [[ $n == 1 ]] && boot=', "bootnode": true'
   members+="$( [[ $n == 1 ]] || echo ,)
     {\"addr\": \"$(account_of "$n")\", \"stake\": 1000000000000000000, \"name\": \"node$n\",
