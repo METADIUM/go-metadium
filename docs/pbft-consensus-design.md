@@ -245,9 +245,12 @@ deadline(n, r) = roundStart(r)    + BftBaseTimeout * 2^min(r, BftMaxBackoffExp) 
   then goes out about `blockCreationTime` after the parent's. Counting from the parent's proposal,
   not its commit, keeps the parent's build, check and decision inside the interval, as the PoA timer
   does. Counted from the commit, the interval came out at 2.77s under load instead of 2.0s. This is
-  local proposer behaviour like `idleseal`: validators accept an early proposal, and since
-  `blockCreationTime <= EmptyBlockInterval`, a paced proposal is always well before the round-0
-  deadline. With `idleseal` on, nothing is held: the block is sealed as the pool goes quiet.
+  local proposer behaviour like `idleseal`: validators accept an early proposal. The start is also
+  capped at `committedAt(n-1) + EmptyBlockInterval`, so a paced proposal is always `BftBaseTimeout`
+  before the round-0 deadline, even when governance sets `blockCreationTime` above
+  `EmptyBlockInterval`. The startup check only warns about that, and governance can change the
+  interval at any time (review on #174). With `idleseal` on, nothing is held: the block is sealed as
+  the pool goes quiet.
 - At startup, check `EmptyBlockInterval >= blockCreationTime` (same constraint as today: an
   `emptyinterval` below the on-chain interval has no effect).
 
