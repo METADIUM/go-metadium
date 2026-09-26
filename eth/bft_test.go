@@ -176,7 +176,6 @@ func TestBftServiceAdmitsValidatorsOnly(t *testing.T) {
 	if len(s.peers) != 0 {
 		t.Error("peer still registered after it left")
 	}
-
 }
 
 // TestBftServiceBroadcastDoesNotBlock: a peer that reads nothing costs
