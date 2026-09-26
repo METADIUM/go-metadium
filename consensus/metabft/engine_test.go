@@ -399,7 +399,7 @@ func TestEngineAssemblesVerifiableHeader(t *testing.T) {
 
 type captureProposer struct{ got *types.Block }
 
-func (*captureProposer) ProposalWanted(uint64, bool) bool { return false }
+func (*captureProposer) ProposalWanted(uint64, bool, time.Duration) bool { return false }
 func (p *captureProposer) SubmitBlock(b *types.Block) error {
 	p.got = b
 	return nil

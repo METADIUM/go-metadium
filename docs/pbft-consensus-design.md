@@ -236,6 +236,18 @@ deadline(n, r) = roundStart(r)    + BftBaseTimeout * 2^min(r, BftMaxBackoffExp) 
 - **`EmptyBlockInterval` becomes a consensus parameter.** It enters every validator's timeout,
   so **it must not differ between nodes.** It is fixed in the genesis as `bft.emptyBlockInterval` (§8.1).
 - `idleseal` (100ms) is local proposer behaviour, unrelated to consensus. The existing flag stays.
+- **Without `idleseal`, the proposer paces round 0 to `blockCreationTime`** (the fixed-interval
+  profile, §11.3 M-04). A build collects transactions for at most `BftTimeDrift/2`, so that its
+  timestamp stays within the proposal time bound. Left alone, it would propose about 1s after the
+  parent. Instead, with pending transactions the build starts at
+  `parentProposal + blockCreationTime − window`. Here `parentProposal` is when this node made or
+  accepted the parent's PRE-PREPARE, falling back to `committedAt(n-1)` if it saw none. The proposal
+  then goes out about `blockCreationTime` after the parent's. Counting from the parent's proposal,
+  not its commit, keeps the parent's build, check and decision inside the interval, as the PoA timer
+  does. Counted from the commit, the interval came out at 2.77s under load instead of 2.0s. This is
+  local proposer behaviour like `idleseal`: validators accept an early proposal, and since
+  `blockCreationTime <= EmptyBlockInterval`, a paced proposal is always well before the round-0
+  deadline. With `idleseal` on, nothing is held: the block is sealed as the pool goes quiet.
 - At startup, check `EmptyBlockInterval >= blockCreationTime` (same constraint as today: an
   `emptyinterval` below the on-chain interval has no effect).
 

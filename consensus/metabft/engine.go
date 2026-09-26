@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -75,7 +76,7 @@ type Engine struct {
 // Proposer is the consensus side of block production (Node): it says when
 // this node should build a block, and takes the block once built.
 type Proposer interface {
-	ProposalWanted(height uint64, pendingTxs bool) bool
+	ProposalWanted(height uint64, pendingTxs bool, minGap time.Duration) bool
 	SubmitBlock(block *types.Block) error
 }
 
@@ -126,9 +127,9 @@ func (e *Engine) getProposer() Proposer {
 
 // ProposalWanted reports whether the miner should build a block for height
 // now (Node.ProposalWanted).
-func (e *Engine) ProposalWanted(height uint64, pendingTxs bool) bool {
+func (e *Engine) ProposalWanted(height uint64, pendingTxs bool, minGap time.Duration) bool {
 	if p := e.getProposer(); p != nil {
-		return p.ProposalWanted(height, pendingTxs)
+		return p.ProposalWanted(height, pendingTxs, minGap)
 	}
 	return false
 }

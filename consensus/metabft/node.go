@@ -81,16 +81,23 @@ type Node struct {
 	head      *types.Header
 	started   uint64        // the height the core was last started on; 0 before the switch
 	committed *types.Header // written by Commit, started once the core call returns
+	// proposedAt is when a proposal for the running height (proposedFor)
+	// was last made here or accepted from its proposer.
+	proposedAt  time.Duration
+	proposedFor uint64
 
 	// Shared with ProposalWanted and Status.
 	mu          sync.Mutex
 	want        *proposalRequest
 	committedAt time.Duration
+	paceFrom    time.Duration // round-0 pacing counts from here (onHead)
 	height      uint64
 	round       uint64
 	observer    bool
 	lastReject  *Rejection
 	emptyTimer  mclock.Timer // wakes the builder when EmptyBlockInterval passes
+	paceTimer   mclock.Timer // wakes the builder when a paced round 0 may build
+	paceAt      time.Duration
 }
 
 // Rejection is the last proposal this node refused, for the status RPC
@@ -175,15 +182,30 @@ func (n *Node) HandleMessage(m *Message) {
 // ProposalWanted reports whether the block builder should build a block for
 // height now. Round 0 waits for pending transactions or, without them, for
 // EmptyBlockInterval since the parent became the head, so an idle chain
-// produces one empty block per interval (design §4.5). A later round wants
-// a block at once.
-func (n *Node) ProposalWanted(height uint64, pendingTxs bool) bool {
+// produces one empty block per interval (design §4.5). With pending
+// transactions it also waits for minGap since the parent's proposal (or,
+// without one seen here, since the parent became the head), which paces
+// blocks to governance's blockCreationTime (§11.3 M-04); the builder is
+// woken when minGap passes. A later round wants a block at once.
+func (n *Node) ProposalWanted(height uint64, pendingTxs bool, minGap time.Duration) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	switch {
 	case n.want == nil || n.want.height != height:
 		return false
-	case n.want.round > 0 || pendingTxs:
+	case n.want.round > 0:
+		return true
+	case pendingTxs:
+		at := n.paceFrom + minGap
+		if wait := at - n.now(); wait > 0 {
+			if n.paceTimer == nil || n.paceAt != at {
+				if n.paceTimer != nil {
+					n.paceTimer.Stop()
+				}
+				n.paceTimer, n.paceAt = n.clock.AfterFunc(wait, n.wakeBuilder), at
+			}
+			return false
+		}
 		return true
 	}
 	return n.now()-n.committedAt >= n.cfg.Config.EmptyBlockInterval
@@ -296,8 +318,11 @@ func (n *Node) loop() {
 		case h := <-heads:
 			n.onHead(h)
 		case m := <-n.msgs:
-			if err := n.core.HandleMessage(m, n.now()); err != nil {
+			arrived := n.now() // before the proposal check, which takes a while
+			if err := n.core.HandleMessage(m, arrived); err != nil {
 				n.log.Debug("Consensus message rejected", "type", m.Type, "height", m.Height, "round", m.Round, "err", err)
+			} else if m.Type == MsgPreprepare && m.Height == n.started {
+				n.proposedAt, n.proposedFor = arrived, m.Height
 			}
 		case b := <-n.blocks:
 			n.propose(b)
@@ -334,6 +359,13 @@ func (n *Node) onHead(h *types.Header) {
 	n.mu.Lock()
 	n.want = nil
 	n.committedAt = n.now()
+	// Pacing counts from the parent's proposal rather than its commit, so
+	// the time the parent took to build, check and decide is inside
+	// blockCreationTime, as on PoA, instead of added to it (§11.3 M-04).
+	n.paceFrom = n.committedAt
+	if n.proposedFor == h.Number.Uint64() {
+		n.paceFrom = n.proposedAt
+	}
 	n.mu.Unlock()
 	n.core.NewHeight(next, n.now())
 }
@@ -343,10 +375,12 @@ func (n *Node) propose(b *types.Block) {
 		n.log.Debug("Dropping a block built on a stale head", "number", b.Number(), "parent", b.ParentHash())
 		return
 	}
-	if err := n.core.Propose(blockProposal{b}, n.now()); err != nil {
+	now := n.now()
+	if err := n.core.Propose(blockProposal{b}, now); err != nil {
 		n.log.Debug("Proposal not used", "number", b.Number(), "err", err)
 		return
 	}
+	n.proposedAt, n.proposedFor = now, b.NumberU64()
 	n.mu.Lock()
 	n.want = nil
 	n.mu.Unlock()
@@ -403,6 +437,10 @@ func (n *Node) RequestProposal(height, round uint64) {
 	if n.emptyTimer != nil {
 		n.emptyTimer.Stop()
 		n.emptyTimer = nil
+	}
+	if n.paceTimer != nil {
+		n.paceTimer.Stop()
+		n.paceTimer = nil
 	}
 	if round == 0 {
 		// An idle builder needs a second wake-up, when an empty block is due.

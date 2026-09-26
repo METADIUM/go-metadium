@@ -26,12 +26,15 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
+	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // bftProducer is what the PBFT engine (consensus/metabft.Engine) offers the
 // miner (docs/pbft-consensus-design.md §7.3).
 type bftProducer interface {
-	ProposalWanted(height uint64, pendingTxs bool) bool
+	ProposalWanted(height uint64, pendingTxs bool, minGap time.Duration) bool
 	ProposalWake() <-chan struct{}
 	WakeProposer()
 }
@@ -43,6 +46,10 @@ var errBftFloorBreach = errors.New("transaction breaks the PBFT validator floor"
 // bftRetryDelay is how soon a PBFT work request that found a build running
 // is tried again.
 const bftRetryDelay = 20 * time.Millisecond
+
+// bftFloorCheckTimer times the validator-floor check after each transaction
+// of a PBFT build (§11.3 M-09), collected with --metrics.
+var bftFloorCheckTimer = metrics.NewRegisteredTimer("miner/bft/floorcheck", nil)
 
 // bftExcluder is the PBFT engine's record of transactions left out by the
 // validator floor (consensus/metabft.Engine.ExcludeTx).
@@ -72,7 +79,9 @@ func (w *worker) bftCheckFloor(env *environment, tx *types.Transaction) error {
 	if !ok {
 		return nil
 	}
+	start := time.Now()
 	err := pv.VerifyPostState(w.chain, env.header, env.state)
+	bftFloorCheckTimer.UpdateSince(start)
 	if err == nil {
 		return nil
 	}
@@ -100,7 +109,24 @@ func (w *worker) bftProposalWanted(height *big.Int) bool {
 		return false
 	}
 	pending, _ := w.eth.TxPool().Stats()
-	return p.ProposalWanted(height.Uint64(), pending > 0)
+	return p.ProposalWanted(height.Uint64(), pending > 0, w.bftMinGap(height))
+}
+
+// bftMinGap is how long after the parent a round-0 build with transactions
+// may start: blockCreationTime less the collection window (bftTimestamp),
+// so the proposal goes out one blockCreationTime after the parent, as on
+// PoA (§11.3 M-04). With idleseal on, blocks are sealed as the pool goes
+// quiet instead, and nothing is held.
+func (w *worker) bftMinGap(height *big.Int) time.Duration {
+	if params.BlockIdleSealTime > 0 || w.chainConfig.Bft == nil {
+		return 0
+	}
+	interval, _, _, _, _, err := metaminer.GetBlockBuildParameters(new(big.Int).Sub(height, common.Big1))
+	if err != nil || interval <= 0 {
+		return 0
+	}
+	window := bftWindow(interval, w.chainConfig.Bft.TimeDrift)
+	return time.Duration(interval)*time.Millisecond - window
 }
 
 // bftEmptyDue reports whether the node wants a block for height even
@@ -117,7 +143,7 @@ func (w *worker) bftProposalWanted(height *big.Int) bool {
 // keeps asking until it is proposed.
 func (w *worker) bftEmptyDue(height *big.Int) bool {
 	p, ok := w.engine.(bftProducer)
-	return ok && p.ProposalWanted(height.Uint64(), false)
+	return ok && p.ProposalWanted(height.Uint64(), false, 0)
 }
 
 // bftProposalWake is the engine's wake-up channel on a PBFT chain, nil
@@ -140,6 +166,12 @@ func bftTimestamp(parent *types.Header, blockIntervalMs int64, timeDrift uint64,
 	if timestamp < parent.Time {
 		timestamp = parent.Time
 	}
+	return timestamp, now.Add(bftWindow(blockIntervalMs, timeDrift))
+}
+
+// bftWindow is how long a PBFT build collects transactions: the block
+// interval, capped at half the proposal time bound.
+func bftWindow(blockIntervalMs int64, timeDrift uint64) time.Duration {
 	window := time.Duration(blockIntervalMs) * time.Millisecond
 	if window <= 0 {
 		window = 2 * time.Second
@@ -147,7 +179,7 @@ func bftTimestamp(parent *types.Header, blockIntervalMs int64, timeDrift uint64,
 	if limit := time.Duration(timeDrift) * time.Second / 2; window > limit {
 		window = limit
 	}
-	return timestamp, now.Add(window)
+	return window
 }
 
 // proposeBft hands a built block to the consensus node through the engine.

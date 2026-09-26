@@ -20,7 +20,8 @@ NODES=7 ./setup.sh  # node keys and accounts, genesis (BFT_BLOCK=200 by default)
 ./twin.sh           # NODES=7: node2's key on a second server
 ./import.sh         # tampered commit seals, imported on a fresh node (needs build/bin/tamper)
 ./measure.py        # latency, idle interval, load (§11.3); with NODE_ARGS="--metadium.block.idleseal 100"
-                    # for the private operating profile
+                    # for the private operating profile; --metrics for the node timers (M-05/07/09/10)
+./syncspeed.sh      # full-sync verification speed, PoA and PBFT segments (M-08)
 ./stop.sh --clean   # remove containers, data and the generated files
 ```
 
@@ -123,3 +124,13 @@ import just below its block:
 - S-10: a PBFT block one seal short of the quorum, with a seal by a key outside the set,
   with one validator's seal twice, and with its round changed under the seals;
 - the untouched file imports to the end, on node1's chain.
+
+`measure.py --metrics` reads each validator's `/debug/metrics` (through `docker exec`), so
+the nodes must run with `NODE_ARGS="--metrics --metrics.addr 127.0.0.1"`, plus
+`--metadium.block.idleseal 100` for the operating profile. It reports these timers:
+- `metabft/wal/sync` (M-05);
+- `metabft/proposal/verify` and `metabft/proposal/execute` against the import's `chain/execution` (M-07);
+- `miner/bft/floorcheck` (M-09);
+- `metabft/proposal/sidecars` (M-10).
+
+For the fixed-interval profile (M-04), deploy with `BLOCK_CREATION_TIME=2000` and leave idleseal off.

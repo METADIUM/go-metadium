@@ -41,7 +41,7 @@ type fakeProposer struct {
 	submitted chan *types.Block
 }
 
-func (p *fakeProposer) ProposalWanted(height uint64, pendingTxs bool) bool {
+func (p *fakeProposer) ProposalWanted(height uint64, pendingTxs bool, _ time.Duration) bool {
 	return height == 1 && p.wanted.Load()
 }
 
