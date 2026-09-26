@@ -609,19 +609,31 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 	// not (a new round, or transactions that arrived after its fill).
 	bftChain := w.chainConfig.BftBlock != nil
 	retry := false
+	// send gives up when the worker is closing: mainLoop, the receiver, may
+	// have returned already, and close waits for this loop.
+	send := func() bool {
+		select {
+		case w.newWorkCh <- &newWorkReq{interrupt: nil, timestamp: time.Now().Unix()}:
+			return true
+		case <-w.exitCh:
+			return false
+		}
+	}
 	commitSimple := func() {
 		if bftChain {
 			if atomic.LoadInt32(&w.busyMining) != 0 {
 				retry = true
 				return
 			}
-			w.newWorkCh <- &newWorkReq{interrupt: nil, timestamp: time.Now().Unix()}
-			w.newTxs.Store(0)
+			if send() {
+				w.newTxs.Store(0)
+			}
 			return
 		}
 		if atomic.CompareAndSwapInt32(&w.busyMining, 0, 1) {
-			w.newWorkCh <- &newWorkReq{interrupt: nil, timestamp: time.Now().Unix()}
-			w.newTxs.Store(0)
+			if send() {
+				w.newTxs.Store(0)
+			}
 			atomic.StoreInt32(&w.busyMining, 0)
 		}
 	}

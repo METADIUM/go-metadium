@@ -332,4 +332,9 @@ func TestBlockChainSidecars(t *testing.T) {
 	if err := chain.haveSidecars(other); err != nil || fetched != 2 {
 		t.Errorf("sidecars in the pool: %v after %d fetches", err, fetched)
 	}
+	// Found in the pool, they are served under the block's hash too, so a
+	// validator fetching them need not find the proposer (§11.3 M-10).
+	if got := bc.GetBlobSidecars(other.Hash()); len(got) != 1 {
+		t.Errorf("pool sidecars not recorded under the proposal's hash: %d", len(got))
+	}
 }

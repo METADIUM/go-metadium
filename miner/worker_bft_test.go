@@ -39,6 +39,7 @@ import (
 type fakeProposer struct {
 	wanted    atomic.Bool
 	submitted chan *types.Block
+	onSubmit  func(*types.Block) // called before the block is passed on
 }
 
 func (p *fakeProposer) ProposalWanted(height uint64, pendingTxs bool, _ time.Duration) bool {
@@ -46,6 +47,9 @@ func (p *fakeProposer) ProposalWanted(height uint64, pendingTxs bool, _ time.Dur
 }
 
 func (p *fakeProposer) SubmitBlock(b *types.Block) error {
+	if p.onSubmit != nil {
+		p.onSubmit(b)
+	}
 	p.submitted <- b
 	return nil
 }
@@ -168,6 +172,37 @@ func TestWorkerProposesAtPBFTHeight(t *testing.T) {
 	chain := metabft.NewBlockChain(b.chain, engine, nil)
 	if err := chain.VerifyBlock(blk, true); err != nil {
 		t.Errorf("the proposal fails the validators' checks: %v", err)
+	}
+}
+
+// TestWorkerRecordsSidecarsUnderSealedHash: sealing a proposal sets a
+// random PoA nonce, which changes its hash. The blob sidecars must be
+// served under the hash of the block the node proposes, and be there
+// before it is submitted; under the unsealed hash no validator missing
+// them could fetch them (§11.3 M-10).
+func TestWorkerRecordsSidecarsUnderSealedHash(t *testing.T) {
+	var poaGates atomic.Int32
+	engine, proposer := newBftWorkerEnv(t, &poaGates)
+	w, b := newTestWorker(t, bftWorkerConfig(), engine, rawdb.NewMemoryDatabase(), 0)
+	defer w.close()
+
+	genesis := b.chain.Genesis()
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), ParentHash: genesis.Hash(), Difficulty: big.NewInt(1)})
+	sidecars := []*types.BlobTxSidecar{{}}
+	var atSubmit int
+	proposer.onSubmit = func(sub *types.Block) { atSubmit = len(b.chain.GetBlobSidecars(sub.Hash())) }
+	w.proposeBft(block, &environment{sidecars: sidecars}, time.Now())
+	var sub *types.Block
+	select {
+	case sub = <-proposer.submitted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing submitted")
+	}
+	if sub.Hash() == block.Hash() {
+		t.Fatal("sealing did not change the hash; the test proves nothing")
+	}
+	if atSubmit != 1 {
+		t.Errorf("%d sidecars under the proposed block's hash when it was submitted, want 1", atSubmit)
 	}
 }
 

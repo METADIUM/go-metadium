@@ -435,13 +435,23 @@ func (e *Engine) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	if !isBft(chain, block.Number()) {
 		return e.legacy.Seal(chain, block, results, stop)
 	}
+	return e.SubmitProposal(e.SealProposal(block))
+}
+
+// SealProposal attaches the PoA seal fields (nonce, mixHash) to a PBFT
+// proposal: they are part of the header every validator checks, and of the
+// digest they agree on. The nonce is random, so the proposal's hash is
+// known only from the block returned here; anything stored under it, like
+// the blob sidecars validators fetch before voting, must use that hash.
+func (e *Engine) SealProposal(block *types.Block) *types.Block { return e.legacy.SealPoA(block) }
+
+// SubmitProposal hands a sealed proposal to the consensus node.
+func (e *Engine) SubmitProposal(block *types.Block) error {
 	p := e.getProposer()
 	if p == nil {
 		return errSealingNotRunning
 	}
-	// The PoA seal fields (nonce, mixHash) are part of the header every
-	// validator checks, and of the digest they agree on.
-	return p.SubmitBlock(e.legacy.SealPoA(block))
+	return p.SubmitBlock(block)
 }
 
 // SealHash implements consensus.Engine.

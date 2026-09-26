@@ -197,6 +197,13 @@ func (n *Node) ProposalWanted(height uint64, pendingTxs bool, minGap time.Durati
 		return true
 	case pendingTxs:
 		at := n.paceFrom + minGap
+		// Never later than an empty block would be: pacing assumes
+		// blockCreationTime <= EmptyBlockInterval, which governance can
+		// break at any time, and past it round 0 would time out on every
+		// height (review on #174).
+		if limit := n.committedAt + n.cfg.Config.EmptyBlockInterval; at > limit {
+			at = limit
+		}
 		if wait := at - n.now(); wait > 0 {
 			if n.paceTimer == nil || n.paceAt != at {
 				if n.paceTimer != nil {

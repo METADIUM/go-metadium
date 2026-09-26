@@ -319,7 +319,7 @@ func TestNodePacesRound0(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	gap := time.Second
+	gap := nodeTestConfig.EmptyBlockInterval / 2
 	if nd.ProposalWanted(1, true, gap) {
 		t.Fatal("a paced block wanted before the gap")
 	}
@@ -330,6 +330,15 @@ func TestNodePacesRound0(t *testing.T) {
 	}
 	if wakes.Load() == before {
 		t.Fatal("builder not woken when the gap passed")
+	}
+	// A gap beyond the empty-block interval (governance's blockCreationTime
+	// set above it) is capped there, so round 0 cannot time out waiting.
+	if nd.ProposalWanted(1, true, time.Hour) {
+		t.Fatal("a gap beyond EmptyBlockInterval wanted a block before it")
+	}
+	c.clock.Run(nodeTestConfig.EmptyBlockInterval - gap)
+	if !nd.ProposalWanted(1, true, time.Hour) {
+		t.Fatal("no block wanted at EmptyBlockInterval with a longer gap")
 	}
 	nd.RequestProposal(1, 1)
 	if !nd.ProposalWanted(1, true, time.Hour) {

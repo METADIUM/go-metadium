@@ -22,6 +22,7 @@ NODES=7 ./setup.sh  # node keys and accounts, genesis (BFT_BLOCK=200 by default)
 ./measure.py        # latency, idle interval, load (§11.3); with NODE_ARGS="--metadium.block.idleseal 100"
                     # for the private operating profile; --metrics for the node timers (M-05/07/09/10)
 ./syncspeed.sh      # full-sync verification speed, PoA and PBFT segments (M-08)
+./sidecar.sh        # pbftfault + metrics build: blob sidecars fetched over a slow link (M-10)
 ./stop.sh --clean   # remove containers, data and the generated files
 ```
 
@@ -134,3 +135,13 @@ the nodes must run with `NODE_ARGS="--metrics --metrics.addr 127.0.0.1"`, plus
 - `metabft/proposal/sidecars` (M-10).
 
 For the fixed-interval profile (M-04), deploy with `BLOCK_CREATION_TIME=2000` and leave idleseal off.
+
+`sidecar.sh` (§11.3 M-10) needs a pbftfault build with the timers
+(`NODE_ARGS="--metrics --metrics.addr 127.0.0.1 --metadium.block.idleseal 100"`), the `blobs` tool
+(`go build -o build/bin/blobs ./tests/private-net-pbft/blobs`) and `tc` in the image (iproute2).
+- node3 runs `sidecar-fetch`: it disregards its blob pool when checking a proposal, so it fetches every
+  blob block's sidecars from its peers.
+- The validators above the quorum are stopped, so every block needs node3's vote.
+- node3's links are then slowed both ways, for each one-way delay / rate in `PROFILES`, and `PER`
+  full-blob blocks are sent (2 × 128 KiB).
+- It reports node3's fetch time, counting only successful fetches. A block that does not commit is a failure, and so is a proposal node3 refuses for its sidecars. node3's log is saved to `logs/sidecar-node3.log` before it is recreated without the fault.

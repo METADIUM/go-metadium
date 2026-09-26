@@ -1,10 +1,12 @@
 # The PBFT network's image: the PoA network's, plus iptables, so faults.sh
-# can partition validators while keeping each side connected (S-06).
+# can partition validators while keeping each side connected (S-06), and
+# iproute2, so sidecar.sh can put a validator behind a slow link (M-10).
 ARG BASE_IMAGE=ubuntu:22.04
 FROM ${BASE_IMAGE}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    iproute2 \
     iptables \
     libjemalloc2 \
     liblz4-1 \
