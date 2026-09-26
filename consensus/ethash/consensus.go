@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	metaminer "github.com/ethereum/go-ethereum/metadium/miner"
 	"github.com/ethereum/go-ethereum/params"
@@ -94,6 +95,7 @@ var (
 	errDuplicateUncle  = errors.New("duplicate uncle")
 	errUncleIsAncestor = errors.New("uncle is ancestor")
 	errDanglingUncle   = errors.New("uncle's parent is not ancestor")
+	errPbftFields      = errors.New("PBFT fields on a header outside PBFT")
 )
 
 // Author implements consensus.Engine, returning the header's coinbase as the
@@ -115,7 +117,23 @@ func (ethash *Ethash) VerifyHeader(chain consensus.ChainHeaderReader, header *ty
 		return consensus.ErrUnknownAncestor
 	}
 	// Sanity checks passed, do a proper verification
-	return ethash.verifyHeader(chain, header, parent, false, time.Now().Unix())
+	return ethash.verifyHeader(chain, header, parent, false, time.Now().Unix(), false)
+}
+
+// VerifyHeaderPBFT runs this engine's checks on a PBFT header for the PBFT
+// engine (consensus/metabft), which verifies the proposer signature and the
+// commit seals itself. Two checks are skipped: the rejection of PBFT fields,
+// and the PoA signer check, whose fallbacks for missing governance data and
+// whose proposer limit do not apply at PBFT heights (design §4.3, §7.7).
+func (ethash *Ethash) VerifyHeaderPBFT(chain consensus.ChainHeaderReader, header, parent *types.Header) error {
+	return ethash.verifyHeader(chain, header, parent, false, time.Now().Unix(), true)
+}
+
+// VerifyHeaderWithParent is VerifyHeader against a given parent, which need
+// not be in the chain yet: the PBFT engine verifies a batch that mixes PoA
+// and PBFT heights one header at a time, each against the one before it.
+func (ethash *Ethash) VerifyHeaderWithParent(chain consensus.ChainHeaderReader, header, parent *types.Header) error {
+	return ethash.verifyHeader(chain, header, parent, false, time.Now().Unix(), false)
 }
 
 // VerifyHeaders is similar to VerifyHeader, but verifies a batch of headers
@@ -146,7 +164,7 @@ func (ethash *Ethash) VerifyHeaders(chain consensus.ChainHeaderReader, headers [
 			if parent == nil {
 				err = consensus.ErrUnknownAncestor
 			} else {
-				err = ethash.verifyHeader(chain, header, parent, false, unixNow)
+				err = ethash.verifyHeader(chain, header, parent, false, unixNow, false)
 			}
 			select {
 			case <-abort:
@@ -214,7 +232,7 @@ func (ethash *Ethash) VerifyUncles(chain consensus.ChainReader, block *types.Blo
 		if ancestors[uncle.ParentHash] == nil || uncle.ParentHash == block.ParentHash() {
 			return errDanglingUncle
 		}
-		if err := ethash.verifyHeader(chain, uncle, ancestors[uncle.ParentHash], true, time.Now().Unix()); err != nil {
+		if err := ethash.verifyHeader(chain, uncle, ancestors[uncle.ParentHash], true, time.Now().Unix(), false); err != nil {
 			return err
 		}
 	}
@@ -224,10 +242,15 @@ func (ethash *Ethash) VerifyUncles(chain consensus.ChainReader, block *types.Blo
 // verifyHeader checks whether a header conforms to the consensus rules of the
 // stock Ethereum ethash engine.
 // See YP section 4.3.4. "Block Header Validity"
-func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header, uncle bool, unixNow int64) error {
+func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header, uncle bool, unixNow int64, pbft bool) error {
 	// Ensure that the header's extra-data section is of a reasonable size
 	if uint64(len(header.Extra)) > params.MaximumExtraDataSize {
 		return fmt.Errorf("extra-data too long: %d > %d", len(header.Extra), params.MaximumExtraDataSize)
+	}
+	if !pbft {
+		if err := verifyNoPbftFields(header); err != nil {
+			return err
+		}
 	}
 	// Verify the header's timestamp
 	if !uncle {
@@ -305,7 +328,7 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 		return err
 	}
 	// Metadium: Check if it's generated and signed by a registered node
-	if !metaminer.IsPoW() && !metaminer.VerifyBlockSig(header.Number, header.Coinbase, header.MinerNodeId, header.Root, header.MinerNodeSig, chain.Config().IsPangyo(header.Number)) {
+	if !pbft && !metaminer.IsPoW() && !metaminer.VerifyBlockSig(header.Number, header.Coinbase, header.MinerNodeId, header.Root, header.MinerNodeSig, chain.Config().IsPangyo(header.Number)) {
 		return consensus.ErrUnauthorized
 	}
 	// Metadium PoA (post-Avocado): verify mixHash via hashimeta(sealHash, nonce).
@@ -545,6 +568,19 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 // clean sync over the whole post-Camellia range has to pass before this is
 // deployed. The failure message carries the block, the parent and both values so
 // that a violation found that way is diagnosable rather than just a stall.
+// verifyNoPbftFields rejects headers carrying the PBFT fields. This engine
+// only ever verifies non-PBFT heights (PBFT blocks go through the PBFT engine,
+// docs/pbft-consensus-design.md §7.2), so the rule needs no chain config.
+// Without it, bytes appended after BlobGasUsed — which releases before the
+// fields existed fail to decode — would decode into CommitSeals, leave the
+// hash unchanged, and be stored and relayed with the block.
+func verifyNoPbftFields(header *types.Header) error {
+	if header.BftRound != 0 || header.CommitSeals != nil {
+		return fmt.Errorf("%w: bftRound %d, %d commit seals", errPbftFields, header.BftRound, len(header.CommitSeals))
+	}
+	return nil
+}
+
 func verifyCamelliaHeaderFields(header, parent *types.Header) error {
 	// EIP-4788's parentBeaconRoot means nothing here -- Metadium has no beacon
 	// chain, and the PoA sealing path never sets the field; only the engine-API
@@ -639,9 +675,20 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 
 	// Metadium PoA: sign header.Root with this node's private key.
 	if !metaminer.IsPoW() {
-		coinbase, nodeId, sig, err := metaminer.SignBlock(header.Number, header.Root, chain.Config().IsPangyo(header.Number))
+		isBft := chain.Config().IsBft(header.Number)
+		coinbase, nodeId, sig, err := metaminer.SignBlock(header.Number, header.Root, chain.Config().IsPangyo(header.Number) || isBft)
 		if err != nil {
 			return nil, err
+		}
+		if isBft {
+			// PBFT form (docs/pbft-consensus-design.md §5.3): the Pangyo
+			// signature over height and root, and the builder names itself in
+			// MinerNodeId, since the validator set is keyed by node key.
+			pub, err := crypto.Ecrecover(BftBuilderSigHash(header.Number, header.Root), sig)
+			if err != nil {
+				return nil, fmt.Errorf("builder signature for block %v: %w", header.Number, err)
+			}
+			nodeId = pub[1:]
 		}
 		header.Coinbase = coinbase
 		header.MinerNodeId = nodeId
@@ -706,6 +753,13 @@ var (
 	u256_8  = uint256.NewInt(8)
 	u256_32 = uint256.NewInt(32)
 )
+
+// BftBuilderSigHash is what a PBFT block's builder signs as MinerNodeSig:
+// keccak256(number || root), the Pangyo form (metadium signBlock), which
+// ties the signature to the height.
+func BftBuilderSigHash(number *big.Int, root common.Hash) []byte {
+	return crypto.Keccak256(append(number.Bytes(), root.Bytes()...))
+}
 
 // AccumulateRewards credits the coinbase of the given block with the mining
 // reward. The total reward consists of the static block reward and rewards for

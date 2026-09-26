@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
@@ -49,6 +50,16 @@ var (
 	// headNum - (GovNodeCount/2 + 1). Returns nil when no block at or below
 	// head is final yet, or when governance state is not yet loaded.
 	GetFinalizedBlockNumberFunc func(headNum *big.Int) *big.Int
+
+	// BftValidatorsFunc returns the PBFT validator set for height: the
+	// governance nodes' enode public keys (64 bytes each) in governance order,
+	// with each node's coinbase, read from the state at height-1
+	// (docs/pbft-consensus-design.md §4.2).
+	BftValidatorsFunc func(height *big.Int) (nodeIds [][]byte, coinbases []common.Address, err error)
+	// BftRegistryFunc returns the governance registry's address as of the
+	// state at height, for reading governance from a state that is not
+	// committed yet (docs/pbft-consensus-design.md §9.3.1).
+	BftRegistryFunc func(height *big.Int) (common.Address, error)
 	// Add TRS
 	GetTRSListMapFunc func(height *big.Int) (trsListMap map[common.Address]bool, trsSubscribe bool, err error)
 )
@@ -224,3 +235,43 @@ func TRSRestricted(trsListMap map[common.Address]bool, from common.Address, to *
 }
 
 // EOF
+
+// BftRegistry returns the governance registry address (BftRegistryFunc).
+func BftRegistry(height *big.Int) (common.Address, error) {
+	if BftRegistryFunc == nil {
+		return common.Address{}, ErrNotInitialized
+	}
+	return BftRegistryFunc(height)
+}
+
+// BftValidators returns the PBFT validator set for height (BftValidatorsFunc).
+func BftValidators(height *big.Int) (nodeIds [][]byte, coinbases []common.Address, err error) {
+	if BftValidatorsFunc == nil {
+		return nil, nil, ErrNotInitialized
+	}
+	return BftValidatorsFunc(height)
+}
+
+// bftBlock is the chain's PBFT switch block (nil: no switch). The eth
+// service sets it at start-up, before the metadium admin starts, so the
+// admin can tell PoA heights from PBFT ones without the chain config.
+var bftBlock atomic.Pointer[big.Int]
+
+// SetBftBlock records the PBFT switch block.
+func SetBftBlock(b *big.Int) {
+	if b == nil {
+		bftBlock.Store(nil)
+		return
+	}
+	bftBlock.Store(new(big.Int).Set(b))
+}
+
+// HasBftBlock reports whether a switch block is recorded, i.e. whether this
+// is a PBFT chain at all.
+func HasBftBlock() bool { return bftBlock.Load() != nil }
+
+// IsBft reports whether height is a PBFT height.
+func IsBft(height *big.Int) bool {
+	b := bftBlock.Load()
+	return b != nil && height != nil && height.Cmp(b) >= 0
+}

@@ -58,6 +58,13 @@ type ChainReader interface {
 	GetBlock(hash common.Hash, number uint64) *types.Block
 }
 
+// PostStateVerifier is implemented by an engine with rules on the state a
+// block leaves behind, which the header alone cannot show. The block
+// validator runs it after the state root check.
+type PostStateVerifier interface {
+	VerifyPostState(chain ChainHeaderReader, header *types.Header, state *state.StateDB) error
+}
+
 // Engine is an algorithm agnostic consensus engine.
 type Engine interface {
 	// Author retrieves the Ethereum address of the account that minted the given

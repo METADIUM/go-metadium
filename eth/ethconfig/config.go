@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/consensus/metabft"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
@@ -185,6 +186,11 @@ func CreateConsensusEngine(config *params.ChainConfig, db ethdb.Database) (conse
 	// NOTE: SetMetadiumConfig() sets params.ConsensusMethod before eth.New()
 	// calls this function, so params.ConsensusMethod is reliable here.
 	if params.ConsensusMethod == params.ConsensusPoA {
+		if config.BftBlock != nil {
+			// PBFT network: PoA below bftBlock, PBFT from it on, one engine
+			// (docs/pbft-consensus-design.md §7.2).
+			return metabft.NewEngine(ethash.NewFaker(), metabft.GovernanceValidators), nil
+		}
 		return ethash.NewFaker(), nil
 	}
 	// Fallback: require an already-merged network for any remaining ethash usage.

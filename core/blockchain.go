@@ -95,16 +95,18 @@ var (
 	errChainStopped         = errors.New("blockchain is stopped")
 	errInvalidOldChain      = errors.New("invalid old chain")
 	errInvalidNewChain      = errors.New("invalid new chain")
+	errReorgBelowFinal      = errors.New("reorg below the finalized PBFT chain")
 )
 
 const (
-	bodyCacheLimit      = 256
-	blockCacheLimit     = 256
-	receiptsCacheLimit  = 32
-	txLookupCacheLimit  = 1024
-	maxFutureBlocks     = 256
-	maxTimeFutureBlocks = 30
-	TriesInMemory       = 128
+	bodyCacheLimit       = 256
+	proposalSidecarLimit = 16 // PBFT proposals whose blob sidecars are kept unwritten
+	blockCacheLimit      = 256
+	receiptsCacheLimit   = 32
+	txLookupCacheLimit   = 1024
+	maxFutureBlocks      = 256
+	maxTimeFutureBlocks  = 30
+	TriesInMemory        = 128
 
 	// BlockChainVersion ensures that an incompatible database forces a resync from scratch.
 	//
@@ -232,6 +234,12 @@ type BlockChain struct {
 	// block. Set externally after construction; nil disables wire fetching.
 	MissingBlobSidecarFn func(block *types.Block)
 
+	// proposalSidecars holds the blob sidecars of PBFT proposals, blocks
+	// agreed on before they are written, so GetBlobSidecars can serve them
+	// by hash to the validators that need them before voting
+	// (docs/pbft-consensus-design.md §12). Unused without PBFT.
+	proposalSidecars *lru.Cache[common.Hash, []*types.BlobTxSidecar]
+
 	hc            *HeaderChain
 	rmLogsFeed    event.Feed
 	chainFeed     event.Feed
@@ -299,21 +307,23 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	log.Info("")
 
 	bc := &BlockChain{
-		chainConfig:   chainConfig,
-		cacheConfig:   cacheConfig,
-		db:            db,
-		triedb:        triedb,
-		triegc:        prque.New[int64, common.Hash](nil),
-		quit:          make(chan struct{}),
-		chainmu:       syncx.NewClosableMutex(),
-		bodyCache:     lru.NewCache[common.Hash, *types.Body](bodyCacheLimit),
-		bodyRLPCache:  lru.NewCache[common.Hash, rlp.RawValue](bodyCacheLimit),
-		receiptsCache: lru.NewCache[common.Hash, []*types.Receipt](receiptsCacheLimit),
-		blockCache:    lru.NewCache[common.Hash, *types.Block](blockCacheLimit),
-		txLookupCache: lru.NewCache[common.Hash, txLookup](txLookupCacheLimit),
-		futureBlocks:  lru.NewCache[common.Hash, *types.Block](maxFutureBlocks),
-		engine:        engine,
-		vmConfig:      vmConfig,
+		chainConfig: chainConfig,
+		cacheConfig: cacheConfig,
+		db:          db,
+		triedb:      triedb,
+		triegc:      prque.New[int64, common.Hash](nil),
+		quit:        make(chan struct{}),
+		chainmu:     syncx.NewClosableMutex(),
+		bodyCache:   lru.NewCache[common.Hash, *types.Body](bodyCacheLimit),
+
+		proposalSidecars: lru.NewCache[common.Hash, []*types.BlobTxSidecar](proposalSidecarLimit),
+		bodyRLPCache:     lru.NewCache[common.Hash, rlp.RawValue](bodyCacheLimit),
+		receiptsCache:    lru.NewCache[common.Hash, []*types.Receipt](receiptsCacheLimit),
+		blockCache:       lru.NewCache[common.Hash, *types.Block](blockCacheLimit),
+		txLookupCache:    lru.NewCache[common.Hash, txLookup](txLookupCacheLimit),
+		futureBlocks:     lru.NewCache[common.Hash, *types.Block](maxFutureBlocks),
+		engine:           engine,
+		vmConfig:         vmConfig,
 	}
 	bc.flushInterval.Store(int64(cacheConfig.TrieTimeLimit))
 	bc.forker = NewForkChoice(bc, shouldPreserve)
@@ -1895,6 +1905,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 			return it.index, err
 		}
 		// Persist collected blob sidecars.
+		blobSidecars = bc.completeSidecars(block.Hash(), blobSidecars, blobTxCount)
 		if len(blobSidecars) > 0 {
 			rawdb.WriteBlobSidecars(bc.db, block.Hash(), block.NumberU64(), blobSidecars)
 		}
@@ -2255,6 +2266,18 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Block) error {
 		}
 	}
 
+	// PBFT (docs/pbft-consensus-design.md §5.4): a committed block is final,
+	// so no reorg may drop one, whatever the new chain's weight. oldChain
+	// runs from the old head down, so its first block is the highest one
+	// dropped: if any dropped block is at a PBFT height, that one is, even
+	// when the fork is rooted in the PoA segment below bftBlock. Checked
+	// before the canonical chain changes; the fork's blocks stay stored as
+	// a side chain, as for any fork that does not win.
+	if len(oldChain) > 0 {
+		if dropped := oldChain[0]; bc.chainConfig.IsBft(dropped.Number()) {
+			return fmt.Errorf("%w: would drop final block %d (%x)", errReorgBelowFinal, dropped.NumberU64(), dropped.Hash())
+		}
+	}
 	// Ensure the user sees large reorgs
 	if len(oldChain) > 0 && len(newChain) > 0 {
 		logFn := log.Info

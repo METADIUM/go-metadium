@@ -585,18 +585,55 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 	// BlockEmptyInterval needs the same wake-up for a different reason: a round
 	// it withholds builds nothing, so an idle chain has no round in flight at
 	// all and the arrival would otherwise wait for the tick.
+	//
+	// A PBFT chain needs it too: pending transactions are what let the
+	// round-0 proposer build before the empty-block interval (design §4.5).
+	// It is subscribed for the whole chain, PoA bootstrap segment included,
+	// which costs that segment a round per burst; keep it so, or the first
+	// PBFT height loses its transaction wake-up at the switch.
 	var txCh chan core.NewTxsEvent
-	if params.BlockIdleSealTime > 0 || params.BlockEmptyInterval > 0 {
+	if params.BlockIdleSealTime > 0 || params.BlockEmptyInterval > 0 || w.chainConfig.BftBlock != nil {
 		txCh = make(chan core.NewTxsEvent, 64)
 		sub := w.pool.SubscribeTransactions(txCh, true)
 		defer sub.Unsubscribe()
 	}
 
 	// commitSimple just starts a new commitNewWork
+	//
+	// On a PBFT chain it does not hold busyMining across the send: commitWork
+	// takes it itself, as soon as mainLoop receives, and would find it still
+	// held here often enough to drop the request, leaving the proposal to the
+	// next 1 s tick (up to a second of confirmation latency with idleseal on
+	// a 7-node network). A request that finds a build running is retried
+	// shortly instead, since it may carry a proposal the running build does
+	// not (a new round, or transactions that arrived after its fill).
+	bftChain := w.chainConfig.BftBlock != nil
+	retry := false
+	// send gives up when the worker is closing: mainLoop, the receiver, may
+	// have returned already, and close waits for this loop.
+	send := func() bool {
+		select {
+		case w.newWorkCh <- &newWorkReq{interrupt: nil, timestamp: time.Now().Unix()}:
+			return true
+		case <-w.exitCh:
+			return false
+		}
+	}
 	commitSimple := func() {
+		if bftChain {
+			if atomic.LoadInt32(&w.busyMining) != 0 {
+				retry = true
+				return
+			}
+			if send() {
+				w.newTxs.Store(0)
+			}
+			return
+		}
 		if atomic.CompareAndSwapInt32(&w.busyMining, 0, 1) {
-			w.newWorkCh <- &newWorkReq{interrupt: nil, timestamp: time.Now().Unix()}
-			w.newTxs.Store(0)
+			if send() {
+				w.newTxs.Store(0)
+			}
 			atomic.StoreInt32(&w.busyMining, 0)
 		}
 	}
@@ -611,7 +648,21 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 		w.pendingMu.Unlock()
 	}
 
+	// PBFT: the consensus node wakes the worker when it wants a block, so a
+	// proposal does not wait for the 1s tick (nil, never selected, otherwise).
+	bftWake := w.bftProposalWake()
+
 	for {
+		if retry {
+			retry = false
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(bftRetryDelay)
+		}
 		select {
 		case <-w.startCh:
 			w.refreshPending(false)
@@ -620,6 +671,9 @@ func (w *worker) newWorkLoopEx(recommit time.Duration) {
 
 		case head := <-w.chainHeadCh:
 			clearPending(head.Block.NumberU64())
+			commitSimple()
+
+		case <-bftWake:
 			commitSimple()
 
 		case <-txCh:
@@ -939,8 +993,14 @@ func (w *worker) applyTransaction(env *environment, tx *types.Transaction) (*typ
 	if err != nil {
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.SetGas(gp)
+		return receipt, err
 	}
-	return receipt, err
+	// PBFT: on a breach the whole build is abandoned (the finished
+	// transaction cannot be reverted), so env is not restored.
+	if err := w.bftCheckFloor(env, tx); err != nil {
+		return nil, err
+	}
+	return receipt, nil
 }
 
 func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32) error {
@@ -1031,6 +1091,10 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 		from, _ := types.Sender(env.signer, tx)
 
 		// Metadium: TRS (Transaction Restriction Service) filtering
+		if w.bftExcluded(env, tx.Hash()) {
+			txs.Pop()
+			continue
+		}
 		if env.trsSubscribe && metaminer.TRSRestricted(env.trsListMap, from, tx.To()) {
 			log.Debug("included in trsList", "hash", tx.Hash(), "from", from)
 			txs.Pop()
@@ -1057,6 +1121,10 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 			logs, err = w.commitTransaction(env, tx)
 		}
 		switch {
+		case errors.Is(err, errBftFloorBreach):
+			// The state cannot be rolled back past a finished transaction;
+			// this build is abandoned and the next one leaves it out.
+			return err
 		case errors.Is(err, core.ErrNonceTooLow):
 			// New head notification data race between the transaction pool and miner, shift
 			log.Trace("Skipping transaction with low nonce", "hash", ltx.Hash, "sender", from, "nonce", tx.Nonce())
@@ -1203,6 +1271,14 @@ func (w *worker) commitTransactionsEx(env *environment, interrupt *atomic.Int32,
 		// the fill above, which drained txCh, so an arrival during the wait
 		// resets it by taking the txCh branch. Off (0) on the public networks,
 		// where the slot always runs to env.till.
+		// PBFT: an empty build does not hold the slot open (see bftEmptyBuild).
+		if w.chainConfig.IsBft(env.header.Number) && env.tcount == 0 {
+			stopTimer(timer)
+			if w.bftEmptyDue(env.header.Number) {
+				break // propose the empty block now
+			}
+			return true // nothing to propose; the next arrival starts a new build
+		}
 		var (
 			quiet  *time.Timer
 			quietC <-chan time.Time
@@ -1300,6 +1376,10 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 			return nil, fmt.Errorf("invalid timestamp, parent %d given %d", parent.Time, timestamp)
 		}
 		timestamp = parent.Time + 1
+	} else if !metaminer.IsPoW() && w.chainConfig.IsBft(new(big.Int).Add(parent.Number, common.Big1)) {
+		// PBFT: max(parent.Time, now), not timeIt, whose pacing works
+		// against the proposal time bound (design §7.3, §4.5).
+		timestamp, till = bftTimestamp(parent, blockInterval, w.chainConfig.Bft.TimeDrift, time.Now())
 	} else if !metaminer.IsPoW() {
 		// metadium: use timeIt for PoA block timing
 		timestamp, till = w.timeIt(blockInterval)
@@ -1649,35 +1729,18 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 	}
 	if !metaminer.IsPoW() {
 		parent := w.chain.CurrentBlock()
-		// Metadium private PoA: with an empty pool, skip the round entirely
-		// until BlockEmptyInterval has passed since the parent, so an idle
-		// chain does not accumulate empty blocks. Checked before the miner and
-		// mining-token gates below so a skipped round never holds the token.
-		// Off (0) on the public networks, which seal every slot.
-		if params.BlockEmptyInterval > 0 {
-			if pending, _ := w.eth.TxPool().Stats(); pending == 0 &&
-				time.Now().Unix()-int64(parent.Time) < params.BlockEmptyInterval {
-				w.refreshPending(true)
-				return
-			}
-		}
 		height := new(big.Int).Add(parent.Number, common.Big1)
-		if !w.chain.Config().IsBokbunja(height) {
-			if !metaminer.IsMiner() {
-				w.refreshPending(true)
-				return
-			}
+		var build bool
+		if w.chainConfig.IsBft(height) {
+			// PBFT: the consensus node says who proposes and when, empty
+			// blocks included; there is no mining token (design §7.3).
+			build = w.bftProposalWanted(height)
 		} else {
-			ok, err := metaminer.AcquireMiningToken(height, parent.Hash())
-			if ok {
-				log.Debug("Mining Token, successful", "height", height, "parent-hash", parent.Hash())
-			} else {
-				log.Debug("Mining Token, failure", "height", height, "parent-hash", parent.Hash(), "error", err)
-			}
-			if !ok {
-				w.refreshPending(true)
-				return
-			}
+			build = w.poaMayBuild(parent, height)
+		}
+		if !build {
+			w.refreshPending(true)
+			return
 		}
 	}
 	start := time.Now()
@@ -1700,8 +1763,21 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 		return
 	}
 	if !metaminer.IsPoW() { // Metadium
-		if coinbase, err := metaminer.GetCoinbase(work.header.Number); err == nil {
+		coinbase, err := metaminer.GetCoinbase(work.header.Number)
+		if err == nil {
 			work.coinbase = coinbase
+		}
+		if w.chainConfig.IsBft(work.header.Number) {
+			// PBFT: validators execute the block with the header's coinbase,
+			// which must be this node's governance coinbase (the builder
+			// check). Set it before the transactions run, which read it and
+			// pay to it, not only when the block is signed.
+			if err != nil {
+				log.Warn("No governance coinbase; not proposing", "number", work.header.Number, "err", err)
+				work.discard()
+				return
+			}
+			work.header.Coinbase = coinbase
 		}
 		// Add TRS
 		// Set the trsList and the node's trs subscription information to the work.
@@ -1766,6 +1842,32 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 	w.current = work
 }
 
+// poaMayBuild is the PoA gate of commitWork: whether this node builds the
+// block at height on parent now.
+func (w *worker) poaMayBuild(parent *types.Header, height *big.Int) bool {
+	// Metadium private PoA: with an empty pool, skip the round entirely
+	// until BlockEmptyInterval has passed since the parent, so an idle
+	// chain does not accumulate empty blocks. Checked before the miner and
+	// mining-token gates below so a skipped round never holds the token.
+	// Off (0) on the public networks, which seal every slot.
+	if params.BlockEmptyInterval > 0 {
+		if pending, _ := w.eth.TxPool().Stats(); pending == 0 &&
+			time.Now().Unix()-int64(parent.Time) < params.BlockEmptyInterval {
+			return false
+		}
+	}
+	if !w.chain.Config().IsBokbunja(height) {
+		return metaminer.IsMiner()
+	}
+	ok, err := metaminer.AcquireMiningToken(height, parent.Hash())
+	if ok {
+		log.Debug("Mining Token, successful", "height", height, "parent-hash", parent.Hash())
+	} else {
+		log.Debug("Mining Token, failure", "height", height, "parent-hash", parent.Hash(), "error", err)
+	}
+	return ok
+}
+
 // nolint: govet
 // commit runs any post-transaction state modifications, assembles the final block
 // and commits new work if consensus engine is running.
@@ -1824,7 +1926,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 // In Metadium, uncles are not welcome and difficulty is so low,
 // there's no reason to run miners asynchronously.
 func (w *worker) commitEx(env *environment, interval func(), update bool, start time.Time) error {
-	if !metaminer.IsPoW() {
+	if !metaminer.IsPoW() && !w.chainConfig.IsBft(env.header.Number) {
 		if !w.chain.Config().IsBokbunja(env.header.Number) {
 			if !metaminer.IsMiner() {
 				return errors.New("Not Miner")
@@ -1846,6 +1948,16 @@ func (w *worker) commitEx(env *environment, interval func(), update bool, start 
 		block, err := w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, env.txs, nil, env.receipts, nil)
 		if err != nil {
 			return err
+		}
+		if w.chainConfig.IsBft(block.Number()) {
+			// PBFT: propose rather than seal. The node decides the block with
+			// the other validators and writes it; no LogBlock, no mining
+			// token (design §7.3).
+			w.proposeBft(block, env, start)
+			if update {
+				w.updateSnapshot(env)
+			}
+			return nil
 		}
 		// If we're post merge, just ignore
 		if !w.isTTDReached(block.Header()) {

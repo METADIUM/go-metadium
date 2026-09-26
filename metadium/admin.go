@@ -1332,8 +1332,13 @@ func StartAdmin(stack *node.Node, datadir string) {
 	go func() {
 		peerTime := time.Now()
 		for {
+			// From bftBlock on, consensus replaces the etcd mining token and
+			// work log (docs/pbft-consensus-design.md §7.6): nothing more
+			// to start or to check against. The etcd server stays up for
+			// the membership RPCs; mining and the peer mesh continue.
+			pbft := admin.atPbftHeight()
 			if admin.amPartner() {
-				if admin.self != nil && !admin.etcdIsLeader() {
+				if admin.self != nil && !pbft && !admin.etcdIsLeader() {
 					EtcdStart()
 				}
 				admin.checkMining()
@@ -1349,11 +1354,29 @@ func StartAdmin(stack *node.Node, datadir string) {
 					}
 				}
 			}
-			syncCheck()
+			if !pbft {
+				syncCheck()
+			}
 
 			time.Sleep(5 * time.Second)
 		}
 	}()
+}
+
+// atPbftHeight reports whether the next block is a PBFT one. On a chain
+// without a switch block it answers without asking the node, so the admin
+// loop of Mainnet and Testnet does what it did before (review on #161).
+func (ma *metaAdmin) atPbftHeight() bool {
+	if !metaminer.HasBftBlock() {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	header, err := ma.cli.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return false
+	}
+	return metaminer.IsBft(new(big.Int).Add(header.Number, common.Big1))
 }
 
 func (ma *metaAdmin) addPeer(node *metaNode) error {
@@ -1716,6 +1739,56 @@ func (ma *metaAdmin) acceptUnverifiableBlock(ctx context.Context, height *big.In
 		return false
 	}
 	return height.Uint64() >= head
+}
+
+// bftValidators returns the PBFT validator set for height: governance nodes
+// from the state at height-1, ordered by name as getMetaNodes returns them,
+// with each node's coinbase (its member address, as enodeExists returns).
+// Unlike verifyBlockSig there is no fallback for missing governance data: a
+// PBFT height with no readable set cannot be verified and is not accepted
+// (docs/pbft-consensus-design.md §7.7).
+func bftValidators(height *big.Int) ([][]byte, []common.Address, error) {
+	if admin == nil {
+		return nil, nil, metaminer.ErrNotInitialized
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	num := new(big.Int).Sub(height, common.Big1)
+	if _, _, _, _, _, err := admin.getRegGovEnvContracts(ctx, num); err != nil {
+		return nil, nil, fmt.Errorf("no governance at block %v: %w", num, err)
+	}
+	nodes, err := admin.getMetaNodes(ctx, num)
+	if err != nil {
+		return nil, nil, err
+	}
+	keys := make([][]byte, len(nodes))
+	coinbases := make([]common.Address, len(nodes))
+	for i, n := range nodes {
+		if keys[i], err = hex.DecodeString(n.Enode); err != nil {
+			return nil, nil, fmt.Errorf("node %q: %w", n.Name, err)
+		}
+		coinbases[i] = n.Addr
+	}
+	return keys, coinbases, nil
+}
+
+// bftRegistry returns the registry address as of the state at height. The
+// registry is found once and does not move; the governance contract it
+// names can, which is why callers resolve that one themselves.
+func bftRegistry(height *big.Int) (common.Address, error) {
+	if admin == nil || admin.registry == nil {
+		return common.Address{}, metaminer.ErrNotInitialized
+	}
+	if admin.registry.To != nil {
+		return *admin.registry.To, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addr, err := admin.getRegistryAddress(ctx, admin.cli, registryContract.Abi, height)
+	if err != nil {
+		return common.Address{}, err
+	}
+	return *addr, nil
 }
 
 func verifyBlockSig(height *big.Int, coinbase common.Address, nodeId []byte, hash common.Hash, sig []byte, isPangyo bool) bool {
@@ -2384,6 +2457,8 @@ func init() {
 	metaminer.ReleaseMiningTokenFunc = releaseMiningToken
 	metaminer.HasMiningTokenFunc = hasMiningToken
 	metaminer.GetFinalizedBlockNumberFunc = getFinalizedBlockNumber
+	metaminer.BftValidatorsFunc = bftValidators
+	metaminer.BftRegistryFunc = bftRegistry
 	metaminer.GetTRSListMapFunc = getTRSListMap // Add TRS
 	metaapi.TRSInfo = TRSInfo                   // Add TRS
 	metaapi.Info = Info

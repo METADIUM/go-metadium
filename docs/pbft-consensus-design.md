@@ -236,6 +236,21 @@ deadline(n, r) = roundStart(r)    + BftBaseTimeout * 2^min(r, BftMaxBackoffExp) 
 - **`EmptyBlockInterval` becomes a consensus parameter.** It enters every validator's timeout,
   so **it must not differ between nodes.** It is fixed in the genesis as `bft.emptyBlockInterval` (§8.1).
 - `idleseal` (100ms) is local proposer behaviour, unrelated to consensus. The existing flag stays.
+- **Without `idleseal`, the proposer paces round 0 to `blockCreationTime`** (the fixed-interval
+  profile, §11.3 M-04). A build collects transactions for at most `BftTimeDrift/2`, so that its
+  timestamp stays within the proposal time bound. Left alone, it would propose about 1s after the
+  parent. Instead, with pending transactions the build starts at
+  `parentProposal + blockCreationTime − window`. Here `parentProposal` is when this node made or
+  accepted the parent's PRE-PREPARE, falling back to `committedAt(n-1)` if it saw none. The proposal
+  then goes out about `blockCreationTime` after the parent's. Counting from the parent's proposal,
+  not its commit, keeps the parent's build, check and decision inside the interval, as the PoA timer
+  does. Counted from the commit, the interval came out at 2.77s under load instead of 2.0s. This is
+  local proposer behaviour like `idleseal`: validators accept an early proposal. The start is also
+  capped at `committedAt(n-1) + EmptyBlockInterval`, so a paced proposal is always `BftBaseTimeout`
+  before the round-0 deadline, even when governance sets `blockCreationTime` above
+  `EmptyBlockInterval`. The startup check only warns about that, and governance can change the
+  interval at any time (review on #174). With `idleseal` on, nothing is held: the block is sealed as
+  the pool goes quiet.
 - At startup, check `EmptyBlockInterval >= blockCreationTime` (same constraint as today: an
   `emptyinterval` below the on-chain interval has no effect).
 
@@ -391,6 +406,11 @@ The round in which the block was first proposed is not recorded (not needed for 
 - **Fork choice is decided by finality, not total difficulty.** On the `insertChain` path, reorg requests
   with `blockNumber <= finalizedNumber` are rejected. Committed blocks are final, so this cannot happen
   in normal operation; if it does, it is an attack or a bug.
+- As implemented, `reorg` refuses a change of head that would drop a PBFT block (`errReorgBelowFinal`).
+  The refused fork's blocks are still written as a side chain first, because `writeBlockWithState`
+  runs before `reorg`, as in upstream geth. The insert fails, so the sync layer drops the peer that
+  served the fork. The side-chain blocks never become canonical. They are expected, not a leftover
+  to clean up (review on #154).
 
 ---
 
@@ -504,8 +524,41 @@ honest node look like an equivocator.
   legitimate case of two different COMMIT seals for the same digest.
 - The evidence carries signatures and the ChainID, so **third parties can verify it independently.** It is
   queried with `metabft_getEvidence` and is the basis for the "manual removal via governance" in §12.
-  Gossiping evidence to other nodes is follow-up work.
+  It reaches every node: a node that stores a new pair relays both messages (below).
 - The cache is pruned when the height commits (bounded size). Evidence only appears when someone equivocates.
+
+**Relaying votes**
+
+A validator relays each PREPARE, COMMIT and ROUND-CHANGE once, the first time its cache sees it, to
+the other validators except the peer it came from. PRE-PREPAREs are not relayed: each carries a block,
+and the proposer sends it to everyone itself.
+
+- **Why.** Without relaying, the same node key on two servers is invisible. devp2p keeps one
+  connection per node ID (`DiscAlreadyConnected`), so each validator is connected to only one of the
+  two servers and hears only that one. When both are the proposer, each proposes its own block and
+  prepares it, and no single node receives both PREPAREs. On the private network (§11.2 S-13) the two
+  servers proposed different blocks at round 0 and no node stored evidence. The chain stayed safe:
+  one key is one validator, within f. With relaying, the two conflicting PREPAREs meet at every node,
+  which stores them as evidence.
+- **The pair, too.** A node relays only the first of two conflicting messages it sees. If every node
+  on one side saw the same one first, the other would stop there. So when a node first stores a pair
+  as evidence, it relays both messages once, and every node ends up with the pair. This covers
+  PRE-PREPARE pairs as well, so an equivocating proposer's evidence reaches every node. That is the
+  "gossiping evidence" above, done with the signed messages themselves.
+- **Own key.** A node puts its own votes into the cache when it sends them, so a relayed copy of one
+  comes back as a duplicate. A different vote under its own key is evidence against itself. It is
+  logged as an error: the key is running on another server and one of the two must be stopped (§6.1).
+  A vote under its own key that arrives fresh (this node never sent it) is logged as a warning, not
+  counted and not relayed. It is most likely the other server, but it could also be a copy that was in
+  flight when this node restarted.
+- **Cost.** Each vote goes out (N−1)(N−2) more times across the network, 30 at N = 7. Each node
+  relays the other validators' 2(N−1) votes per height to N−2 peers each. At N = 7 with 100 ms blocks
+  that is about 600 more small messages per second per node, on the order of 100 KB/s. Each relayed
+  copy costs its receiver one signature recovery before the cache drops it. Measured on the private
+  network (N = 7, idle seal 100 ms): confirmation latency p50 205 / p99 235 ms against 198 / 220 ms
+  without relaying, and ~860 transfers/s under load with no round changes.
+- The message shapes and protocol version do not change: a node that does not relay is still
+  compatible, it just cannot detect a split twin.
 
 ### 7.2 Replacing `consensus.Engine`
 
