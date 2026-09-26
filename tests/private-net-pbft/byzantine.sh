@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # byzantine.sh - a misbehaving validator on the running network (§11.2
-# S-04, S-05, S-14, S-16). Needs the pbftfault build:
+# S-04, S-05, S-07, S-14, S-16). Needs the pbftfault build:
 #   go build -tags pbftfault -o build/bin/gmet-fault ./cmd/geth
 #   GMET_BIN=../../build/bin/gmet-fault ./setup.sh ...
 # The fault is switched on per node through METABFT_FAULT (see
@@ -96,6 +96,21 @@ for fault in bad-rewards time-past time-future; do
   set_fault "" "$BAD"
   agree "after $label"
 done
+
+# S-07: node BAD's clock is 5 min ahead. Its proposals are stamped so and
+# refused by the others' bound; it refuses theirs against its own clock, so
+# it votes on nothing, one validator short of all, and follows the chain by
+# import, where the bound does not apply.
+set_fault clock-ahead "$BAD"
+c=$(built_by_bad)
+(( c == 0 )) && pass "S-07 clock 5 min ahead: chain continues, no block of node$BAD's committed in $((3 * NODES)) heights" || fail "S-07: $c blocks by node$BAD committed"
+if r=$(rejected_with "too far from the local clock"); then pass "S-07: its proposals refused by the others (${r:0:160})"; else fail "S-07: no node reports refusing its proposals"; fi
+r=$(rpc "$(port_of "$BAD")" metabft_status '[]' | get '(b.get("lastRejection") or {}).get("reason","")')
+[[ $r == *"too far from the local clock"* ]] && pass "S-07: node$BAD refuses the others' proposals (${r:0:160})" || fail "S-07: node$BAD's last refusal: \"$r\""
+lag=$(( $(block_number "$P1") - $(block_number "$(port_of "$BAD")") ))
+(( lag <= 2 )) && pass "S-07: node$BAD follows the chain by import ($lag behind)" || fail "S-07: node$BAD is $lag blocks behind"
+set_fault "" "$BAD"
+agree "after S-07"
 
 # S-04: node BAD equivocates on its rounds.
 set_fault equivocate "$BAD"
