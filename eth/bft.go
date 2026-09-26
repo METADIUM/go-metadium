@@ -1,6 +1,7 @@
 package eth
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
@@ -295,15 +296,26 @@ func (s *bftService) currentHeight() uint64 {
 	return s.bc.CurrentBlock().Number.Uint64() + 1
 }
 
-// broadcast queues m for every admitted peer without blocking.
+// broadcast queues m for every admitted peer without blocking. The node's
+// own messages go into the dedup cache as well, so a relayed copy of one
+// comes back as a duplicate. A different message under this node's key
+// then means another server is signing with it (§11.2 S-13).
 func (s *bftService) broadcast(m *metabft.Message) {
 	if bftFaultBroadcast(s, m) {
 		return
 	}
+	if verdict, ev := s.cache.Add(s.self, m); verdict == bftproto.Conflict {
+		s.HandleEvidence(ev)
+	}
+	s.send(m, nil)
+}
+
+// send queues m for every admitted peer but from, without blocking.
+func (s *bftService) send(m *metabft.Message, from *bftproto.Peer) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, p := range s.peers {
-		if !p.admitted.Load() {
+		if !p.admitted.Load() || (from != nil && p.ID() == from.ID()) {
 			continue
 		}
 		select {
@@ -339,8 +351,33 @@ func (s *bftService) ValidatorSet(height uint64) (*metabft.ValidatorSet, bool) {
 // relaying peer's admission would lose it for good, since the same message
 // from an admitted peer is then a duplicate; admission lags a set change by
 // up to a head (review on #156).
-func (s *bftService) HandleConsensus(_ *bftproto.Peer, m *metabft.Message) error {
+//
+// Votes (PREPARE, COMMIT, ROUND-CHANGE) are relayed once, as the cache first
+// sees them, to the other validators. Without that, a validator whose key
+// runs on two servers is caught by no one: devp2p keeps one connection per
+// node ID, so each peer hears only one of the two, and two servers
+// preparing their own blocks look like two honest halves (§11.2 S-13).
+// Relayed, the conflicting PREPAREs meet at every node, which stores the
+// evidence, the two servers included; HandleEvidence relays both messages of a
+// new pair, so it does not matter which one a node saw first. A PRE-PREPARE
+// carries a block and is not relayed; the proposer sends it to everyone.
+//
+// A vote of this node's own comes back from the relays as a duplicate, since
+// broadcast put it in the cache. One that arrives fresh was not sent by this
+// node since the cache was last pruned: most likely the other server, though
+// a copy in flight across a restart is possible, so it is a warning; a
+// conflicting pair is evidence. Either way it is kept out of consensus,
+// which counts only this node's own votes for it, and not relayed.
+func (s *bftService) HandleConsensus(from *bftproto.Peer, signer []byte, m *metabft.Message) error {
+	if bytes.Equal(signer, s.self) {
+		log.Warn("Received a vote signed with this node's key that it did not send; is the key running on another server?",
+			"type", m.Type, "height", m.Height, "round", m.Round, "digest", m.Digest, "peer", from.ID())
+		return nil
+	}
 	s.deliver(m)
+	if m.Type != metabft.MsgPreprepare {
+		s.send(m, from)
+	}
 	return nil
 }
 
@@ -355,7 +392,17 @@ func (s *bftService) HandleEvidence(ev *metabft.Evidence) {
 	case err != nil:
 		log.Warn("Equivocation evidence not stored", "height", ev.First.Height, "err", err)
 	case added:
+		// Both relayed once, as the pair is first stored: a node relays only
+		// the first of two it sees, so the nodes that saw the other one
+		// first would otherwise never see this pair (§11.2 S-13).
+		s.send(&ev.First, nil)
+		s.send(&ev.Second, nil)
 		signer, _ := ev.First.Signer()
+		if bytes.Equal(signer, s.self) {
+			log.Error("This node's key signed two different messages; it is running on another server. Stop one now (design §6.1)",
+				"height", ev.First.Height, "round", ev.First.Round, "type", ev.First.Type)
+			return
+		}
 		log.Error("Validator equivocated", "signer", fmt.Sprintf("%x", signer[:8]), "height", ev.First.Height,
 			"round", ev.First.Round, "type", ev.First.Type)
 	}

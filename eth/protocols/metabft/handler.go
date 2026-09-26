@@ -23,8 +23,8 @@ type Backend interface {
 	ValidatorSet(height uint64) (*metabft.ValidatorSet, bool)
 
 	// HandleConsensus receives a message that passed verification and the
-	// dedup cache: the first of its kind from its signer.
-	HandleConsensus(peer *Peer, m *metabft.Message) error
+	// dedup cache: the first of its kind from signer, relayed by peer.
+	HandleConsensus(peer *Peer, signer []byte, m *metabft.Message) error
 
 	// HandleEvidence receives an equivocation, already verified.
 	HandleEvidence(ev *metabft.Evidence)
@@ -149,7 +149,7 @@ func handleConsensus(backend Backend, cache *Cache, peer *Peer, m *metabft.Messa
 	}
 	switch verdict, ev := cache.Add(signer, m); verdict {
 	case Fresh:
-		return backend.HandleConsensus(peer, m)
+		return backend.HandleConsensus(peer, signer, m)
 	case Conflict:
 		backend.HandleEvidence(ev)
 	}

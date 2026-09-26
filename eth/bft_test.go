@@ -142,7 +142,7 @@ func TestBftServiceAdmitsValidatorsOnly(t *testing.T) {
 	var delivered []*metabft.Message
 	s.deliver = func(m *metabft.Message) { delivered = append(delivered, m) }
 	relayed := &metabft.Message{Type: metabft.MsgPrepare, Height: 1}
-	if err := s.HandleConsensus(stranger, relayed); err != nil || len(delivered) != 1 || delivered[0] != relayed {
+	if err := s.HandleConsensus(stranger, nil, relayed); err != nil || len(delivered) != 1 || delivered[0] != relayed {
 		t.Fatalf("a verified message relayed by a non-admitted peer was not passed on: %v, %d", err, len(delivered))
 	}
 
@@ -201,6 +201,112 @@ func TestBftServiceBroadcastDoesNotBlock(t *testing.T) {
 	}
 	if len(stuck.queue) != bftPeerQueue {
 		t.Errorf("queue holds %d, want it full at %d", len(stuck.queue), bftPeerQueue)
+	}
+}
+
+// TestBftServiceRelaysVotes: a fresh vote is relayed once to the other
+// admitted validators, not back to the peer it came from; a PRE-PREPARE is
+// not relayed, and a vote under this node's own key is neither counted nor
+// relayed (§11.2 S-13).
+func TestBftServiceRelaysVotes(t *testing.T) {
+	s, keys, _ := newTestBftService(t, 4)
+	peers := make([]*bftPeer, 3)
+	for i := range peers {
+		peer, _ := testPeer(t, s, keys[i+1], byte(i+1))
+		peers[i] = &bftPeer{Peer: peer, key: crypto.FromECDSAPub(&keys[i+1].PublicKey)[1:], queue: make(chan *metabft.Message, bftPeerQueue)}
+		peers[i].admitted.Store(i < 2) // the third is not a validator
+		s.peers[peer.ID()] = peers[i]
+	}
+	var delivered []*metabft.Message
+	s.deliver = func(m *metabft.Message) { delivered = append(delivered, m) }
+	queued := func() []int {
+		n := make([]int, len(peers))
+		for i, p := range peers {
+			n[i] = len(p.queue)
+			for len(p.queue) > 0 {
+				<-p.queue
+			}
+		}
+		return n
+	}
+	for _, typ := range []metabft.MsgType{metabft.MsgPrepare, metabft.MsgCommit, metabft.MsgRoundChange} {
+		m := &metabft.Message{Type: typ, Height: 1}
+		if err := s.HandleConsensus(peers[0].Peer, peers[0].key, m); err != nil {
+			t.Fatal(err)
+		}
+		if n := queued(); n[0] != 0 || n[1] != 1 || n[2] != 0 {
+			t.Errorf("%v relayed as %v, want [0 1 0]: to the other admitted validator only", typ, n)
+		}
+	}
+	if len(delivered) != 3 {
+		t.Errorf("%d votes counted, want 3", len(delivered))
+	}
+	if err := s.HandleConsensus(peers[0].Peer, peers[0].key, &metabft.Message{Type: metabft.MsgPreprepare, Height: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if n := queued(); n[1] != 0 {
+		t.Errorf("a PRE-PREPARE was relayed")
+	}
+	delivered = nil
+	if err := s.HandleConsensus(peers[0].Peer, s.self, &metabft.Message{Type: metabft.MsgPrepare, Height: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if n := queued(); len(delivered) != 0 || n[1] != 0 {
+		t.Errorf("a vote under this node's own key was counted (%d) or relayed (%v)", len(delivered), n)
+	}
+}
+
+// TestBftServiceTwinKey: two servers with one key prepare different blocks.
+// Whichever of the two PREPAREs reaches the cache first, the other is
+// evidence against this node's own key, and is relayed (§11.2 S-13).
+func TestBftServiceTwinKey(t *testing.T) {
+	for _, ownFirst := range []bool{true, false} {
+		s, keys, _ := newTestBftService(t, 4)
+		prepare := func(digest byte) *metabft.Message {
+			m := &metabft.Message{Type: metabft.MsgPrepare, Height: 1, ChainID: bftTestChainID, Digest: common.Hash{digest}}
+			if err := m.Sign(keys[0]); err != nil {
+				t.Fatal(err)
+			}
+			return m
+		}
+		own, twin := prepare(1), prepare(2)
+		relay, _ := testPeer(t, s, keys[1], 1)
+		other := &bftPeer{Peer: relay, key: crypto.FromECDSAPub(&keys[1].PublicKey)[1:], queue: make(chan *metabft.Message, bftPeerQueue)}
+		other.admitted.Store(true)
+		s.peers["other"] = other
+		// What the protocol handler does with the twin's vote, relayed.
+		arrive := func() {
+			switch verdict, ev := s.cache.Add(s.self, twin); verdict {
+			case bftproto.Fresh:
+				s.HandleConsensus(relay, s.self, twin)
+			case bftproto.Conflict:
+				s.HandleEvidence(ev)
+			}
+		}
+		if ownFirst {
+			s.broadcast(own)
+			arrive()
+		} else {
+			arrive()
+			s.broadcast(own)
+		}
+		evs, err := s.evidence.List()
+		if err != nil || len(evs) != 1 {
+			t.Fatalf("own first %v: %d pieces of evidence, want 1 (%v)", ownFirst, len(evs), err)
+		}
+		signer, _ := evs[0].Second.Signer()
+		if !bytes.Equal(signer, s.self) {
+			t.Errorf("own first %v: the evidence is against another key", ownFirst)
+		}
+		// Both votes went out: own by broadcast, the other as the second of
+		// the stored pair, so peers that saw only one see the conflict too.
+		sent := map[common.Hash]bool{}
+		for len(other.queue) > 0 {
+			sent[(<-other.queue).Digest] = true
+		}
+		if !sent[own.Digest] || !sent[twin.Digest] {
+			t.Errorf("own first %v: sent %v, want both digests", ownFirst, sent)
+		}
 	}
 }
 
