@@ -504,8 +504,39 @@ honest node look like an equivocator.
   legitimate case of two different COMMIT seals for the same digest.
 - The evidence carries signatures and the ChainID, so **third parties can verify it independently.** It is
   queried with `metabft_getEvidence` and is the basis for the "manual removal via governance" in §12.
-  Gossiping evidence to other nodes is follow-up work.
+  It reaches every node: a node that stores a new pair relays both messages (below).
 - The cache is pruned when the height commits (bounded size). Evidence only appears when someone equivocates.
+
+**Relaying votes**
+
+A validator relays each PREPARE, COMMIT and ROUND-CHANGE once, the first time its cache sees it, to
+the other validators except the peer it came from. PRE-PREPAREs are not relayed: each carries a block,
+and the proposer sends it to everyone itself.
+
+- **Why.** Without relaying, the same node key on two servers is invisible. devp2p keeps one
+  connection per node ID (`DiscAlreadyConnected`), so each validator is connected to only one of the
+  two servers and hears only that one. When both are the proposer, each proposes its own block and
+  prepares it, and no single node receives both PREPAREs. On the private network (§11.2 S-13) the two
+  servers proposed different blocks at round 0 and no node stored evidence. The chain stayed safe:
+  one key is one validator, within f. With relaying, the two conflicting PREPAREs meet at every node,
+  which stores them as evidence.
+- **The pair, too.** A node relays only the first of two conflicting messages it sees. If every node
+  on one side saw the same one first, the other would stop there. So when a node first stores a pair
+  as evidence, it relays both messages once, and every node ends up with the pair. This covers
+  PRE-PREPARE pairs as well, so an equivocating proposer's evidence reaches every node. That is the
+  "gossiping evidence" above, done with the signed messages themselves.
+- **Own key.** A node puts its own votes into the cache when it sends them, so a relayed copy of one
+  comes back as a duplicate. A different vote under its own key is evidence against itself. It is
+  logged as an error: the key is running on another server and one of the two must be stopped (§6.1).
+  A vote under its own key that arrives fresh (this node never sent it) is logged as a warning, not
+  counted and not relayed. It is most likely the other server, but it could also be a copy that was in
+  flight when this node restarted.
+- **Cost.** Each vote goes out (N−1)(N−2) more times across the network, 30 at N = 7. Each node
+  relays the other validators' 2(N−1) votes per height to N−2 peers each. At N = 7 with 100 ms blocks
+  that is about 600 more small messages per second per node, on the order of 100 KB/s. Each relayed
+  copy costs its receiver one signature recovery before the cache drops it.
+- The message shapes and protocol version do not change: a node that does not relay is still
+  compatible, it just cannot detect a split twin.
 
 ### 7.2 Replacing `consensus.Engine`
 
