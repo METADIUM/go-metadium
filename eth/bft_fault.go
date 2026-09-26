@@ -10,6 +10,8 @@ package eth
 //	                 distribution (§11.2 S-05)
 //	time-past        its proposals are stamped before their parent (S-14)
 //	time-future      its proposals are stamped 10 s ahead (S-14)
+//	clock-ahead      its clock is 5 min ahead: its proposals are stamped
+//	                 so, and it checks the others' against it (S-07)
 //	equivocate       it sends two different PRE-PREPAREs for its rounds:
 //	                 B first to half its peers, then A to all (S-04)
 //	withhold-commit  it sends no round-0 COMMIT at heights divisible by 10,
@@ -36,6 +38,9 @@ func init() {
 	}
 }
 
+// bftClockSkew is how far ahead clock-ahead puts the node's clock.
+const bftClockSkew = 5 * time.Minute
+
 // resealer redoes the PoA seal fields after a header change.
 var resealer = ethash.NewFaker()
 
@@ -44,8 +49,13 @@ type faultProposer struct {
 	s *bftService
 }
 
+// bftFaultProposer also sets clock-ahead's offset on the chain, which is
+// built by then and not started yet.
 func bftFaultProposer(p metabft.Proposer, s *bftService) metabft.Proposer {
 	switch bftFault {
+	case "clock-ahead":
+		s.chain.SetClockOffset(bftClockSkew)
+		return &faultProposer{p, s}
 	case "bad-rewards", "time-past", "time-future":
 		return &faultProposer{p, s}
 	}
@@ -63,6 +73,8 @@ func (f *faultProposer) SubmitBlock(b *types.Block) error {
 		}
 	case "time-future":
 		h.Time = uint64(time.Now().Unix()) + 10
+	case "clock-ahead":
+		h.Time = uint64(time.Now().Add(bftClockSkew).Unix())
 	}
 	log.Warn("PBFT fault: proposing a tampered block", "fault", bftFault, "number", h.Number)
 	return f.Proposer.SubmitBlock(resealer.SealPoA(b.WithSeal(h)))

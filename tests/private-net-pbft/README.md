@@ -18,6 +18,7 @@ NODES=7 ./setup.sh  # node keys and accounts, genesis (BFT_BLOCK=200 by default)
 ./governance.sh     # NODES=5: remove a validator by ballot, try going below 4, add it back
 ./byzantine.sh      # with a pbftfault build: wrong rewards, bad timestamps, equivocation, re-proposal
 ./twin.sh           # NODES=7: node2's key on a second server
+./import.sh         # tampered commit seals, imported on a fresh node (needs build/bin/tamper)
 ./measure.py        # latency, idle interval, load (§11.3); with NODE_ARGS="--metadium.block.idleseal 100"
                     # for the private operating profile
 ./stop.sh --clean   # remove containers, data and the generated files
@@ -75,7 +76,7 @@ nonce, reason, retry time). It holds its sender's later transactions (nonce orde
 retry, every 30 s, finds it includable (its ballot over, it reverts); replacing that nonce
 frees them at once.
 
-`byzantine.sh` (§11.2 S-04, S-05, S-14, S-16) needs a build with fault injection, which
+`byzantine.sh` (§11.2 S-04, S-05, S-07, S-14, S-16) needs a build with fault injection, which
 the release build does not contain:
 
 ```bash
@@ -92,6 +93,10 @@ the end. A recreate drops the container's log, so every node's log is saved to
 - S-14: its proposals are stamped before their parent, or 10 s ahead; the local-clock bound
   refuses both (a fresh proposal meets it before the header rules; `Time >= parent.Time`
   guards import and is covered by the engine tests);
+- S-07: its clock is 5 min ahead (`clock-ahead`): the others refuse its proposals by the
+  local-clock bound, it refuses theirs against its own clock, so it votes on nothing and
+  follows the chain by import; the chain continues. (A container cannot have its own
+  clock, so the fault moves the node's clock for proposing and for the bound.)
 - S-04: it sends two PRE-PREPAREs for its rounds, B first to half its peers and A to all;
   no block of its commits; the peers that saw both store the evidence and relay the pair,
   so every node ends up with it;
@@ -107,3 +112,14 @@ of a new evidence pair, so the conflicting PREPAREs reach every node. Checks:
 - the chain continues and every node, the twin included, has the same blocks;
 - every other validator stores the same evidence against node2's key;
 - both servers log that their key signed two different messages.
+
+`import.sh` (§11.2 S-10, S-17) exports the chain from node1 (`admin_exportChain`). The
+`tamper` tool (`go build -o build/bin/tamper ./tests/private-net-pbft/tamper`) then rewrites one
+block in a copy. A fresh node with no peers imports each file through `admin_importChain`,
+the full import path. The seals and `BftRound` are outside the block hash, so the next block
+still links to the tampered one and only the seals decide. Each tampered file must stop the
+import just below its block:
+- S-17: a block below `bftBlock` given 5 commit seals;
+- S-10: a PBFT block one seal short of the quorum, with a seal by a key outside the set,
+  with one validator's seal twice, and with its round changed under the seals;
+- the untouched file imports to the end, on node1's chain.

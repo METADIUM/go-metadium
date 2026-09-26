@@ -5,6 +5,7 @@ package metabft
 import (
 	"crypto/ecdsa"
 	"fmt"
+	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -38,4 +39,11 @@ func Equivocate(m *Message, key *ecdsa.PrivateKey, reseal func(*types.Block) *ty
 		return nil, err
 	}
 	return out, nil
+}
+
+// SetClockOffset moves the clock c checks proposal timestamps against by d,
+// as on a node whose clock is off (§11.2 S-07). Fault injection only (build
+// tag pbftfault); call it before the node starts.
+func (c *BlockChain) SetClockOffset(d time.Duration) {
+	c.now = func() time.Time { return time.Now().Add(d) }
 }
