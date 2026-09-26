@@ -13,7 +13,7 @@
 | ID | Item | Design | Status |
 |----|------|--------|--------|
 | G-01 | The external requirement's wording is confirmed and one branch of the §13 decision table is chosen | §13 | [ ] |
-| G-02 | Operations sign-off on the availability trade-off (a 4:3 split halts; downtime figures) | §9.6, §11.2 #6 | [ ] |
+| G-02 | Operations sign-off on the availability trade-off (a 4:3 split halts; downtime figures) | §9.6, §11.2 #6 | [ ] — the downtime figures are in `docs/pbft-test-report.md` §4 (`availability.sh`: the first block 2–12 s after the quorum returns, for outages of 10–180 s). The sign-off itself is for operations |
 | G-03 | `tests/private-net-poa` extended from 3 to 7 nodes (node4–node7, ports 8548–8551) | §11.1 | [x] — met by `tests/private-net-pbft` with `BFT_BLOCK=off`, a plain PoA genesis (no `bftBlock`) on 4–9 nodes (8645–8653), rather than rewriting `private-net-poa`'s fixed 3-node layout. `deploy.sh` and every client test take the RPC URL |
 | G-04 | Baseline on 7 nodes: `camellia-test.sh`, `blob-tx-e2e`, `mixed-tx-e2e` pass before any PBFT change | §11.1 | [x] — run after the fact, on the same 7-node PoA network: `master` (v1.1.4, before any PBFT change) and this branch. Both: `camellia-test.sh` 14 PASS / 0 FAIL / 3 SKIP, `blob-tx-e2e` and `mixed-tx-e2e` ALL PASS |
 

@@ -20,6 +20,7 @@ NODES=7 ./setup.sh  # node keys and accounts, genesis (BFT_BLOCK=200 by default)
 ./twin.sh           # NODES=7: node2's key on a second server
 ./import.sh         # tampered commit seals, imported on a fresh node (needs build/bin/tamper)
 ./transition.sh     # from a stopped state: a switch with 3 governance members fails; a new genesis switches (R-01, R-02)
+./availability.sh   # downtime and recovery time when the quorum is lost: f+1 stopped, 4:3 split (G-02)
 ./measure.py        # latency, idle interval, load (§11.3); with NODE_ARGS="--metadium.block.idleseal 100"
                     # for the private operating profile; --metrics for the node timers (M-05/07/09/10)
 ./syncspeed.sh      # full-sync verification speed, PoA and PBFT segments (M-08)
@@ -154,3 +155,9 @@ For the fixed-interval profile (M-04), deploy with `BLOCK_CREATION_TIME=2000` an
 `BFT_BLOCK=off ./setup.sh` writes a plain PoA genesis without `bftBlock`, for a PoA baseline on the same 4–9 nodes (checklist G-03, G-04). The Camellia and e2e tests take the RPC URL:
 `RPC=http://localhost:8645 ../private-net-poa/camellia-test.sh`,
 `go run ./tests/private-net-poa/blob-tx-e2e/ http://localhost:8645`, and likewise for `mixed-tx-e2e`.
+
+`availability.sh` (checklist G-02, design §9.6) takes the quorum away for each outage length in
+`OUTAGES` (default 10, 60 and 180 s), then restores it and times the first new block at node1. There
+are two ways to take it away: stopping f+1 validators (`stop`), or a 4:3 split with iptables
+(`split`). Round timeouts back off while there is no quorum, so the time to recover depends on how
+long the outage lasted. The results are in `docs/pbft-test-report.md` §4.
