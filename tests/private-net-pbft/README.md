@@ -19,6 +19,7 @@ NODES=7 ./setup.sh  # node keys and accounts, genesis (BFT_BLOCK=200 by default)
 ./byzantine.sh      # with a pbftfault build: wrong rewards, bad timestamps, equivocation, re-proposal
 ./twin.sh           # NODES=7: node2's key on a second server
 ./import.sh         # tampered commit seals, imported on a fresh node (needs build/bin/tamper)
+./transition.sh     # from a stopped state: a switch with 3 governance members fails; a new genesis switches (R-01, R-02)
 ./measure.py        # latency, idle interval, load (§11.3); with NODE_ARGS="--metadium.block.idleseal 100"
                     # for the private operating profile; --metrics for the node timers (M-05/07/09/10)
 ./syncspeed.sh      # full-sync verification speed, PoA and PBFT segments (M-08)
@@ -145,3 +146,13 @@ For the fixed-interval profile (M-04), deploy with `BLOCK_CREATION_TIME=2000` an
 - node3's links are then slowed both ways, for each one-way delay / rate in `PROFILES`, and `PER`
   full-blob blocks are sent (2 × 128 KiB).
 - It reports node3's fetch time, counting only successful fetches. A block that does not commit is a failure, and so is a proposal node3 refuses for its sidecars. node3's log is saved to `logs/sidecar-node3.log` before it is recreated without the fault.
+
+`transition.sh` (checklist R-01, R-02) builds its own networks.
+- It first deploys governance with 3 members (`deploy.sh MEMBERS=3`). Readiness must report the shortfall, and every node must stop at `bftBlock-1` with the reason logged, not continue on PoA (design §9.3).
+- It then recovers the way §9.3 says, with a new genesis, and goes through §9.2 step by step to the switch.
+
+`BFT_BLOCK=off ./setup.sh` writes a plain PoA genesis without `bftBlock`, for a PoA baseline on the same 4–9 nodes (checklist G-03, G-04). The Camellia and e2e tests take the RPC URL:
+`RPC=http://localhost:8645 ../private-net-poa/camellia-test.sh`
+(run it once the chain is past `camelliaBlock`, 100 by default: below it `camellia-test.sh` reports
+"Block is below 100" and the pool rejects blob transactions),
+`go run ./tests/private-net-poa/blob-tx-e2e/ http://localhost:8645`, and likewise for `mixed-tx-e2e`.
