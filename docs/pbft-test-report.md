@@ -91,7 +91,8 @@ block after it is restored:
 | 60 s (round 4) | 2.0 s | 4.0 s |
 | 180 s (round 6) | 9.0 s | 11.9 s |
 
-- "Stop" includes starting the stopped containers and letting them sync.
+- "Stop" includes starting the stopped containers and letting them sync. That time dominates the
+  short outages, which is why the 10 s figure is larger than the 60 s one; it is not a trend.
 - Every node agreed afterwards.
 - Round timeouts back off up to `baseTimeout · 2^maxBackoffExp` = 64 s. So an outage of any length
   should not take much longer than this to recover, because the nodes resynchronise their round
@@ -110,7 +111,12 @@ What operations should plan for:
 
 ## 5. Defects found by the private-network runs
 
-The unit tests did not catch these; the network runs did. Each is fixed, with a test.
+The unit tests did not catch these; the network runs did. Each is fixed, with a test. Code review
+found others that are not listed here, for example:
+- a peer that was refused on metabft/1 lost its whole devp2p connection, and the admission gate sat
+  behind the dedup cache (#156);
+- the governance loop on every node, Mainnet and Testnet included, made a head RPC every 5 s to ask
+  whether it was at a PBFT height, before the free "no switch block" check (#161).
 
 - Headers in a batch across `bftBlock` looked for their parent in the database instead of the
   batch, which broke full sync.
