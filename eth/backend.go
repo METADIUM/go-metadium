@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/clique"
+	"github.com/ethereum/go-ethereum/consensus/metabft"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/bloombits"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -44,6 +45,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	bftproto "github.com/ethereum/go-ethereum/eth/protocols/metabft"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -101,6 +103,8 @@ type Ethereum struct {
 	lock sync.RWMutex // Protects the variadic fields (e.g. gas price and etherbase)
 
 	shutdownTracker *shutdowncheck.ShutdownTracker // Tracks if and when the node has shutdown ungracefully
+
+	bft *bftService // PBFT consensus, on a chain with bftBlock (nil otherwise)
 }
 
 // New creates a new Ethereum object (including the
@@ -159,6 +163,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	// Transfer mining-related config to the ethash config.
 	chainConfig, err := core.LoadChainConfig(chainDb, config.Genesis)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkBftNode(chainConfig, params.ConsensusMethod, config.SyncMode); err != nil {
 		return nil, err
 	}
 	engine, err := ethconfig.CreateConsensusEngine(chainConfig, chainDb)
@@ -233,6 +240,15 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if err != nil {
 		return nil, err
 	}
+	// PBFT (docs/pbft-consensus-design.md §7.2): the engine is the wrapper
+	// exactly when the chain config sets bftBlock.
+	if engine, ok := eth.engine.(*metabft.Engine); ok {
+		eth.bft, err = newBftService(stack.ResolvePath("metabft"), stack.Config().NodeKey(), eth.blockchain, engine,
+			metabft.GovernanceValidators, eth.eventMux)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// The private-PoA block timing flags change when a sealer closes a block.
 	// Metadium mainnet and testnet take their cadence from governance and must
 	// keep the one behavior every node agrees on, so refuse to start rather than
@@ -287,6 +303,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		RequiredBlocks: config.RequiredBlocks,
 	}); err != nil {
 		return nil, err
+	}
+
+	if eth.bft != nil {
+		// A validator fetches a proposal's missing blob sidecars before it
+		// votes (docs/pbft-consensus-design.md §12).
+		eth.bft.chain.FetchSidecars = eth.handler.fetchBlobSidecarsBy
 	}
 
 	eth.miner = miner.New(eth, &config.Miner, eth.blockchain.Config(), eth.EventMux(), eth.engine, eth.isLocalBlock)
@@ -346,6 +368,9 @@ func (s *Ethereum) APIs() []rpc.API {
 
 	// Append any APIs exposed explicitly by the consensus engine
 	apis = append(apis, s.engine.APIs(s.BlockChain())...)
+	if s.bft != nil {
+		apis = append(apis, s.bft.apis()...)
+	}
 
 	// Append all the local APIs and return
 	return append(apis, []rpc.API{
@@ -535,6 +560,9 @@ func (s *Ethereum) Protocols() []p2p.Protocol {
 	if s.config.SnapshotCache > 0 {
 		protos = append(protos, snap.MakeProtocols((*snapHandler)(s.handler), s.snapDialCandidates)...)
 	}
+	if s.bft != nil {
+		protos = append(protos, bftproto.MakeProtocols(s.bft, s.bft.cache)...)
+	}
 	return protos
 }
 
@@ -559,6 +587,9 @@ func (s *Ethereum) Start() error {
 	}
 	// Start the networking layer and the light server if requested
 	s.handler.Start(maxPeers)
+	if s.bft != nil {
+		s.bft.Start()
+	}
 	return nil
 }
 
@@ -569,6 +600,9 @@ func (s *Ethereum) Stop() error {
 	s.ethDialCandidates.Close()
 	s.snapDialCandidates.Close()
 	s.handler.Stop()
+	if s.bft != nil {
+		s.bft.Stop() // before the chain: its last decision is written through it
+	}
 
 	// Then stop everything else.
 	s.bloomIndexer.Close()

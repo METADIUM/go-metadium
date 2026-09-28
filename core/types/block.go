@@ -98,6 +98,13 @@ type Header struct {
 
 	// ParentBeaconRoot was added by EIP-4788 and is ignored in legacy headers.
 	ParentBeaconRoot *common.Hash `json:"parentBeaconBlockRoot" rlp:"optional"`
+
+	// BftRound and CommitSeals are set on PBFT blocks
+	// (docs/pbft-consensus-design.md §5): the round the block was committed in
+	// and the 2f+1 commit seals over it. Both are excluded from Hash(), because
+	// validators collect different seal sets for the same block.
+	BftRound    uint64   `json:"bftRound,omitempty"    rlp:"optional"`
+	CommitSeals [][]byte `json:"commitSeals,omitempty" rlp:"optional"`
 }
 
 // TODO: only used for rlp
@@ -134,6 +141,14 @@ type headerRlp struct {
 	// BlobGasUsed tracks the total blob gas consumed by blob transactions in the block.
 	BlobGasUsed *big.Int `json:"blobGasUsed" rlp:"optional"`
 
+	// PBFT fields. They sit before ParentBeaconRoot, which the conversions
+	// never fill, so that stays the omitted tail: a nil *common.Hash ahead of
+	// set fields would encode as an empty string that does not decode back.
+	// With both at their zero value they are omitted too, which keeps non-PBFT
+	// encodings byte-identical.
+	BftRound    uint64   `rlp:"optional"`
+	CommitSeals [][]byte `rlp:"optional"`
+
 	// ParentBeaconRoot was added by EIP-4788 and is ignored in legacy headers.
 	ParentBeaconRoot *common.Hash `json:"parentBeaconBlockRoot" rlp:"optional"`
 }
@@ -153,6 +168,8 @@ type headerMarshaling struct {
 	BaseFee       *hexutil.Big
 	ExcessBlobGas *hexutil.Big
 	BlobGasUsed   *hexutil.Big
+	BftRound      hexutil.Uint64
+	CommitSeals   []hexutil.Bytes
 	Hash          common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
 }
 
@@ -209,6 +226,8 @@ func headerToHeaderRlp(h *Header) *headerRlp {
 		WithdrawalsHash: h.WithdrawalsHash,
 		ExcessBlobGas:   h.ExcessBlobGas,
 		BlobGasUsed:     h.BlobGasUsed,
+		BftRound:        h.BftRound,
+		CommitSeals:     h.CommitSeals,
 	}
 	return hh
 }
@@ -238,6 +257,8 @@ func headerRlpToHeader(h *headerRlp) *Header {
 		WithdrawalsHash: h.WithdrawalsHash,
 		ExcessBlobGas:   h.ExcessBlobGas,
 		BlobGasUsed:     h.BlobGasUsed,
+		BftRound:        h.BftRound,
+		CommitSeals:     h.CommitSeals,
 	}
 	return hh
 }
@@ -299,6 +320,16 @@ func (h *Header) Hash() common.Hash {
 	if metaminer.IsPoW() {
 		return rlpHash(HeaderToHeaderLegacy(h))
 	}
+	if h.BftRound != 0 || h.CommitSeals != nil {
+		// BlockHash (docs/pbft-consensus-design.md §5.2): the PBFT fields are
+		// the only ones left out. With both at their zero value the optional
+		// tail is omitted, so this equals the encoding without the fields.
+		// The check is != nil, not len > 0: an empty but non-nil slice (an
+		// explicitly encoded empty list) must not change the hash either.
+		cpy := *h
+		cpy.BftRound, cpy.CommitSeals = 0, nil
+		return rlpHash(&cpy)
+	}
 	return rlpHash(h)
 }
 
@@ -336,7 +367,11 @@ var headerSize = common.StorageSize(reflect.TypeOf(Header{}).Size())
 // Size returns the approximate memory used by all internal contents. It is used
 // to approximate and limit the memory consumption of various caches.
 func (h *Header) Size() common.StorageSize {
-	return headerSize + common.StorageSize(len(h.Extra)+len(h.Rewards)+(h.Difficulty.BitLen()+h.Number.BitLen())/8)
+	seals := 0
+	for _, seal := range h.CommitSeals {
+		seals += len(seal)
+	}
+	return headerSize + common.StorageSize(len(h.Extra)+len(h.Rewards)+seals+(h.Difficulty.BitLen()+h.Number.BitLen())/8)
 }
 
 // SanityCheck checks a few basic things -- these checks are way beyond what
@@ -360,8 +395,28 @@ func (h *Header) SanityCheck() error {
 			return fmt.Errorf("too large base fee: bitlen %d", bfLen)
 		}
 	}
+	// Whether the seals are valid is the engine's check; this only bounds the
+	// junk a peer can make us decode and hold.
+	if n := len(h.CommitSeals); n > MaxCommitSeals {
+		return fmt.Errorf("too many commit seals: %d", n)
+	}
+	for i, seal := range h.CommitSeals {
+		if len(seal) != CommitSealLength {
+			return fmt.Errorf("commit seal %d has length %d, want %d", i, len(seal), CommitSealLength)
+		}
+	}
 	return nil
 }
+
+const (
+	// CommitSealLength is the length of one PBFT commit seal, a secp256k1
+	// signature in [R || S || V] form.
+	CommitSealLength = 65
+
+	// MaxCommitSeals bounds CommitSeals in SanityCheck. A header carries at
+	// most one seal per validator; this is far above any validator count.
+	MaxCommitSeals = 1024
+)
 
 // EmptyBody returns true if there is no additional 'body' to complete the header
 // that is: no transactions and no uncles.
@@ -503,6 +558,12 @@ func CopyHeader(h *Header) *Header {
 	if len(h.Rewards) > 0 {
 		cpy.Rewards = make([]byte, len(h.Rewards))
 		copy(cpy.Rewards, h.Rewards)
+	}
+	if h.CommitSeals != nil {
+		cpy.CommitSeals = make([][]byte, len(h.CommitSeals))
+		for i, seal := range h.CommitSeals {
+			cpy.CommitSeals[i] = common.CopyBytes(seal)
+		}
 	}
 	return &cpy
 }

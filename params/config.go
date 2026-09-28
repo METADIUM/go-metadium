@@ -17,6 +17,7 @@
 package params
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -441,6 +442,13 @@ type ChainConfig struct {
 	BokbunjaBlock *big.Int `json:"bokbunjaBlock,omitempty"` // Bokbunja switch block (nil = no fork, 0 = already on bokbunja)
 	CamelliaBlock *big.Int `json:"camelliaBlock,omitempty"` // Camellia (Shanghai + Cancun) switch block (nil = no fork, 0 = already on camellia)
 
+	// PBFT (docs/pbft-consensus-design.md). A private network bootstraps on
+	// PoA and switches to PBFT at BftBlock; nil means PoA forever. Bft holds the
+	// parameters every validator's timers and checks depend on, so they are
+	// fixed in the genesis rather than taken from flags.
+	BftBlock *big.Int   `json:"bftBlock,omitempty"` // PBFT switch block (nil = no switch); must be > 0
+	Bft      *BftConfig `json:"bft,omitempty"`      // PBFT parameters, required iff BftBlock is set
+
 	// Fork scheduling was switched from blocks to timestamps here
 
 	ShanghaiTime *uint64 `json:"shanghaiTime,omitempty"` // Shanghai switch time (nil = no fork, 0 = already on shanghai)
@@ -468,6 +476,30 @@ type EthashConfig struct{}
 // String implements the stringer interface, returning the consensus engine details.
 func (c *EthashConfig) String() string {
 	return "ethash"
+}
+
+// BftConfig holds the PBFT parameters fixed in the genesis. All durations are
+// in seconds.
+type BftConfig struct {
+	EmptyBlockInterval uint64 `json:"emptyBlockInterval"` // longest a proposer may wait before proposing an empty block
+	BaseTimeout        uint64 `json:"baseTimeout"`        // round timeout on top of EmptyBlockInterval (round 0) or the round start
+	MaxBackoffExp      uint64 `json:"maxBackoffExp"`      // round timeouts double per round up to 2^MaxBackoffExp
+	TimeDrift          uint64 `json:"timeDrift"`          // largest |header.Time - local clock| accepted on a proposal
+}
+
+// maxBftBackoffExp caps MaxBackoffExp so BaseTimeout<<MaxBackoffExp cannot
+// overflow and a stuck round still retries within the hour at sane timeouts.
+// It is a bound, not a recommendation: the design's default is 5, i.e. 64s
+// with a 2s base, where 10 would allow about 34 minutes.
+const maxBftBackoffExp = 10
+
+// String implements the stringer interface.
+func (c *BftConfig) String() string {
+	if c == nil {
+		return "<nil>" // an invalid config can reach the banner if validation order changes
+	}
+	return fmt.Sprintf("emptyBlockInterval=%ds baseTimeout=%ds maxBackoffExp=%d timeDrift=%ds",
+		c.EmptyBlockInterval, c.BaseTimeout, c.MaxBackoffExp, c.TimeDrift)
 }
 
 // CliqueConfig is the consensus engine configs for proof-of-authority based sealing.
@@ -553,6 +585,9 @@ func (c *ChainConfig) Description() string {
 	}
 	if c.CamelliaBlock != nil {
 		banner += fmt.Sprintf(" - Camellia Fork:               #%-8v\n", c.CamelliaBlock)
+	}
+	if c.BftBlock != nil {
+		banner += fmt.Sprintf(" - PBFT switch:                 #%-8v (%v)\n", c.BftBlock, c.Bft)
 	}
 	banner += "\n"
 
@@ -686,6 +721,11 @@ func (c *ChainConfig) IsCamellia(num *big.Int) bool {
 	return isForked(c.CamelliaBlock, num)
 }
 
+// IsBft returns whether num is either equal to the PBFT switch block or greater.
+func (c *ChainConfig) IsBft(num *big.Int) bool {
+	return isForked(c.BftBlock, num)
+}
+
 // IsTerminalPoWBlock returns whether the given block is the last block of PoW stage.
 func (c *ChainConfig) IsTerminalPoWBlock(parentTotalDiff *big.Int, totalDiff *big.Int) bool {
 	if c.TerminalTotalDifficulty == nil {
@@ -741,7 +781,7 @@ func (c *ChainConfig) CheckCompatible(newcfg *ChainConfig, height uint64, time u
 
 // CheckConfigForkOrder checks that we don't "skip" any forks, geth isn't pluggable enough
 // to guarantee that forks can be implemented in a different order than on official networks
-// CheckConfigForkOrder deliberately enforces nothing.
+// CheckConfigForkOrder deliberately enforces no fork ordering.
 //
 // Metadium chains carry stored configs written by earlier releases, and some of
 // them do not satisfy upstream's ordering rules. Enforcing at runtime would
@@ -752,7 +792,48 @@ func (c *ChainConfig) CheckCompatible(newcfg *ChainConfig, height uint64, time u
 // the built-in Metadium configs are checked against it in the params tests. That
 // is what would have caught the nil PetersburgBlock that survived two release
 // lines, since nothing else compares a config against the fork sequence.
+//
+// The PBFT settings are the exception and are enforced: they only exist on
+// networks created for PBFT, so no stored config written by an earlier release
+// can carry them, and a wrong value there is a consensus fault from block one.
 func (c *ChainConfig) CheckConfigForkOrder() error {
+	return c.checkBft()
+}
+
+// checkBft validates the PBFT settings (docs/pbft-consensus-design.md §8.1).
+func (c *ChainConfig) checkBft() error {
+	if c.BftBlock == nil {
+		if c.Bft != nil {
+			return errors.New("invalid PBFT config: bft parameters set without bftBlock")
+		}
+		return nil
+	}
+	if c.BftBlock.Sign() <= 0 {
+		// The PoA bootstrap segment deploys the governance contract that the
+		// PBFT validator set is read from, so it cannot be empty.
+		return fmt.Errorf("invalid PBFT config: bftBlock must be greater than 0, have %v", c.BftBlock)
+	}
+	if c.CamelliaBlock == nil || c.CamelliaBlock.Cmp(c.BftBlock) > 0 {
+		// The BFT header fields are appended after the Camellia optional
+		// fields; with those unset they would encode as zero and decode as
+		// non-nil, changing what the earlier fields mean.
+		return fmt.Errorf("invalid PBFT config: camelliaBlock (%v) must be set and not after bftBlock (%v)",
+			c.CamelliaBlock, c.BftBlock)
+	}
+	if c.Bft == nil {
+		return errors.New("invalid PBFT config: bftBlock is set but bft parameters are missing")
+	}
+	switch {
+	case c.Bft.EmptyBlockInterval == 0:
+		return errors.New("invalid PBFT config: bft.emptyBlockInterval must be greater than 0")
+	case c.Bft.BaseTimeout == 0:
+		return errors.New("invalid PBFT config: bft.baseTimeout must be greater than 0")
+	case c.Bft.TimeDrift == 0:
+		return errors.New("invalid PBFT config: bft.timeDrift must be greater than 0")
+	case c.Bft.MaxBackoffExp > maxBftBackoffExp:
+		return fmt.Errorf("invalid PBFT config: bft.maxBackoffExp must be at most %d, have %d",
+			maxBftBackoffExp, c.Bft.MaxBackoffExp)
+	}
 	return nil
 }
 
@@ -902,7 +983,22 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	if isForkBlockIncompatible(c.CamelliaBlock, newcfg.CamelliaBlock, headNumber) {
 		return newBlockCompatError("Camellia fork block", c.CamelliaBlock, newcfg.CamelliaBlock)
 	}
+	if isForkBlockIncompatible(c.BftBlock, newcfg.BftBlock, headNumber) {
+		return newBlockCompatError("PBFT switch block", c.BftBlock, newcfg.BftBlock)
+	}
+	// Once the switch is behind the head, every committed block's timers and
+	// checks were computed with these parameters.
+	if isForked(c.BftBlock, headNumber) && !bftConfigEqual(c.Bft, newcfg.Bft) {
+		return newBlockCompatError("PBFT parameters", c.BftBlock, newcfg.BftBlock)
+	}
 	return nil
+}
+
+func bftConfigEqual(a, b *BftConfig) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // BaseFeeChangeDenominator bounds the amount the base fee can change between blocks.
