@@ -901,6 +901,12 @@ At the same size PBFT is less available than raft: it gives up some availability
 | Staging | 7 | same placement as production (for transition rehearsal, §9.4) |
 | Production | 7 (10 for high availability) | 4+ failure domains, at most `f` per domain |
 
+A verification network of 4 validators on separate servers in one lab is the Development / QA row.
+It tolerates one validator down, and two down stop it until one returns. Shared lab infrastructure
+(switch, power) is one failure domain for all of them. The 4-node downtime estimate above applies.
+The first deployment is signed off on this basis (checklist G-02, #178), and the production
+conditions (7 validators, at most `f` per failure domain) apply to production networks only.
+
 ---
 
 ## 10. Implementation phases
