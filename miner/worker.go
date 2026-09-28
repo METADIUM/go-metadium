@@ -1719,6 +1719,39 @@ func (w *worker) timeIt(blockInterval int64) (timestamp uint64, till time.Time) 
 	return timestamp, till
 }
 
+// setMetadiumWork sets the governance coinbase and the TRS list on a new
+// Metadium block, and reports false when the block must not be built: a
+// PBFT height without a governance coinbase.
+//
+// The TRS list applies whenever governance returns one, whatever the
+// coinbase lookup did. Before PBFT the lookup's error was scoped to its own
+// if; when the PBFT change hoisted it, the TRS condition read that error, and
+// a producer whose lookup failed skipped TRS filtering (review on #178).
+// TestSetMetadiumWorkTRS pins it.
+func (w *worker) setMetadiumWork(work *environment) bool {
+	coinbase, err := metaminer.GetCoinbase(work.header.Number)
+	if err == nil {
+		work.coinbase = coinbase
+	}
+	if w.chainConfig.IsBft(work.header.Number) {
+		// PBFT: validators execute the block with the header's coinbase,
+		// which must be this node's governance coinbase (the builder check).
+		// Set it before the transactions run, which read it and pay to it,
+		// not only when the block is signed.
+		if err != nil {
+			log.Warn("No governance coinbase; not proposing", "number", work.header.Number, "err", err)
+			return false
+		}
+		work.header.Coinbase = coinbase
+	}
+	// Set the trsList and the node's trs subscription information to the work.
+	if trsListMap, trsSubscribe, _ := metaminer.GetTRSListMap(big.NewInt(work.header.Number.Int64() - 1)); trsListMap != nil {
+		work.trsListMap = trsListMap
+		work.trsSubscribe = trsSubscribe
+	}
+	return true
+}
+
 // commitWork generates several new sealing tasks based on the parent block
 // and submit them to the sealer.
 func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
@@ -1763,29 +1796,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 		return
 	}
 	if !metaminer.IsPoW() { // Metadium
-		// cbErr, not err: the TRS condition below reads err, which is
-		// prepareWork's, as it did before PBFT (review on #178).
-		coinbase, cbErr := metaminer.GetCoinbase(work.header.Number)
-		if cbErr == nil {
-			work.coinbase = coinbase
-		}
-		if w.chainConfig.IsBft(work.header.Number) {
-			// PBFT: validators execute the block with the header's coinbase,
-			// which must be this node's governance coinbase (the builder
-			// check). Set it before the transactions run, which read it and
-			// pay to it, not only when the block is signed.
-			if cbErr != nil {
-				log.Warn("No governance coinbase; not proposing", "number", work.header.Number, "err", cbErr)
-				work.discard()
-				return
-			}
-			work.header.Coinbase = coinbase
-		}
-		// Add TRS
-		// Set the trsList and the node's trs subscription information to the work.
-		if trsListMap, trsSubscribe, _ := metaminer.GetTRSListMap(big.NewInt(work.header.Number.Int64() - 1)); trsListMap != nil && err == nil {
-			work.trsListMap = trsListMap
-			work.trsSubscribe = trsSubscribe
+		if !w.setMetadiumWork(work) {
+			work.discard()
+			return
 		}
 	}
 
