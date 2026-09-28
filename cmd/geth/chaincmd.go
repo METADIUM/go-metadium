@@ -209,6 +209,15 @@ func initGenesis(ctx *cli.Context) error {
 	if err := json.NewDecoder(file).Decode(genesis); err != nil {
 		utils.Fatalf("invalid genesis file: %v", err)
 	}
+	var chainID *big.Int
+	if genesis.Config != nil {
+		chainID = genesis.Config.ChainID
+	}
+	if warn, err := checkGenesisChainID(chainID); err != nil {
+		utils.Fatalf("invalid genesis file: %v", err)
+	} else if warn != "" {
+		log.Warn(warn)
+	}
 	// Open and initialise both full and light databases
 	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()

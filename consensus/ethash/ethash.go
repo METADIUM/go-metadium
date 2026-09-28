@@ -115,6 +115,21 @@ func (ethash *Ethash) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 	return []rpc.API{}
 }
 
+// SealPoA returns block with the Metadium PoA seal fields: authentication is
+// done via MinerNodeId/MinerNodeSig set in FinalizeAndAssemble, and the
+// mixHash is hashimeta (sha3 of seal-hash+nonce), for wire compatibility with
+// old Metadium binaries that verify it. The PBFT engine applies it to its
+// proposals too: from Avocado on, header verification checks the mixHash.
+func (ethash *Ethash) SealPoA(block *types.Block) *types.Block {
+	header := types.CopyHeader(block.Header())
+	nonce := poaSealNonce()
+	sealHash := ethash.SealHash(header).Bytes()
+	digest, _ := hashimeta(sealHash, nonce)
+	header.Nonce = types.EncodeNonce(nonce)
+	header.MixDigest = common.BytesToHash(digest)
+	return block.WithSeal(header)
+}
+
 // Seal generates a new sealing request for the given input block and pushes
 // the result into the given channel. For Metadium PoA chains the block is
 // already signed in FinalizeAndAssemble; here we just attach a zero nonce and
@@ -122,17 +137,8 @@ func (ethash *Ethash) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 // is no longer supported.
 func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
 	if !metaminer.IsPoW() {
-		// Metadium PoA: authentication is done via MinerNodeId/MinerNodeSig set in
-		// FinalizeAndAssemble. Compute mixHash via hashimeta (sha3 of seal-hash+nonce)
-		// for wire compatibility with old Metadium binaries that verify mixHash.
-		header := types.CopyHeader(block.Header())
-		nonce := poaSealNonce()
-		sealHash := ethash.SealHash(header).Bytes()
-		digest, _ := hashimeta(sealHash, nonce)
-		header.Nonce = types.EncodeNonce(nonce)
-		header.MixDigest = common.BytesToHash(digest)
 		select {
-		case results <- block.WithSeal(header):
+		case results <- ethash.SealPoA(block):
 		default:
 		}
 		return nil
