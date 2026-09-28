@@ -18,6 +18,7 @@ package miner
 
 import (
 	"crypto/ecdsa"
+	"errors"
 	"math/big"
 	"sync/atomic"
 	"testing"
@@ -249,5 +250,51 @@ func TestWorkerLeavesOutValidatorFloorBreach(t *testing.T) {
 	excluded := engine.ExcludedTxs()
 	if len(excluded) != 1 || excluded[0].Hash != tx.Hash() || excluded[0].Sender != testBankAddress || excluded[0].Nonce != tx.Nonce() {
 		t.Errorf("excluded %+v, want the breaching transaction", excluded)
+	}
+}
+
+// TestSetMetadiumWorkTRS: the TRS list applies whenever governance returns
+// one, even when the coinbase lookup fails; before PBFT the lookup's error
+// did not reach the TRS condition, and the PBFT change briefly let it
+// (review on #178). At a PBFT height a failed lookup stops the build, and a
+// good one sets the header's coinbase before execution.
+func TestSetMetadiumWorkTRS(t *testing.T) {
+	oldCoinbase, oldTRS := metaminer.GetCoinbaseFunc, metaminer.GetTRSListMapFunc
+	t.Cleanup(func() { metaminer.GetCoinbaseFunc, metaminer.GetTRSListMapFunc = oldCoinbase, oldTRS })
+	trs := map[common.Address]bool{{1}: true}
+	metaminer.GetTRSListMapFunc = func(*big.Int) (map[common.Address]bool, bool, error) { return trs, true, nil }
+	governance := common.Address{9}
+	noCoinbase := func(*big.Int) (common.Address, error) { return common.Address{}, errors.New("no governance coinbase") }
+	withCoinbase := func(*big.Int) (common.Address, error) { return governance, nil }
+
+	poa := &worker{chainConfig: params.TestChainConfig}
+	bft := &worker{chainConfig: bftWorkerConfig()}
+	for _, tt := range []struct {
+		name       string
+		w          *worker
+		coinbase   func(*big.Int) (common.Address, error)
+		build      bool
+		work, head common.Address // work.coinbase and header.Coinbase after
+	}{
+		{"PoA, coinbase lookup fails", poa, noCoinbase, true, common.Address{}, common.Address{}},
+		{"PoA, coinbase found", poa, withCoinbase, true, governance, common.Address{}},
+		{"PBFT, coinbase lookup fails", bft, noCoinbase, false, common.Address{}, common.Address{}},
+		{"PBFT, coinbase found", bft, withCoinbase, true, governance, governance},
+	} {
+		metaminer.GetCoinbaseFunc = tt.coinbase
+		env := &environment{header: &types.Header{Number: big.NewInt(5)}}
+		if got := tt.w.setMetadiumWork(env); got != tt.build {
+			t.Errorf("%s: build %v, want %v", tt.name, got, tt.build)
+			continue
+		}
+		if !tt.build {
+			continue
+		}
+		if env.coinbase != tt.work || env.header.Coinbase != tt.head {
+			t.Errorf("%s: coinbase %x, header coinbase %x; want %x, %x", tt.name, env.coinbase, env.header.Coinbase, tt.work, tt.head)
+		}
+		if env.trsListMap == nil || !env.trsSubscribe {
+			t.Errorf("%s: TRS list not applied", tt.name)
+		}
 	}
 }
