@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/rlp"
+	"golang.org/x/exp/slog"
 )
 
 func TestDeadline(t *testing.T) {
@@ -103,13 +104,19 @@ func TestOpenNodeWAL(t *testing.T) {
 // stubBackend is the minimal Backend for driving a core by hand.
 type stubBackend struct {
 	set       *ValidatorSet
+	setErr    error // returned by Validators when set
 	sent      []*Message
 	requested int
 	committed Proposal
 }
 
-func (b *stubBackend) ChainID() uint64                              { return testChainID }
-func (b *stubBackend) Validators(uint64) (*ValidatorSet, error)     { return b.set, nil }
+func (b *stubBackend) ChainID() uint64 { return testChainID }
+func (b *stubBackend) Validators(uint64) (*ValidatorSet, error) {
+	if b.setErr != nil {
+		return nil, b.setErr
+	}
+	return b.set, nil
+}
 func (b *stubBackend) DecodeProposal(data []byte) (Proposal, error) { return decodeSimBlock(data) }
 func (b *stubBackend) VerifyProposal(Proposal, bool) error          { return nil }
 func (b *stubBackend) RequestProposal(uint64, uint64)               { b.requested++ }
@@ -375,5 +382,37 @@ func TestRejoinFarBehind(t *testing.T) {
 	must(t, c.HandleMessage(far, time.Second))
 	if len(c.prepares[far.Round]) != 0 {
 		t.Error("a PREPARE beyond the round window was stored")
+	}
+}
+
+// A short run of unreadable validator sets right after a restart is expected
+// (governance not initialized yet) and logs as a warning; only a persistent one
+// is an error. A readable set resets the count.
+func TestValidatorSetMissLevel(t *testing.T) {
+	net := newTestNet(t, 4)
+	c, b := newStubCore(t, net, 0)
+	b.setErr = errors.New("no governance at block 0: not initialized")
+
+	for i := 1; i < validatorSetGrace; i++ {
+		c.NewHeight(1, 0)
+		if c.setMisses != i {
+			t.Fatalf("attempt %d: misses = %d", i, c.setMisses)
+		}
+		if lvl := validatorSetMissLevel(c.setMisses); lvl != slog.LevelWarn {
+			t.Fatalf("attempt %d: level = %v, want %v", i, lvl, slog.LevelWarn)
+		}
+	}
+	c.NewHeight(1, 0)
+	if lvl := validatorSetMissLevel(c.setMisses); lvl != slog.LevelError {
+		t.Fatalf("attempt %d: level = %v, want %v", c.setMisses, lvl, slog.LevelError)
+	}
+	if c.HasValidatorSet() {
+		t.Fatal("core has a validator set while the backend returns none")
+	}
+
+	b.setErr = nil
+	c.NewHeight(1, 0)
+	if !c.HasValidatorSet() || c.setMisses != 0 {
+		t.Fatalf("after recovery: set=%v misses=%d, want set and 0", c.HasValidatorSet(), c.setMisses)
 	}
 }
