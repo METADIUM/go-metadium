@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
+	"golang.org/x/exp/slog"
 )
 
 // Backend connects the core to the chain and the network. The core never
@@ -62,6 +63,7 @@ type Core struct {
 	height      uint64
 	set         *ValidatorSet
 	selfIdx     int // -1 when not a validator at this height
+	setMisses   int // consecutive heights started without a readable validator set
 	round       uint64
 	roundStart  time.Duration
 	committedAt time.Duration
@@ -141,6 +143,23 @@ func (c *Core) canSign() bool {
 	return c.key != nil && c.observerUntil == 0 && c.selfIdx >= 0
 }
 
+// validatorSetGrace is how many consecutive attempts to read a height's
+// validator set may fail before the failure is logged as an error. Right
+// after a restart governance is usually not initialized for the first
+// attempt (design §7.7); the node retries every validatorRetry and recovers
+// on its own, so an early miss is expected and only a persistent one is an
+// error an operator has to act on.
+const validatorSetGrace = 10
+
+// validatorSetMissLevel is the log level for the misses-th consecutive
+// failure to read a validator set.
+func validatorSetMissLevel(misses int) slog.Level {
+	if misses < validatorSetGrace {
+		return slog.LevelWarn
+	}
+	return slog.LevelError
+}
+
 // NewHeight starts agreement on height: the parent became the local head at
 // now, by this core's commit or by import. It restores what the WAL says
 // this node already signed at height.
@@ -166,10 +185,13 @@ func (c *Core) NewHeight(height uint64, now time.Duration) {
 	}
 	set, err := c.backend.Validators(height)
 	if err != nil {
-		c.log.Error("No validator set; not participating", "height", height, "err", err)
+		c.setMisses++
+		c.log.Write(validatorSetMissLevel(c.setMisses), "No validator set; not participating",
+			"height", height, "attempt", c.setMisses, "err", err)
 		c.set, c.selfIdx = nil, -1
 		return
 	}
+	c.setMisses = 0
 	c.set, c.selfIdx = set, -1
 	if c.self != nil {
 		if i, ok := set.IndexOf(c.self); ok {

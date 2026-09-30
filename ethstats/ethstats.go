@@ -472,6 +472,19 @@ type authMsg struct {
 	Secret string   `json:"secret"`
 }
 
+// nodeNetwork returns the network ID advertised by the node's eth protocol.
+//
+// Metadium registers the eth protocol under the name "meta" (ethproto.ProtocolName),
+// so looking it up as upstream's hard-coded "eth" never matches and every login
+// fails with "no eth protocol available".
+func nodeNetwork(infos *p2p.NodeInfo) (string, error) {
+	info, ok := infos.Protocols[ethproto.ProtocolName].(*ethproto.NodeInfo)
+	if !ok || info == nil {
+		return "", errors.New("no eth protocol available")
+	}
+	return fmt.Sprintf("%d", info.Network), nil
+}
+
 // login tries to authorize the client at the remote server.
 func (s *Service) login(conn *connWrapper) error {
 	// Construct and send the login authentication
@@ -481,11 +494,9 @@ func (s *Service) login(conn *connWrapper) error {
 	for _, proto := range s.server.Protocols {
 		protocols = append(protocols, fmt.Sprintf("%s/%d", proto.Name, proto.Version))
 	}
-	var network string
-	if info := infos.Protocols["eth"]; info != nil {
-		network = fmt.Sprintf("%d", info.(*ethproto.NodeInfo).Network)
-	} else {
-		return errors.New("no eth protocol available")
+	network, err := nodeNetwork(infos)
+	if err != nil {
+		return err
 	}
 	auth := &authMsg{
 		ID: s.node,

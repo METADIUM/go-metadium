@@ -19,6 +19,9 @@ package ethstats
 import (
 	"strconv"
 	"testing"
+
+	ethproto "github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/p2p"
 )
 
 func TestParseEthstatsURL(t *testing.T) {
@@ -78,5 +81,24 @@ func TestParseEthstatsURL(t *testing.T) {
 		if host != c.host {
 			t.Errorf("case=%d mismatch host value, got: %v ,want: %v", i, host, c.host)
 		}
+	}
+}
+
+// Metadium advertises the eth protocol as "meta"; the login must find it under that name.
+func TestNodeNetwork(t *testing.T) {
+	infos := &p2p.NodeInfo{Protocols: map[string]interface{}{
+		ethproto.ProtocolName: &ethproto.NodeInfo{Network: 11},
+		"metabft":             "not the eth protocol",
+	}}
+	network, err := nodeNetwork(infos)
+	if err != nil {
+		t.Fatalf("nodeNetwork: %v", err)
+	}
+	if network != "11" {
+		t.Fatalf("network = %q, want %q", network, "11")
+	}
+
+	if _, err := nodeNetwork(&p2p.NodeInfo{Protocols: map[string]interface{}{}}); err == nil {
+		t.Fatal("nodeNetwork succeeded without an eth protocol")
 	}
 }
