@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -240,5 +241,57 @@ func TestTRSSweepCountsByReason(t *testing.T) {
 	}
 	if cascaded[0].Nonce() != 2 {
 		t.Fatalf("cascaded nonce = %d, want 2", cascaded[0].Nonce())
+	}
+}
+
+// TestFeeDelegationGateFollowsApplepie: the pool admits type-22 transactions
+// only once the next block is at or past applepieBlock, and re-derives that on
+// every reset, as 0.10.x did. The rebase had hard-coded it to true (#71).
+func TestFeeDelegationGateFollowsApplepie(t *testing.T) {
+	cfg := *params.TestChainConfig
+	cfg.ApplepieBlock = big.NewInt(100)
+	pool, key := setupPoolWithConfig(&cfg)
+	defer pool.Close()
+
+	from := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, from, big.NewInt(1000000))
+	payer := common.Address{0xdd}
+	to := common.Address{0xcc}
+	delegated := types.NewTx(&types.FeeDelegateDynamicFeeTx{
+		SenderTx: types.DynamicFeeTx{
+			ChainID: cfg.ChainID, Nonce: 0, Gas: 21000,
+			GasFeeCap: big.NewInt(1), GasTipCap: big.NewInt(1), To: &to, Value: big.NewInt(0),
+		},
+		FeePayer: &payer,
+	})
+
+	// Head is block 0, so the next block (1) is before the fork.
+	if pool.feedelegation {
+		t.Fatal("fee delegation active before applepieBlock")
+	}
+	if err := pool.addRemote(delegated); !errors.Is(err, core.ErrTxTypeNotSupported) {
+		t.Fatalf("before Applepie: err = %v, want ErrTxTypeNotSupported", err)
+	}
+
+	// A reset to block 99 makes the next block the fork block.
+	head := pool.chain.CurrentBlock()
+	head.Number = big.NewInt(99)
+	pool.mu.Lock()
+	pool.reset(nil, head)
+	pool.mu.Unlock()
+	if !pool.feedelegation {
+		t.Fatal("fee delegation not active once the next block reaches applepieBlock")
+	}
+	// Past the gate, the (unsigned) transaction fails later, on validation,
+	// not on the fork switch.
+	if err := pool.addRemote(delegated); errors.Is(err, core.ErrTxTypeNotSupported) {
+		t.Fatalf("after Applepie: still refused as unsupported: %v", err)
+	}
+
+	// Default config: Applepie at 0, so a fresh pool admits type 22 at once.
+	plain, _ := setupPool()
+	defer plain.Close()
+	if !plain.feedelegation {
+		t.Fatal("fee delegation inactive with applepieBlock 0")
 	}
 }
