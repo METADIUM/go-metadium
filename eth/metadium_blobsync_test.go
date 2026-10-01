@@ -86,3 +86,26 @@ func TestValidateBlobSidecarsForBlock(t *testing.T) {
 		t.Fatal("expected error on tampered KZG proof")
 	}
 }
+
+// TestCheckBlobSidecarReply: an empty reply means the peer does not hold the
+// sidecars, and must not get the peer dropped (#190); a non-empty reply that
+// fails validation must; a valid one is used.
+func TestCheckBlobSidecarReply(t *testing.T) {
+	blobTxs := []*types.Transaction{newTestBlobTx([]common.Hash{testBlobVHash})}
+
+	for _, empty := range [][]*types.BlobTxSidecar{nil, {}} {
+		usable, err := checkBlobSidecarReply(blobTxs, empty)
+		if usable || err != nil {
+			t.Errorf("empty reply (%d sidecars, nil=%v): usable=%v err=%v, want not usable and no error", len(empty), empty == nil, usable, err)
+		}
+	}
+
+	tooMany := []*types.BlobTxSidecar{newValidSidecar(), newValidSidecar()}
+	if usable, err := checkBlobSidecarReply(blobTxs, tooMany); usable || err == nil {
+		t.Errorf("mismatched reply: usable=%v err=%v, want an error", usable, err)
+	}
+
+	if usable, err := checkBlobSidecarReply(blobTxs, []*types.BlobTxSidecar{newValidSidecar()}); !usable || err != nil {
+		t.Errorf("valid reply: usable=%v err=%v, want usable", usable, err)
+	}
+}
