@@ -3,7 +3,7 @@
 # GLIBCXX floors rather than the fleet's. Release artifacts are built with
 # `make gmet-linux` (Dockerfile.metadium) and gated by `make release-check`.
 
-FROM golang:1.21-bullseye AS builder
+FROM golang:1.22.5-bullseye AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     librocksdb-dev libsnappy-dev liblz4-dev libzstd-dev \
