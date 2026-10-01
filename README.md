@@ -39,7 +39,7 @@ See [docs/camellia-test-report.md](docs/camellia-test-report.md) for full test r
 ## Key Differences from go-ethereum
 
 - **Consensus:** Metadium PoA (not PoW/PoS). Block signing via `MinerNodeId`/`MinerNodeSig` header fields.
-- **Protocol:** `meta/66` and `meta/68` (not `eth/68`). Backward compatible with existing mainnet nodes.
+- **Protocol:** the eth protocol is registered as `meta`, and versions `meta/69`, `meta/68` and `meta/66` are advertised (`meta/69` adds blob-sidecar serving). Nodes on m1.1.1 or later negotiate `meta/69` with each other.
 - **Header fields:** Extra fields `Fees`, `Rewards`, `MinerNodeId`, `MinerNodeSig` in block headers.
 - **Governance:** On-chain governance contracts for validator management and reward distribution.
 - **Fee delegation:** Type 22 transactions where a fee payer covers gas costs on behalf of the sender.
@@ -364,7 +364,7 @@ cmd/geth/           Main binary entrypoint
 core/               Blockchain core (state, transactions, blocks)
 core/types/         Block header, transaction types (BlobTx, FeeDelegateTx)
 consensus/ethash/   Consensus engine (PoA sealing + reward distribution)
-eth/protocols/eth/  P2P protocol handlers (meta/66, meta/68)
+eth/protocols/eth/  P2P protocol handlers (meta/66, meta/68, meta/69)
 internal/ethapi/    JSON-RPC API implementation
 metadium/           Metadium governance logic
 miner/              Block production (commitTransactionsEx for PoA)

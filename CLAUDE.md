@@ -15,7 +15,7 @@ Metadium blockchain node implementation (go-ethereum v1.13.14 fork). Camellia fo
 - `core/types/` -- block header, transaction types (BlobTx, FeeDelegateTx)
 - `params/` -- chain config (fork blocks, gas params)
 - `internal/ethapi/` -- JSON-RPC API
-- `eth/protocols/eth/` -- P2P protocol (meta/66, meta/68)
+- `eth/protocols/eth/` -- P2P protocol (meta/66, meta/68, meta/69)
 - `metadium/` -- Metadium governance logic
 - `miner/` -- block production (commitTransactionsEx for PoA)
 - `consensus/ethash/` -- consensus engine (PoA sealing + reward distribution)
