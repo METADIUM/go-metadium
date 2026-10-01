@@ -15,7 +15,11 @@
 import importlib.util
 import os
 import re
+import sys
 import unittest
+
+# Importing the checker by path would otherwise leave scripts/__pycache__ behind.
+sys.dont_write_bytecode = True
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
