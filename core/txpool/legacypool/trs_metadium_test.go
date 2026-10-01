@@ -186,3 +186,59 @@ func TestTRSSweepPurgesPending(t *testing.T) {
 		t.Fatalf("want pool empty after sweep, got pending=%d queued=%d", pending, queued)
 	}
 }
+
+// TestTRSSweepCountsByReason: the sweep reports its drops by reason, so that
+// TRS and fee-payer drops are metered apart from balance drops (#71 item 3).
+// A pending list is used so that the cascade is exercised too: a cascade
+// victim that itself matches is a drop with its own reason, an innocent one
+// is handed back and not counted.
+func TestTRSSweepCountsByReason(t *testing.T) {
+	asPoA(t)
+
+	pool, key := setupPool()
+	defer pool.Close()
+
+	var (
+		from       = crypto.PubkeyToAddress(key.PublicKey)
+		restricted = common.Address{0xbb}
+		clean      = common.Address{0xcc}
+		payer      = common.Address{0xdd} // never funded: unpayable
+	)
+	testAddBalance(pool, from, big.NewInt(1000000))
+	setTRS(pool, map[common.Address]bool{restricted: true}, true)
+
+	// nonce 0: fee-delegated, fee payer broke. nonce 1: recipient restricted.
+	// nonce 2: innocent, expelled by the cascade only.
+	delegated := types.NewTx(&types.FeeDelegateDynamicFeeTx{
+		SenderTx: types.DynamicFeeTx{
+			ChainID: pool.chainconfig.ChainID, Nonce: 0, Gas: 21000,
+			GasFeeCap: big.NewInt(1), GasTipCap: big.NewInt(1), To: &clean, Value: big.NewInt(0),
+		},
+		FeePayer: &payer,
+	})
+	txs := types.Transactions{delegated, toTransaction(1, restricted, key), toTransaction(2, clean, key)}
+
+	list := newList(true)
+	for i, tx := range txs {
+		if ok, _ := list.Add(tx, pool.config.PriceBump); !ok {
+			t.Fatalf("failed to add tx %d to the list", i)
+		}
+	}
+
+	pool.mu.Lock()
+	drops, cascaded, dropped := pool.trsAndFeePayerSweep(from, list, true)
+	pool.mu.Unlock()
+
+	if len(drops) != 2 || len(cascaded) != 1 {
+		t.Fatalf("drops=%d cascaded=%d, want 2 and 1", len(drops), len(cascaded))
+	}
+	if dropped.trs != 1 || dropped.feePayer != 1 {
+		t.Fatalf("dropped by reason = trs %d, feePayer %d; want 1 and 1", dropped.trs, dropped.feePayer)
+	}
+	if dropped.trs+dropped.feePayer != len(drops) {
+		t.Fatalf("reasons (%d) do not add up to drops (%d)", dropped.trs+dropped.feePayer, len(drops))
+	}
+	if cascaded[0].Nonce() != 2 {
+		t.Fatalf("cascaded nonce = %d, want 2", cascaded[0].Nonce())
+	}
+}
