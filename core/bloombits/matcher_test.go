@@ -19,6 +19,7 @@ package bloombits
 import (
 	"context"
 	"math/rand"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -170,7 +171,7 @@ func testMatcher(t *testing.T, filter [][]bloomIndexes, start, blocks uint64, in
 	if err != nil {
 		t.Fatalf("failed to stat matcher session: %v", err)
 	}
-	startRetrievers(session, quit, &requested, maxReqCount)
+	muxers := startRetrievers(session, quit, &requested, maxReqCount)
 
 	// Iterate over all the blocks and verify that the pipeline produces the correct matches
 	for i := start; i < blocks; i++ {
@@ -188,6 +189,14 @@ func testMatcher(t *testing.T, filter [][]bloomIndexes, start, blocks uint64, in
 				session.Close()
 				close(quit)
 
+				// The matcher's retrieval channels are shared across sessions, so
+				// a Multiplex goroutine of the closed session that is still in
+				// allocateRetrieval can take a bit from the next session's
+				// distributor, see its own quit and return it unserviced. The
+				// next session then waits for those sections forever (#121).
+				// Let the old multiplexers drain before starting a new session.
+				muxers.Wait()
+
 				quit = make(chan struct{})
 				matches = make(chan uint64, 16)
 
@@ -195,7 +204,7 @@ func testMatcher(t *testing.T, filter [][]bloomIndexes, start, blocks uint64, in
 				if err != nil {
 					t.Fatalf("failed to stat matcher session: %v", err)
 				}
-				startRetrievers(session, quit, &requested, maxReqCount)
+				muxers = startRetrievers(session, quit, &requested, maxReqCount)
 			}
 		}
 	}
@@ -215,13 +224,19 @@ func testMatcher(t *testing.T, filter [][]bloomIndexes, start, blocks uint64, in
 }
 
 // startRetrievers starts a batch of goroutines listening for section requests
-// and serving them.
-func startRetrievers(session *MatcherSession, quit chan struct{}, retrievals *atomic.Uint32, batch int) {
+// and serving them. The returned WaitGroup is done once the session's Multiplex
+// goroutines have returned, which they do after the session is closed.
+func startRetrievers(session *MatcherSession, quit chan struct{}, retrievals *atomic.Uint32, batch int) *sync.WaitGroup {
 	requests := make(chan chan *Retrieval)
+	muxers := new(sync.WaitGroup)
 
 	for i := 0; i < 10; i++ {
 		// Start a multiplexer to test multiple threaded execution
-		go session.Multiplex(batch, 100*time.Microsecond, requests)
+		muxers.Add(1)
+		go func() {
+			defer muxers.Done()
+			session.Multiplex(batch, 100*time.Microsecond, requests)
+		}()
 
 		// Start a services to match the above multiplexer
 		go func() {
@@ -246,6 +261,7 @@ func startRetrievers(session *MatcherSession, quit chan struct{}, retrievals *at
 			}
 		}()
 	}
+	return muxers
 }
 
 // generateBitset generates the rotated bitset for the given bloom bit and section

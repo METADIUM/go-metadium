@@ -595,6 +595,12 @@ func (s *MatcherSession) deliverSections(bit uint, sections []uint64, bitsets []
 // This method will block for the lifetime of the session. Even after termination
 // of the session, any request in-flight need to be responded to! Empty responses
 // are fine though in that case.
+//
+// The matcher's retrieval channels are shared by all of its sessions, so every
+// Multiplex call of a session must have returned before the same matcher starts
+// another one. A call that is still running can take a bit from the next
+// session's distributor and return it unserviced, and that session then waits
+// for those sections forever (#121).
 func (s *MatcherSession) Multiplex(batch int, wait time.Duration, mux chan chan *Retrieval) {
 	for {
 		// Allocate a new bloom bit index to retrieve data for, stopping when done
