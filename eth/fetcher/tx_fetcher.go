@@ -87,6 +87,7 @@ var (
 	txBroadcastKnownMeter       = metrics.NewRegisteredMeter("eth/fetcher/transaction/broadcasts/known", nil)
 	txBroadcastUnderpricedMeter = metrics.NewRegisteredMeter("eth/fetcher/transaction/broadcasts/underpriced", nil)
 	txBroadcastOtherRejectMeter = metrics.NewRegisteredMeter("eth/fetcher/transaction/broadcasts/otherreject", nil)
+	txBroadcastTRSRejectMeter   = metrics.NewRegisteredMeter("eth/fetcher/transaction/broadcasts/trsreject", nil) // Metadium
 
 	txRequestOutMeter     = metrics.NewRegisteredMeter("eth/fetcher/transaction/request/out", nil)
 	txRequestFailMeter    = metrics.NewRegisteredMeter("eth/fetcher/transaction/request/fail", nil)
@@ -97,6 +98,7 @@ var (
 	txReplyKnownMeter       = metrics.NewRegisteredMeter("eth/fetcher/transaction/replies/known", nil)
 	txReplyUnderpricedMeter = metrics.NewRegisteredMeter("eth/fetcher/transaction/replies/underpriced", nil)
 	txReplyOtherRejectMeter = metrics.NewRegisteredMeter("eth/fetcher/transaction/replies/otherreject", nil)
+	txReplyTRSRejectMeter   = metrics.NewRegisteredMeter("eth/fetcher/transaction/replies/trsreject", nil) // Metadium
 
 	txFetcherWaitingPeers   = metrics.NewRegisteredGauge("eth/fetcher/transaction/waiting/peers", nil)
 	txFetcherWaitingHashes  = metrics.NewRegisteredGauge("eth/fetcher/transaction/waiting/hashes", nil)
@@ -177,7 +179,7 @@ type TxFetcher struct {
 
 	txSeq uint64 // Monotonic arrival-sequence counter for announcements (fetch ordering, #30125)
 
-	underpriced *lru.Cache[common.Hash, time.Time] // Transactions discarded as too cheap (don't re-fetch)
+	underpriced *lru.Cache[common.Hash, time.Time] // Transactions discarded as too cheap or TRS-restricted (don't re-fetch)
 
 	// Stage 1: Waiting lists for newly discovered transactions that might be
 	// broadcast without needing explicit request/reply round trips.
@@ -311,12 +313,14 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 		knownMeter       = txReplyKnownMeter
 		underpricedMeter = txReplyUnderpricedMeter
 		otherRejectMeter = txReplyOtherRejectMeter
+		trsRejectMeter   = txReplyTRSRejectMeter
 	)
 	if !direct {
 		inMeter = txBroadcastInMeter
 		knownMeter = txBroadcastKnownMeter
 		underpricedMeter = txBroadcastUnderpricedMeter
 		otherRejectMeter = txBroadcastOtherRejectMeter
+		trsRejectMeter = txBroadcastTRSRejectMeter
 	}
 	// Keep track of all the propagated transactions
 	inMeter.Mark(int64(len(txs)))
@@ -338,14 +342,17 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 			duplicate   int64
 			underpriced int64
 			otherreject int64
+			trsreject   int64
 		)
 		batch := txs[i:end]
 
 		for j, err := range f.addTxs(batch) {
-			// Track the transaction hash if the price is too low for us.
-			// Avoid re-request this transaction when we receive another
-			// announcement.
-			if errors.Is(err, txpool.ErrUnderpriced) || errors.Is(err, txpool.ErrReplaceUnderpriced) {
+			// Track the transaction hash if the price is too low for us, or
+			// (Metadium) if its sender or recipient is on the TRS list this
+			// node enforces. Avoid re-requesting this transaction when we
+			// receive another announcement: a non-subscribed peer keeps the
+			// restricted tx in its pool and keeps announcing it (#71).
+			if errors.Is(err, txpool.ErrUnderpriced) || errors.Is(err, txpool.ErrReplaceUnderpriced) || errors.Is(err, txpool.ErrIncludedTRSList) {
 				f.underpriced.Add(batch[j].Hash(), batch[j].Time())
 			}
 			// Track a few interesting failure types
@@ -357,6 +364,13 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 
 			case errors.Is(err, txpool.ErrUnderpriced) || errors.Is(err, txpool.ErrReplaceUnderpriced):
 				underpriced++
+
+			case errors.Is(err, txpool.ErrIncludedTRSList):
+				// Metadium: the peer is not stale, it just does not enforce
+				// the list we do. Count apart from otherreject so a batch of
+				// restricted transactions does not trip the stale-peer
+				// throttle below.
+				trsreject++
 
 			case errors.Is(err, txpool.ErrInvalidBlob):
 				// Cryptographically invalid blob sidecar (KZG proof / commitment /
@@ -377,6 +391,7 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 		knownMeter.Mark(duplicate)
 		underpricedMeter.Mark(underpriced)
 		otherRejectMeter.Mark(otherreject)
+		trsRejectMeter.Mark(trsreject)
 
 		// If 'other reject' is >25% of the deliveries in any batch, sleep a bit.
 		if otherreject > 128/4 {
