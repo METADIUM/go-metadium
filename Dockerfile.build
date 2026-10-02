@@ -20,7 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ make git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Ubuntu 24.04 ships Go 1.22 which satisfies go.mod requirement of 1.21
+# noble's golang-go is 1.22.2. go.mod says `toolchain go1.22.5`, so the Go
+# toolchain switch downloads 1.22.5 during the build; this image therefore
+# needs network access and does not pin the compiler the way
+# Dockerfile.metadium does (ARG GO_VERSION, checked against .go-version).
 ENV GOPATH=/go
 ENV CGO_ENABLED=1
 
