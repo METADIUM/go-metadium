@@ -281,6 +281,23 @@ type BlockChain struct {
 	vmConfig   vm.Config
 }
 
+// feeDelegationOffWarning returns the warning an operator should see at
+// startup when the chain configuration carries no applepieBlock. With the
+// key absent, IsApplepie is false at every height, so the pool refuses
+// fee-delegated (type 22) transactions and buyGas refuses to execute one.
+// The public chains set the key, as do every bundled private configuration
+// and the genesis template; a hand-written genesis without it silently
+// ran without the gate on releases m1.1.1 through m1.2.1. Adding
+// "applepieBlock": 0 and re-running init takes effect without a rewind,
+// since the compatibility check does not compare it.
+func feeDelegationOffWarning(c *params.ChainConfig) string {
+	if c == nil || c.ApplepieBlock != nil {
+		return ""
+	}
+	return "fee delegation (type 22) is off: genesis sets no applepieBlock; " +
+		"add \"applepieBlock\": 0 and re-run init to enable it"
+}
+
 // NewBlockChain returns a fully initialised block chain using information
 // available in the database. It initialises the default Ethereum Validator
 // and Processor.
@@ -305,6 +322,9 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	}
 	log.Info(strings.Repeat("-", 153))
 	log.Info("")
+	if msg := feeDelegationOffWarning(chainConfig); msg != "" {
+		log.Warn(msg, "chainId", chainConfig.ChainID)
+	}
 
 	bc := &BlockChain{
 		chainConfig: chainConfig,
