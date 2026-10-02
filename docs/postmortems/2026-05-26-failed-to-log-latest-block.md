@@ -351,6 +351,10 @@ INFO  Metadium - logged the latest block  height=XXXXXXXX hash=... took=...
 
 ### 7.1 `blocksMined` 카운터 조건 개선 (legacy.go:614)
 
+> **적용됨 (#139).** `LogBlock`은 `etcdPut`이 성공한 블록만 `blocksMined`에 세고, 실패한 블록에서는
+> 로테이션 없이 반환한다. etcd가 내려가 있는 동안 리더는 회전하지 않으며(생산은 계속된다),
+> 블록마다 남는 `failed to log the latest block` 에러 줄이 그 상태를 알린다. 재시도(7.2)는 넣지 않았다.
+
 etcd 기록 실패 시 카운터를 증가시키지 않아야 올바른 리더십 로테이션이 가능합니다:
 
 ```go
