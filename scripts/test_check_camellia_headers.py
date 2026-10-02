@@ -60,7 +60,9 @@ class RuleTest(unittest.TestCase):
         self.assertEqual(chk.check_header(one, PARENT), [])
         two = header(used=2 * chk.PER_BLOB)
         self.assertEqual(chk.check_header(two, PARENT), [])
-        child = header(excess=chk.calc_excess_blob_gas(0, 2 * chk.PER_BLOB))
+        # Two blobs over a target of one leave 131072 for the child. A literal,
+        # so the formula is compared with a number it did not produce.
+        child = header(excess=131072)
         self.assertEqual(chk.check_header(child, two), [])
 
     def test_withdrawals_root_not_empty(self):
@@ -73,8 +75,21 @@ class RuleTest(unittest.TestCase):
         self.assertFlags(header(excess=1), PARENT, "excessBlobGas")
         # Non-trivial parent: the child must carry the derived excess, not zero.
         parent = header(used=2 * chk.PER_BLOB)
-        self.assertNotEqual(chk.calc_excess_blob_gas(0, 2 * chk.PER_BLOB), 0)
         self.assertFlags(header(excess=0), parent, "excessBlobGas")
+
+    def test_excess_blob_gas_carries_parent_excess(self):
+        # The parent's own excess counts, not only its blobGasUsed: with excess
+        # 131072 and one blob, 131072 + 131072 - 131072 = 131072 for the child.
+        # Every expected value is a literal, so a formula that drops
+        # parent_excess, or reads it as zero, is caught here.
+        parent = header(excess=131072, used=131072)
+        self.assertEqual(chk.check_header(header(excess=131072), parent), [])
+        self.assertFlags(header(excess=0), parent, "excessBlobGas 0, want 131072")
+        self.assertFlags(header(excess=262144), parent, "excessBlobGas 262144, want 131072")
+        # Parent at the cap with excess already carried: 262144 + 262144 - 131072.
+        parent = header(excess=262144, used=262144)
+        self.assertEqual(chk.check_header(header(excess=393216), parent), [])
+        self.assertFlags(header(excess=262144), parent, "want 393216")
 
     def test_excess_blob_gas_missing(self):
         self.assertFlags(header(drop=("excessBlobGas",)), PARENT, "missing excessBlobGas")
@@ -86,12 +101,38 @@ class RuleTest(unittest.TestCase):
         self.assertFlags(header(beacon="0x" + "00" * 32), PARENT, "parentBeaconBlockRoot")
 
     def test_blob_gas_used_over_max(self):
-        # A whole multiple, so only the cap fires.
-        self.assertFlags(header(used=3 * chk.PER_BLOB), PARENT, "over the per-block max")
+        # One blob past the cap: a whole multiple, so only the cap fires, and it
+        # keeps testing the cap if the max changes.
+        self.assertFlags(header(used=chk.MAX_BLOB_GAS + chk.PER_BLOB), PARENT,
+                         "over the per-block max")
 
     def test_blob_gas_used_not_a_multiple(self):
         # Under the cap, so only the multiple fires.
         self.assertFlags(header(used=chk.PER_BLOB + 1), PARENT, "not a multiple")
+
+
+class FormulaTest(unittest.TestCase):
+    def test_excess_blob_gas_vectors(self):
+        # types.CalcExcessBlobGas with Metadium's target of one blob (131072)
+        # and max of two. Literal inputs and outputs: none of them goes through
+        # the module's constants or its own formula, so a target that drifts
+        # (the #131/#136 shape: right constant, wrong number in the formula) or
+        # a term that is dropped shows up as a wrong number here.
+        vectors = [
+            # (parent excess, parent used) -> child excess
+            ((0, 0), 0),
+            ((0, 131072), 0),            # one blob meets the target exactly
+            ((0, 262144), 131072),       # two blobs: one over the target
+            ((131072, 0), 0),            # carried excess, no blobs: back to zero
+            ((262144, 0), 131072),       # carried excess decays by one target
+            ((131072, 131072), 131072),  # carried excess plus one blob holds
+            ((131072, 262144), 262144),  # carried excess plus two blobs grows
+            ((262144, 262144), 393216),
+            ((393216, 0), 262144),
+        ]
+        for (parent_excess, parent_used), want in vectors:
+            self.assertEqual(chk.calc_excess_blob_gas(parent_excess, parent_used), want,
+                             f"calc_excess_blob_gas({parent_excess}, {parent_used})")
 
 
 def go_constants(path):
