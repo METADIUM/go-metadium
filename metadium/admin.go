@@ -76,6 +76,7 @@ type metaAdmin struct {
 
 	etcd        *embed.Etcd
 	etcdCli     *clientv3.Client
+	etcdStuck   *etcdStuckGuard
 	etcdDir     string
 	etcdPort    int
 	etcdTimeout time.Duration
@@ -1318,6 +1319,7 @@ func StartAdmin(stack *node.Node, datadir string) {
 		isLegacyGovernance: true,
 		blocksPer:          100,
 		etcdDir:            path.Join(datadir, "etcd"),
+		etcdStuck:          newEtcdStuckGuard(),
 		etcdTimeout:        30 * time.Second,
 	}
 
@@ -1338,8 +1340,16 @@ func StartAdmin(stack *node.Node, datadir string) {
 			// the membership RPCs; mining and the peer mesh continue.
 			pbft := admin.atPbftHeight()
 			if admin.amPartner() {
-				if admin.self != nil && !pbft && !admin.etcdIsLeader() {
-					EtcdStart()
+				if admin.self != nil && !pbft {
+					// A server that runs but never reports ready is
+					// restarted after a bounded number of ticks (#140);
+					// the leader included, since the leader gate below
+					// would otherwise keep it out of recovery for good.
+					if admin.etcdStuck.observe(admin.etcdIsRunning(), admin.etcdIsReady()) {
+						admin.etcdRestart(admin.etcdStuck.restarts)
+					} else if !admin.etcdIsLeader() {
+						EtcdStart()
+					}
 				}
 				admin.checkMining()
 
