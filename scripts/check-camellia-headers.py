@@ -35,9 +35,9 @@ import sys
 import time
 import urllib.request
 
-RPC = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8545"
-START = int(sys.argv[2]) if len(sys.argv) > 2 else 117_764_000  # mainnet CamelliaBlock
-END = int(sys.argv[3]) if len(sys.argv) > 3 else None
+RPC = "http://localhost:8545"
+START = 117_764_000  # mainnet CamelliaBlock
+END = None
 BATCH = 100
 
 # The blob gas constants, mirrored from params/protocol_params.go so the check
@@ -93,7 +93,55 @@ def field(block, name):
     return None if v is None else int(v, 16)
 
 
+def check_header(block, parent):
+    """Check one post-Camellia header against its parent.
+
+    Returns the violations as messages, empty for a valid header. This is the
+    whole rule; main() only fetches headers and prints what this returns, so the
+    rule can be tested without a node (scripts/test_check_camellia_headers.py).
+    """
+    problems = []
+    withdrawals = block.get("withdrawalsRoot")
+    beacon_root = block.get("parentBeaconBlockRoot")
+    excess = field(block, "excessBlobGas")
+    used = field(block, "blobGasUsed")
+    parent_excess = field(parent, "excessBlobGas") or 0
+    parent_used = field(parent, "blobGasUsed") or 0
+
+    # Metadium has no beacon chain and the sealing path never sets this;
+    # core.ProcessBeaconBlockRoot acts on it whenever it is present.
+    if beacon_root is not None:
+        problems.append(f"parentBeaconBlockRoot {beacon_root}, want absent")
+
+    if withdrawals is None:
+        problems.append("missing withdrawalsRoot")
+    elif withdrawals.lower() != EMPTY_WITHDRAWALS:
+        problems.append(f"withdrawalsRoot {withdrawals}, want {EMPTY_WITHDRAWALS}")
+
+    if excess is None:
+        problems.append("missing excessBlobGas")
+    elif used is None:
+        problems.append("missing blobGasUsed")
+    else:
+        if used > MAX_BLOB_GAS:
+            problems.append(f"blobGasUsed {used} over the per-block max {MAX_BLOB_GAS}")
+        if used % PER_BLOB:
+            problems.append(f"blobGasUsed {used} is not a multiple of {PER_BLOB}")
+        want = calc_excess_blob_gas(parent_excess, parent_used)
+        if excess != want:
+            problems.append(f"excessBlobGas {excess}, want {want} "
+                            f"(parent excess={parent_excess} used={parent_used})")
+    return problems
+
+
 def main():
+    global RPC, START, END
+    if len(sys.argv) > 1:
+        RPC = sys.argv[1]
+    if len(sys.argv) > 2:
+        START = int(sys.argv[2])
+    if len(sys.argv) > 3:
+        END = int(sys.argv[3])
     head = int(post({"jsonrpc": "2.0", "method": "eth_blockNumber",
                      "params": [], "id": 1}, timeout=30)["result"], 16)
     if END:
@@ -121,50 +169,11 @@ def main():
                 violations += 1
                 continue
 
-            withdrawals = block.get("withdrawalsRoot")
-            beacon_root = block.get("parentBeaconBlockRoot")
-            excess = field(block, "excessBlobGas")
+            for problem in check_header(block, parent):
+                print(f"  {num}: {problem}", flush=True)
+                violations += 1
+
             used = field(block, "blobGasUsed")
-            parent_excess = field(parent, "excessBlobGas") or 0
-            parent_used = field(parent, "blobGasUsed") or 0
-
-            # Metadium has no beacon chain and the sealing path never sets this;
-            # core.ProcessBeaconBlockRoot acts on it whenever it is present.
-            if beacon_root is not None:
-                print(f"  {num}: parentBeaconBlockRoot {beacon_root}, want absent",
-                      flush=True)
-                violations += 1
-
-            if withdrawals is None:
-                print(f"  {num}: missing withdrawalsRoot", flush=True)
-                violations += 1
-            elif withdrawals.lower() != EMPTY_WITHDRAWALS:
-                print(f"  {num}: withdrawalsRoot {withdrawals}, want {EMPTY_WITHDRAWALS}",
-                      flush=True)
-                violations += 1
-
-            if excess is None:
-                print(f"  {num}: missing excessBlobGas", flush=True)
-                violations += 1
-            elif used is None:
-                print(f"  {num}: missing blobGasUsed", flush=True)
-                violations += 1
-            else:
-                if used > MAX_BLOB_GAS:
-                    print(f"  {num}: blobGasUsed {used} over the per-block max {MAX_BLOB_GAS}",
-                          flush=True)
-                    violations += 1
-                if used % PER_BLOB:
-                    print(f"  {num}: blobGasUsed {used} is not a multiple of {PER_BLOB}",
-                          flush=True)
-                    violations += 1
-                want = calc_excess_blob_gas(parent_excess, parent_used)
-                if excess != want:
-                    print(f"  {num}: excessBlobGas {excess}, want {want} "
-                          f"(parent excess={parent_excess} used={parent_used})",
-                          flush=True)
-                    violations += 1
-
             if used:
                 # Not a violation: worth seeing, because a chain that has never
                 # carried a blob keeps excessBlobGas at zero and exercises only

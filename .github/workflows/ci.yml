@@ -71,6 +71,9 @@ jobs:
       - name: Check Lint
         run: make lint
 
+      - name: Check the Camellia header checker
+        run: python3 scripts/test_check_camellia_headers.py
+
   unit_test:
     runs-on: ubuntu-24.04
     steps:
