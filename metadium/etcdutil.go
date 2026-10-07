@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
@@ -32,7 +33,7 @@ import (
 
 var (
 	etcdLock         = &SpinLock{0}
-	etcdReady        = false
+	etcdReady        atomic.Bool // the current server reported ready
 	etcdAutoJoinLock = make(chan interface{}, 1)
 )
 
@@ -173,7 +174,7 @@ func (ma *metaAdmin) etcdIsRunning() bool {
 }
 
 func (ma *metaAdmin) etcdIsReady() bool {
-	return ma.etcd != nil && ma.etcdCli != nil && etcdReady
+	return ma.etcd != nil && ma.etcdCli != nil && etcdReady.Load()
 }
 
 func (ma *metaAdmin) etcdGetCluster() string {
@@ -329,29 +330,41 @@ func (ma *metaAdmin) etcdWipe() error {
 	}
 }
 
-func etcdEventHandler() {
-	if !admin.etcdIsRunning() {
+// etcdEventHandler marks the server ready once it is, then mirrors the work
+// and token keys and the leader into the package state. It serves one server
+// instance, e, so that a handler left over from a server that was stopped and
+// replaced (etcdRestart) cannot clear the readiness of its successor, and it
+// returns when that instance stops instead of spinning on closed watches.
+func etcdEventHandler(e *embed.Etcd, cli *clientv3.Client) {
+	if e == nil || cli == nil {
 		return
 	}
 	select {
-	case <-admin.etcd.Server.ReadyNotify():
-		etcdReady = true
+	case <-e.Server.ReadyNotify():
+		etcdReady.Store(true)
 		log.Info("etcd server ready")
-	case err := <-admin.etcd.Err():
-		etcdReady = false
+	case err := <-e.Err():
+		if admin != nil && admin.etcd == e {
+			etcdReady.Store(false)
+		}
 		log.Info("etcd server failed to start", "error", err)
+		return
+	case <-e.Server.StopNotify():
 		return
 	}
 	// watch
-	ctx := context.Background()
-	workCh := admin.etcdCli.Watch(ctx, metaWorkKey)
-	lockCh := admin.etcdCli.Watch(ctx, metaTokenKey)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workCh := cli.Watch(ctx, metaWorkKey)
+	lockCh := cli.Watch(ctx, metaTokenKey)
 	previousEtcdLeader.Store(uint64(0))
 	latestEtcdLeader.Store(uint64(0))
 	for {
 		select {
-		case <-admin.etcd.Server.LeaderChangedNotify():
-			leader := uint64(admin.etcd.Server.Leader())
+		case <-e.Server.StopNotify():
+			return
+		case <-e.Server.LeaderChangedNotify():
+			leader := uint64(e.Server.Leader())
 			if latestEtcdLeader.Load().(uint64) != leader {
 				previousEtcdLeader.Store(latestEtcdLeader.Load().(uint64))
 			}
@@ -399,7 +412,7 @@ func (ma *metaAdmin) etcdInit() error {
 
 	ma.etcd = etcd
 	ma.etcdCli = v3client.New(etcd.Server)
-	go etcdEventHandler()
+	go etcdEventHandler(etcd, ma.etcdCli)
 	return nil
 }
 
@@ -418,7 +431,7 @@ func (ma *metaAdmin) etcdStart() error {
 	}
 	ma.etcd = etcd
 	ma.etcdCli = v3client.New(etcd.Server)
-	go etcdEventHandler()
+	go etcdEventHandler(etcd, ma.etcdCli)
 	return nil
 }
 
@@ -474,7 +487,7 @@ func (ma *metaAdmin) etcdJoin(name string) error {
 			}
 			ma.etcd = etcd
 			ma.etcdCli = v3client.New(etcd.Server)
-			go etcdEventHandler()
+			go etcdEventHandler(etcd, ma.etcdCli)
 			return nil
 
 		case <-timer.C:
@@ -564,19 +577,108 @@ func (ma *metaAdmin) etcdAutoJoin() error {
 	}
 }
 
+// etcdStop shuts the embedded server down and releases its listeners, so
+// that etcdStart can bind the same ports again, and clears the readiness
+// flag, so that it means one thing: the current server reported ready.
+// embed.Close is bounded (request timeout per listener, one second for the
+// peer handler) and stops the raft server after it.
 func (ma *metaAdmin) etcdStop() error {
 	if !ma.etcdIsRunning() {
 		return ErrNotRunning
 	}
+	etcdReady.Store(false)
 	if ma.etcdCli != nil {
 		ma.etcdCli.Close()
 	}
 	if ma.etcd != nil {
-		ma.etcd.Server.HardStop()
+		ma.etcd.Close()
 	}
 	ma.etcd = nil
 	ma.etcdCli = nil
 	return nil
+}
+
+// etcdRestart replaces a server that is running but has not reported ready,
+// the state the 2026-05-19 incident sat in for hours: etcdPut refuses on
+// !ready while every recovery branch tests running, so nothing acts
+// (docs/postmortems/2026-05-26-failed-to-log-latest-block.md, 7.3, #140).
+// The restart is decided by etcdStuckGuard in the admin loop; this does the
+// work under etcdLock and gives way if EtcdStart or a membership change holds
+// it. The restarted server reads the cluster from its data directory, as a
+// normal start does.
+func (ma *metaAdmin) etcdRestart(attempt int) {
+	if !etcdLock.TryLock() {
+		return
+	}
+	defer etcdLock.Unlock()
+	if !ma.etcdIsRunning() || ma.etcdIsReady() {
+		return
+	}
+	log.Warn("Metadium - etcd running but not ready, restarting it", "attempt", attempt)
+	if err := ma.etcdStop(); err != nil {
+		log.Error("Metadium - etcd restart: stop failed", "attempt", attempt, "error", err)
+		return
+	}
+	if err := ma.etcdStart(); err != nil {
+		log.Error("Metadium - etcd restart: start failed", "attempt", attempt, "error", err)
+	}
+}
+
+// etcdStuckGuard decides when a running-but-not-ready etcd server is
+// restarted. It is fed one observation per admin-loop tick (5 s) and asks for
+// a restart after bound consecutive not-ready ticks. bound is drawn per node
+// from [etcdStuckMinTicks, etcdStuckMaxTicks] (30-60 s on the 5 s loop: far
+// past etcd's election timeout, so a leader change or a slow disk does not
+// trigger it), and doubles after each restart that did not reach ready, up to
+// 2^etcdStuckMaxBackoff, so that a partition in which every node goes
+// not-ready at once does not restart them all in lockstep forever. A ready
+// observation resets the backoff.
+type etcdStuckGuard struct {
+	notReady int // consecutive running-but-not-ready ticks
+	restarts int // restarts since the server was last observed ready
+	bound    int // not-ready ticks before the next restart
+	intn     func(n int) int
+}
+
+const (
+	etcdStuckMinTicks   = 6
+	etcdStuckMaxTicks   = 12
+	etcdStuckMaxBackoff = 5
+)
+
+func newEtcdStuckGuard() *etcdStuckGuard {
+	g := &etcdStuckGuard{intn: rand.Intn}
+	g.redraw()
+	return g
+}
+
+func (g *etcdStuckGuard) redraw() {
+	backoff := g.restarts
+	if backoff > etcdStuckMaxBackoff {
+		backoff = etcdStuckMaxBackoff
+	}
+	g.bound = (etcdStuckMinTicks + g.intn(etcdStuckMaxTicks-etcdStuckMinTicks+1)) << backoff
+}
+
+// observe takes the two predicates for this tick and reports whether the
+// server should be restarted now.
+func (g *etcdStuckGuard) observe(running, ready bool) bool {
+	if !running || ready {
+		g.notReady = 0
+		if ready && g.restarts != 0 {
+			g.restarts = 0
+			g.redraw()
+		}
+		return false
+	}
+	g.notReady++
+	if g.notReady < g.bound {
+		return false
+	}
+	g.notReady = 0
+	g.restarts++
+	g.redraw()
+	return true
 }
 
 func (ma *metaAdmin) etcdIsLeader() bool {
