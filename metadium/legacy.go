@@ -593,6 +593,20 @@ func LogBlock(height int64, hash common.Hash) {
 	admin.lock.Lock()
 	defer admin.lock.Unlock()
 
+	admin.logBlock(height, hash, admin.etcdPut, admin.yieldLead)
+}
+
+// logBlock records a sealed block in etcd through put and, only when the
+// record succeeded, counts it toward the lead rotation; yield is called when
+// the rotation is due. A block etcd never recorded does not advance
+// blocksMined: the counter measures blocks the other nodes can read, which is
+// what the rotation it drives assumes, and rotating on a block no peer has
+// seen was the failure in the 2026-05-19 incident
+// (docs/postmortems/2026-05-26-failed-to-log-latest-block.md, 7.1). While etcd
+// stays down the lead therefore does not rotate; production continues, and the
+// per-block error line below says why. Called with ma.lock held.
+func (ma *metaAdmin) logBlock(height int64, hash common.Hash,
+	put func(key, value string) (int64, error), yield func(height int64)) {
 	work, err := json.Marshal(&metaWork{
 		Height: height,
 		Hash:   hash,
@@ -602,34 +616,38 @@ func LogBlock(height int64, hash common.Hash) {
 	}
 
 	tstart := time.Now()
-	_, err = admin.etcdPut(metaWorkKey, string(work))
-	if err != nil {
+	if _, err = put(metaWorkKey, string(work)); err != nil {
 		log.Error("Metadium - failed to log the latest block",
 			"height", height, "hash", hash, "took", time.Since(tstart))
-	} else {
-		log.Info("Metadium - logged the latest block",
-			"height", height, "hash", hash, "took", time.Since(tstart))
+		return
 	}
+	log.Info("Metadium - logged the latest block",
+		"height", height, "hash", hash, "took", time.Since(tstart))
 
-	admin.blocksMined++
+	ma.blocksMined++
 	height++
-	if admin.blocksMined >= admin.blocksPer &&
-		height%admin.blocksPer == 0 {
-		// time to yield leader role
+	if ma.blocksMined >= ma.blocksPer &&
+		height%ma.blocksPer == 0 {
+		yield(height)
+	}
+}
 
-		_, next, _ := admin.getMinerNodes(height, true)
-		if next.Id == admin.self.Id {
-			log.Info("Metadium - yield to self", "mined", admin.blocksMined,
-				"new miner", "self")
+// yieldLead hands the lead to the next miner for height, the etcd leadership
+// transfer that logBlock schedules every blocksPer blocks. Called with ma.lock
+// held.
+func (ma *metaAdmin) yieldLead(height int64) {
+	_, next, _ := ma.getMinerNodes(height, true)
+	if next.Id == ma.self.Id {
+		log.Info("Metadium - yield to self", "mined", ma.blocksMined,
+			"new miner", "self")
+	} else {
+		if err := ma.etcdMoveLeader(next.Name); err == nil {
+			log.Info("Metadium - yielded", "mined", ma.blocksMined,
+				"new miner", next.Name)
+			ma.blocksMined = 0
 		} else {
-			if err := admin.etcdMoveLeader(next.Name); err == nil {
-				log.Info("Metadium - yielded", "mined", admin.blocksMined,
-					"new miner", next.Name)
-				admin.blocksMined = 0
-			} else {
-				log.Error("Metadium - yield failed", "mined", admin.blocksMined,
-					"new miner", next.Name, "error", err)
-			}
+			log.Error("Metadium - yield failed", "mined", ma.blocksMined,
+				"new miner", next.Name, "error", err)
 		}
 	}
 }
