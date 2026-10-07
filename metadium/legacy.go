@@ -404,7 +404,7 @@ func (ma *metaAdmin) syncWith(node *metaNode) error {
 
 // return true if this node still is the miner after update
 func (ma *metaAdmin) updateMiner(locked bool) bool {
-	if ma.etcd == nil {
+	if !ma.etcdIsRunning() {
 		return false
 	}
 

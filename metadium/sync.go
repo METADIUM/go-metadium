@@ -149,11 +149,15 @@ func acquireMiningToken(height *big.Int, parentHash common.Hash) (bool, error) {
 	if isBootNodeBeforeGenesis() {
 		return true, nil
 	}
-	if admin == nil || !admin.etcdIsRunning() {
+	if admin == nil {
+		return false, ErrNotRunning
+	}
+	e, cli, _ := admin.etcdHandles()
+	if e == nil || cli == nil {
 		return false, ErrNotRunning
 	}
 	ctx, cancel := context.WithTimeout(context.Background(),
-		admin.etcd.Server.Cfg.ReqTimeout())
+		e.Server.Cfg.ReqTimeout())
 	defer cancel()
 	lck, err := admin.acquireTokenSync(ctx, height, parentHash, MiningTokenTTL)
 	if err != nil {
@@ -173,11 +177,15 @@ func releaseMiningToken(height *big.Int, hash, parentHash common.Hash) error {
 	if lck == nil || lck.ttl() < 0 {
 		return metaminer.ErrNotInitialized
 	}
+	e, _, _ := admin.etcdHandles()
+	if e == nil {
+		return ErrNotRunning
+	}
 	var err error
 	for range []int{1, 2} {
 		// retry in case it fails to release due to leader changes, etc.
 		ctx, cancel := context.WithTimeout(context.Background(),
-			admin.etcd.Server.Cfg.ReqTimeout())
+			e.Server.Cfg.ReqTimeout())
 		err = lck.releaseTokenSync(ctx, height, hash, parentHash)
 		cancel()
 		if err == nil {

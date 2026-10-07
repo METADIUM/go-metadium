@@ -74,6 +74,7 @@ type metaAdmin struct {
 	rpcCli  *rpc.Client
 	cli     *ethclient.Client
 
+	etcdMu      sync.RWMutex // guards etcd and etcdCli; readers go through etcdHandles
 	etcd        *embed.Etcd
 	etcdCli     *clientv3.Client
 	etcdStuck   *etcdStuckGuard
