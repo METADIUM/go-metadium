@@ -201,10 +201,14 @@ func (ma *metaAdmin) etcdOwns(e *embed.Etcd) bool {
 
 // etcdServerReady records that e reported ready, unless ma has replaced it
 // in the meantime (etcdRestart): a handler left over from the old server
-// must not mark its successor ready before the successor is. It reports
-// whether the flag was set.
+// must not mark its successor ready before the successor is. The ownership
+// check and the store happen under the read lock, so that an etcdStop and a
+// new etcdStart cannot interleave between them (they take the write lock).
+// It reports whether the flag was set.
 func (ma *metaAdmin) etcdServerReady(e *embed.Etcd) bool {
-	if !ma.etcdOwns(e) {
+	ma.etcdMu.RLock()
+	defer ma.etcdMu.RUnlock()
+	if e == nil || ma.etcd != e {
 		return false
 	}
 	etcdReady.Store(true)
