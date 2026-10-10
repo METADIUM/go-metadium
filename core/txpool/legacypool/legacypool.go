@@ -271,7 +271,7 @@ func New(config Config, chain BlockChain) *LegacyPool {
 		chain:           chain,
 		chainconfig:     chain.Config(),
 		signer:          types.LatestSigner(chain.Config()),
-		feedelegation:   true, // Metadium: always enable Type 22 fee delegation transactions
+		feedelegation:   false, // Metadium: set from the chain config at Init and on every reset (IsApplepie)
 		pending:         make(map[common.Address]*list),
 		queue:           make(map[common.Address]*list),
 		beats:           make(map[common.Address]time.Time),
@@ -337,6 +337,7 @@ func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserve txpool.A
 	pool.currentHead.Store(head)
 	pool.currentState = statedb
 	pool.pendingNonces = newNoncer(statedb)
+	pool.feedelegation = pool.feeDelegationActive(head)
 
 	// Start the reorg loop early, so it can handle requests generated during
 	// journal loading.
@@ -1545,6 +1546,7 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	pool.currentHead.Store(newHead)
 	pool.currentState = statedb
 	pool.pendingNonces = newNoncer(statedb)
+	pool.feedelegation = pool.feeDelegationActive(newHead)
 	// Metadium: the TRS restriction list for this head was prefetched by
 	// runReorg before pool.mu was taken (the governance read can block on
 	// TrieAccessMu, and a synchronous fetch here would freeze the whole pool
@@ -1669,6 +1671,17 @@ func (d sweepDrops) mark(pending bool) {
 		queuedTRSMeter.Mark(int64(d.trs))
 		queuedFeePayerMeter.Mark(int64(d.feePayer))
 	}
+}
+
+// feeDelegationActive reports whether type-22 (fee delegation) transactions
+// are admitted for the block that follows head: the Applepie fork switch, as
+// 0.10.x derived it on every reset. The v1.13.14 rebase hard-coded this to
+// true, which made applepieBlock inert (#71). Mainnet and testnet are long
+// past Applepie, so nothing changes there; a genesis with a later
+// applepieBlock gets the switch back.
+func (pool *LegacyPool) feeDelegationActive(head *types.Header) bool {
+	next := new(big.Int).Add(head.Number, big.NewInt(1))
+	return pool.chainconfig.IsApplepie(next)
 }
 
 // promoteExecutables moves transactions that have become processable from the
