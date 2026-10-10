@@ -169,21 +169,70 @@ func (ma *metaAdmin) etcdNewConfig(newCluster bool) *embed.Config {
 	return cfg
 }
 
+// etcdHandles returns the server and the client as one snapshot, with
+// whether that server has reported ready. etcdStop and etcdWipe clear the
+// fields at runtime (etcdRestart, #140), possibly between a caller's
+// readiness check and its use of the fields, so callers take the handles
+// once from here and use the copies: a server stopped underneath them fails
+// the call with an error instead of a nil dereference (#201 review).
+func (ma *metaAdmin) etcdHandles() (e *embed.Etcd, cli *clientv3.Client, ready bool) {
+	ma.etcdMu.RLock()
+	e, cli = ma.etcd, ma.etcdCli
+	ma.etcdMu.RUnlock()
+	return e, cli, e != nil && cli != nil && etcdReady.Load()
+}
+
+func (ma *metaAdmin) etcdSet(e *embed.Etcd, cli *clientv3.Client) {
+	ma.etcdMu.Lock()
+	ma.etcd, ma.etcdCli = e, cli
+	ma.etcdMu.Unlock()
+}
+
+func (ma *metaAdmin) etcdClear() {
+	ma.etcdSet(nil, nil)
+}
+
+// etcdOwns reports whether e is the server ma currently holds.
+func (ma *metaAdmin) etcdOwns(e *embed.Etcd) bool {
+	ma.etcdMu.RLock()
+	defer ma.etcdMu.RUnlock()
+	return e != nil && ma.etcd == e
+}
+
+// etcdServerReady records that e reported ready, unless ma has replaced it
+// in the meantime (etcdRestart): a handler left over from the old server
+// must not mark its successor ready before the successor is. The ownership
+// check and the store happen under the read lock, so that an etcdStop and a
+// new etcdStart cannot interleave between them (they take the write lock).
+// It reports whether the flag was set.
+func (ma *metaAdmin) etcdServerReady(e *embed.Etcd) bool {
+	ma.etcdMu.RLock()
+	defer ma.etcdMu.RUnlock()
+	if e == nil || ma.etcd != e {
+		return false
+	}
+	etcdReady.Store(true)
+	return true
+}
+
 func (ma *metaAdmin) etcdIsRunning() bool {
-	return ma.etcd != nil && ma.etcdCli != nil
+	e, cli, _ := ma.etcdHandles()
+	return e != nil && cli != nil
 }
 
 func (ma *metaAdmin) etcdIsReady() bool {
-	return ma.etcd != nil && ma.etcdCli != nil && etcdReady.Load()
+	_, _, ready := ma.etcdHandles()
+	return ready
 }
 
 func (ma *metaAdmin) etcdGetCluster() string {
-	if !ma.etcdIsReady() {
+	e, _, ready := ma.etcdHandles()
+	if !ready {
 		return ""
 	}
 
 	var ms []*membership.Member
-	ms = append(ms, ma.etcd.Server.Cluster().Members()...)
+	ms = append(ms, e.Server.Cluster().Members()...)
 	sort.Slice(ms, func(i, j int) bool {
 		return ms[i].Attributes.Name < ms[j].Attributes.Name
 	})
@@ -201,7 +250,8 @@ func (ma *metaAdmin) etcdGetCluster() string {
 
 // returns new cluster string if adding the member is successful
 func (ma *metaAdmin) etcdAddMember(name string) (string, error) {
-	if !ma.etcdIsReady() {
+	e, _, ready := ma.etcdHandles()
+	if !ready {
 		return "", ErrNotRunning
 	}
 	if ok, _ := ma.etcdMemberExists(name, ma.etcdGetCluster()); ok {
@@ -227,9 +277,9 @@ func (ma *metaAdmin) etcdAddMember(name string) (string, error) {
 	m := membership.NewMember(node.Name, []url.URL{*u}, etcdClusterName, &now)
 	// Bound the call: AddMember blocks indefinitely if the raft quorum is lost,
 	// which would pin a handler goroutine (and its etcd concurrency slot) forever.
-	ctx, cancel := context.WithTimeout(context.Background(), ma.etcd.Server.Cfg.ReqTimeout())
+	ctx, cancel := context.WithTimeout(context.Background(), e.Server.Cfg.ReqTimeout())
 	defer cancel()
-	ms, err := ma.etcd.Server.AddMember(ctx, *m)
+	ms, err := e.Server.AddMember(ctx, *m)
 	bb := &bytes.Buffer{}
 	for _, i := range ms {
 		if bb.Len() > 0 {
@@ -251,12 +301,13 @@ func (ma *metaAdmin) etcdAddMember(name string) (string, error) {
 
 // returns new cluster string if removing the member is successful
 func (ma *metaAdmin) etcdRemoveMember(name string) (string, error) {
-	if !ma.etcdIsReady() {
+	e, cli, ready := ma.etcdHandles()
+	if !ready {
 		return "", ErrNotRunning
 	}
 
 	var id uint64
-	for _, i := range ma.etcd.Server.Cluster().Members() {
+	for _, i := range e.Server.Cluster().Members() {
 		if i.Attributes.Name == name {
 			id = uint64(i.ID)
 			break
@@ -271,7 +322,7 @@ func (ma *metaAdmin) etcdRemoveMember(name string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), ma.etcdTimeout)
 	defer cancel()
-	_, err := ma.etcdCli.MemberRemove(ctx, id)
+	_, err := cli.MemberRemove(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -280,12 +331,13 @@ func (ma *metaAdmin) etcdRemoveMember(name string) (string, error) {
 }
 
 func (ma *metaAdmin) etcdMoveLeader(name string) error {
-	if !ma.etcdIsReady() {
+	e, _, ready := ma.etcdHandles()
+	if !ready {
 		return ErrNotRunning
 	}
 
 	var id uint64
-	for _, i := range ma.etcd.Server.Cluster().Members() {
+	for _, i := range e.Server.Cluster().Members() {
 		if i.Attributes.Name == name {
 			id = uint64(i.ID)
 			break
@@ -300,23 +352,23 @@ func (ma *metaAdmin) etcdMoveLeader(name string) error {
 	to := 1500 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), to)
 	defer cancel()
-	err := ma.etcd.Server.MoveLeader(ctx, ma.etcd.Server.Lead(), id)
+	err := e.Server.MoveLeader(ctx, e.Server.Lead(), id)
 	return err
 }
 
 func (ma *metaAdmin) etcdTransferLeadership() error {
-	if !ma.etcdIsReady() {
+	e, _, ready := ma.etcdHandles()
+	if !ready {
 		return ErrNotRunning
 	}
-	return ma.etcd.Server.TransferLeadership()
+	return e.Server.TransferLeadership()
 }
 
 func (ma *metaAdmin) etcdWipe() error {
-	if ma.etcdIsRunning() {
-		ma.etcdCli.Close()
-		ma.etcd.Server.Stop()
-		ma.etcd = nil
-		ma.etcdCli = nil
+	if e, cli, _ := ma.etcdHandles(); e != nil && cli != nil {
+		ma.etcdClear()
+		cli.Close()
+		e.Server.Stop()
 	}
 
 	if _, err := os.Stat(ma.etcdDir); err != nil {
@@ -332,19 +384,24 @@ func (ma *metaAdmin) etcdWipe() error {
 
 // etcdEventHandler marks the server ready once it is, then mirrors the work
 // and token keys and the leader into the package state. It serves one server
-// instance, e, so that a handler left over from a server that was stopped and
-// replaced (etcdRestart) cannot clear the readiness of its successor, and it
-// returns when that instance stops instead of spinning on closed watches.
-func etcdEventHandler(e *embed.Etcd, cli *clientv3.Client) {
-	if e == nil || cli == nil {
+// instance, e, owned by ma: both the ready and the failure branch act on the
+// flag only while ma still holds e, so that a handler left over from a
+// server that was stopped and replaced (etcdRestart) can neither clear the
+// readiness of its successor nor mark the successor ready before it is. It
+// returns when its instance stops instead of spinning on closed watches.
+func etcdEventHandler(ma *metaAdmin, e *embed.Etcd, cli *clientv3.Client) {
+	if ma == nil || e == nil || cli == nil {
 		return
 	}
 	select {
 	case <-e.Server.ReadyNotify():
-		etcdReady.Store(true)
+		if !ma.etcdServerReady(e) {
+			log.Info("etcd server ready, but already replaced; ignoring")
+			return
+		}
 		log.Info("etcd server ready")
 	case err := <-e.Err():
-		if admin != nil && admin.etcd == e {
+		if ma.etcdOwns(e) {
 			etcdReady.Store(false)
 		}
 		log.Info("etcd server failed to start", "error", err)
@@ -410,9 +467,9 @@ func (ma *metaAdmin) etcdInit() error {
 		log.Info("etcd initialized")
 	}
 
-	ma.etcd = etcd
-	ma.etcdCli = v3client.New(etcd.Server)
-	go etcdEventHandler(etcd, ma.etcdCli)
+	cli := v3client.New(etcd.Server)
+	ma.etcdSet(etcd, cli)
+	go etcdEventHandler(ma, etcd, cli)
 	return nil
 }
 
@@ -429,9 +486,9 @@ func (ma *metaAdmin) etcdStart() error {
 	} else {
 		log.Info("etcd started")
 	}
-	ma.etcd = etcd
-	ma.etcdCli = v3client.New(etcd.Server)
-	go etcdEventHandler(etcd, ma.etcdCli)
+	cli := v3client.New(etcd.Server)
+	ma.etcdSet(etcd, cli)
+	go etcdEventHandler(ma, etcd, cli)
 	return nil
 }
 
@@ -485,9 +542,9 @@ func (ma *metaAdmin) etcdJoin(name string) error {
 			} else {
 				log.Info("etcd started server")
 			}
-			ma.etcd = etcd
-			ma.etcdCli = v3client.New(etcd.Server)
-			go etcdEventHandler(etcd, ma.etcdCli)
+			cli := v3client.New(etcd.Server)
+			ma.etcdSet(etcd, cli)
+			go etcdEventHandler(ma, etcd, cli)
 			return nil
 
 		case <-timer.C:
@@ -583,18 +640,16 @@ func (ma *metaAdmin) etcdAutoJoin() error {
 // embed.Close is bounded (request timeout per listener, one second for the
 // peer handler) and stops the raft server after it.
 func (ma *metaAdmin) etcdStop() error {
-	if !ma.etcdIsRunning() {
+	e, cli, _ := ma.etcdHandles()
+	if e == nil || cli == nil {
 		return ErrNotRunning
 	}
+	// Drop the handles first, so that a caller taking them from now on sees
+	// no server, then the ready flag, then the objects.
+	ma.etcdClear()
 	etcdReady.Store(false)
-	if ma.etcdCli != nil {
-		ma.etcdCli.Close()
-	}
-	if ma.etcd != nil {
-		ma.etcd.Close()
-	}
-	ma.etcd = nil
-	ma.etcdCli = nil
+	cli.Close()
+	e.Close()
 	return nil
 }
 
@@ -682,21 +737,23 @@ func (g *etcdStuckGuard) observe(running, ready bool) bool {
 }
 
 func (ma *metaAdmin) etcdIsLeader() bool {
-	if !ma.etcdIsReady() {
+	e, _, ready := ma.etcdHandles()
+	if !ready {
 		return false
 	} else {
-		return ma.etcd.Server.ID() == ma.etcd.Server.Leader()
+		return e.Server.ID() == e.Server.Leader()
 	}
 }
 
 // returns leader id and node
 func (ma *metaAdmin) etcdLeader(locked bool) (uint64, *metaNode) {
-	if !ma.etcdIsReady() {
+	e, _, ready := ma.etcdHandles()
+	if !ready {
 		return 0, nil
 	}
 
-	lid := uint64(ma.etcd.Server.Leader())
-	for _, i := range ma.etcd.Server.Cluster().Members() {
+	lid := uint64(e.Server.Leader())
+	for _, i := range e.Server.Cluster().Members() {
 		if uint64(i.ID) == lid {
 			var node *metaNode
 			if !locked {
@@ -719,10 +776,11 @@ func (ma *metaAdmin) etcdLeader(locked bool) (uint64, *metaNode) {
 }
 
 func (ma *metaAdmin) etcdGetNode(id uint64) *metaNode {
-	if !ma.etcdIsReady() {
+	e, _, ready := ma.etcdHandles()
+	if !ready {
 		return nil
 	}
-	for _, i := range ma.etcd.Server.Cluster().Members() {
+	for _, i := range e.Server.Cluster().Members() {
 		if uint64(i.ID) == id {
 			var node *metaNode
 			ma.lock.Lock()
@@ -740,14 +798,15 @@ func (ma *metaAdmin) etcdGetNode(id uint64) *metaNode {
 }
 
 func (ma *metaAdmin) etcdPut(key, value string) (int64, error) {
-	if !ma.etcdIsReady() {
+	e, cli, ready := ma.etcdHandles()
+	if !ready {
 		return 0, ErrNotRunning
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(),
-		ma.etcd.Server.Cfg.ReqTimeout())
+		e.Server.Cfg.ReqTimeout())
 	defer cancel()
-	resp, err := ma.etcdCli.Put(ctx, key, value)
+	resp, err := cli.Put(ctx, key, value)
 	if err == nil {
 		return resp.Header.Revision, err
 	} else {
@@ -756,14 +815,15 @@ func (ma *metaAdmin) etcdPut(key, value string) (int64, error) {
 }
 
 func (ma *metaAdmin) etcdGet(key string) (string, error) {
-	if !ma.etcdIsReady() {
+	_, cli, ready := ma.etcdHandles()
+	if !ready {
 		return "", ErrNotRunning
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(),
 		time.Duration(1)*time.Second)
 	defer cancel()
-	rsp, err := ma.etcdCli.Get(ctx, key)
+	rsp, err := cli.Get(ctx, key)
 	if err != nil {
 		return "", err
 	} else if rsp.Count == 0 {
@@ -779,15 +839,16 @@ func (ma *metaAdmin) etcdGet(key string) (string, error) {
 
 // compare & swap, do put only if previous value matches
 func (ma *metaAdmin) etcdPut2(key, value, prev string) error {
-	if !ma.etcdIsReady() {
+	e, cli, ready := ma.etcdHandles()
+	if !ready {
 		return ErrNotRunning
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(),
-		ma.etcd.Server.Cfg.ReqTimeout())
+		e.Server.Cfg.ReqTimeout())
 	defer cancel()
 
-	tx := ma.etcdCli.Txn(ctx)
+	tx := cli.Txn(ctx)
 	txresp, err := tx.If(
 		clientv3.Compare(clientv3.Value(key), "=", prev),
 	).Then(
@@ -803,20 +864,25 @@ func (ma *metaAdmin) etcdPut2(key, value, prev string) error {
 }
 
 func (ma *metaAdmin) etcdDelete(key string) error {
-	if !ma.etcdIsReady() {
+	e, cli, ready := ma.etcdHandles()
+	if !ready {
 		return ErrNotRunning
 	}
 	ctx, cancel := context.WithTimeout(context.Background(),
-		ma.etcd.Server.Cfg.ReqTimeout())
+		e.Server.Cfg.ReqTimeout())
 	defer cancel()
-	_, err := ma.etcdCli.Delete(ctx, key)
+	_, err := cli.Delete(ctx, key)
 	return err
 }
 
 // handles removed nodes
 // caller should take care of etcd & governance lock
 func etcdSyncMembership() error {
-	if admin == nil || !admin.amPartner() || admin.self == nil || !admin.etcdIsReady() {
+	if admin == nil || !admin.amPartner() || admin.self == nil {
+		return nil
+	}
+	e, _, ready := admin.etcdHandles()
+	if !ready {
 		return nil
 	}
 
@@ -836,7 +902,7 @@ func etcdSyncMembership() error {
 	for _, n := range nodes {
 		m[n.Name] = n
 	}
-	members := admin.etcd.Server.Cluster().Members()
+	members := e.Server.Cluster().Members()
 	if len(nodes) > len(members) {
 		// some nodes are not added to etcd yet
 		return nil
@@ -871,7 +937,8 @@ type MetaToken struct {
 }
 
 func (ma *metaAdmin) acquireToken(ctx context.Context, height *big.Int, ttl int) (*MetaToken, error) {
-	if !ma.etcdIsReady() {
+	e, cli, ready := ma.etcdHandles()
+	if !ready {
 		return nil, metaminer.ErrNotInitialized
 	}
 again:
@@ -880,7 +947,7 @@ again:
 	lock := &MetaToken{
 		admin:  ma,
 		Miner:  ma.self.Name,
-		ID:     uint64(ma.etcd.Server.ID()),
+		ID:     uint64(e.Server.ID()),
 		Height: height,
 		Since:  now,
 		Till:   till,
@@ -891,7 +958,7 @@ again:
 		return nil, err
 	}
 
-	tx := ma.etcdCli.Txn(ctx)
+	tx := cli.Txn(ctx)
 	txresp, err := tx.If(
 		clientv3.Compare(clientv3.CreateRevision(metaTokenKey), "=", 0),
 	).Then(
@@ -930,7 +997,7 @@ again:
 			}
 
 			// expired or empty lock, delete it & try again
-			tx = ma.etcdCli.Txn(ctx)
+			tx = cli.Txn(ctx)
 			_, err := tx.If(
 				clientv3.Compare(clientv3.Value(metaTokenKey), "=", string(foundToken)),
 			).Then(
@@ -954,6 +1021,10 @@ func (lck *MetaToken) ttl() int64 {
 }
 
 func (lck *MetaToken) renew(ctx context.Context, ttl int) error {
+	_, cli, ready := lck.admin.etcdHandles()
+	if !ready {
+		return ErrNotRunning
+	}
 	prev, err := json.Marshal(lck)
 	if err != nil {
 		return err
@@ -967,7 +1038,7 @@ func (lck *MetaToken) renew(ctx context.Context, ttl int) error {
 		return err
 	}
 
-	tx := lck.admin.etcdCli.Txn(ctx)
+	tx := cli.Txn(ctx)
 	txresp, err := tx.If(
 		clientv3.Compare(clientv3.Value(lck.Key), "=", prev),
 	).Then(
@@ -987,12 +1058,16 @@ func (lck *MetaToken) renew(ctx context.Context, ttl int) error {
 }
 
 func (lck *MetaToken) release(ctx context.Context) error {
+	_, cli, ready := lck.admin.etcdHandles()
+	if !ready {
+		return ErrNotRunning
+	}
 	value, err := json.Marshal(lck)
 	if err != nil {
 		return err
 	}
 
-	tx := lck.admin.etcdCli.Txn(ctx)
+	tx := cli.Txn(ctx)
 	txresp, err := tx.If(
 		clientv3.Compare(clientv3.Value(lck.Key), "=", string(value)),
 	).Then(
@@ -1006,6 +1081,10 @@ func (lck *MetaToken) release(ctx context.Context) error {
 }
 
 func (lck *MetaToken) lockedPut(ctx context.Context, key, value, prev string) error {
+	_, cli, ready := lck.admin.etcdHandles()
+	if !ready {
+		return ErrNotRunning
+	}
 	exists := true
 	lockValue, err := json.Marshal(lck)
 	if err != nil {
@@ -1013,7 +1092,7 @@ func (lck *MetaToken) lockedPut(ctx context.Context, key, value, prev string) er
 	}
 
 again:
-	tx := lck.admin.etcdCli.Txn(ctx)
+	tx := cli.Txn(ctx)
 	var txIf clientv3.Txn
 	if exists {
 		txIf = tx.If(
@@ -1038,7 +1117,7 @@ again:
 		if len(txresp.Responses) > 0 {
 			if rr := txresp.Responses[0].GetResponseRange(); rr.Count == 0 {
 				// if not exists, put empty string and try again
-				tx = lck.admin.etcdCli.Txn(ctx)
+				tx = cli.Txn(ctx)
 				_, err := tx.If(
 					clientv3.Compare(clientv3.Version(key), "=", 0),
 				).Then(
@@ -1055,7 +1134,11 @@ again:
 }
 
 func (ma *metaAdmin) ttl2(ctx context.Context, key string) (int64, error) {
-	rsp, err := ma.etcdCli.Get(ctx, key)
+	_, cli, ready := ma.etcdHandles()
+	if !ready {
+		return -1, ErrNotRunning
+	}
+	rsp, err := cli.Get(ctx, key)
 	if err != nil {
 		return -1, err
 	} else if rsp.Count == 0 {
@@ -1089,7 +1172,8 @@ func (ma *metaAdmin) ttl2(ctx context.Context, key string) (int64, error) {
 //
 //	if not present, put an empty string & try again
 func (ma *metaAdmin) acquireTokenSync(ctx context.Context, height *big.Int, parentHash common.Hash, ttl int64) (*MetaToken, error) {
-	if !ma.etcdIsReady() {
+	e, cli, ready := ma.etcdHandles()
+	if !ready {
 		return nil, metaminer.ErrNotInitialized
 	}
 	if ok, err := ma.isEligibleMiner(height); err != nil {
@@ -1112,7 +1196,7 @@ again:
 	lock := &MetaToken{
 		admin:  ma,
 		Miner:  ma.self.Name,
-		ID:     uint64(ma.etcd.Server.ID()),
+		ID:     uint64(e.Server.ID()),
 		Height: height,
 		Since:  now,
 		Till:   till,
@@ -1123,7 +1207,7 @@ again:
 		return nil, err
 	}
 
-	tx := ma.etcdCli.Txn(ctx)
+	tx := cli.Txn(ctx)
 	var txIf clientv3.Txn
 	if workExists {
 		txIf = tx.If(
@@ -1177,7 +1261,7 @@ again:
 			}
 
 			// expired or empty lock, delete it & try again
-			tx = ma.etcdCli.Txn(ctx)
+			tx = cli.Txn(ctx)
 			_, err := tx.If(
 				clientv3.Compare(clientv3.Value(metaTokenKey), "=", string(foundToken)),
 			).Then(
@@ -1206,6 +1290,10 @@ again:
 }
 
 func (lck *MetaToken) releaseTokenSync(ctx context.Context, height *big.Int, hash, parentHash common.Hash) error {
+	_, cli, ready := lck.admin.etcdHandles()
+	if !ready {
+		return ErrNotRunning
+	}
 	exists := true
 	prevWork, work, lockValue := "", "", ""
 
@@ -1226,7 +1314,7 @@ func (lck *MetaToken) releaseTokenSync(ctx context.Context, height *big.Int, has
 	}
 
 again:
-	tx := lck.admin.etcdCli.Txn(ctx)
+	tx := cli.Txn(ctx)
 	var txIf clientv3.Txn
 	if exists {
 		txIf = tx.If(
@@ -1279,21 +1367,23 @@ again:
 }
 
 func (ma *metaAdmin) etcdCompact(rev int64) error {
-	if !ma.etcdIsReady() {
+	e, cli, ready := ma.etcdHandles()
+	if !ready {
 		return ErrNotRunning
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(),
-		ma.etcd.Server.Cfg.ReqTimeout())
+		e.Server.Cfg.ReqTimeout())
 	defer cancel()
-	_, err := ma.etcdCli.Compact(ctx, rev, clientv3.WithCompactPhysical())
+	_, err := cli.Compact(ctx, rev, clientv3.WithCompactPhysical())
 	// WithCompactPhysical makes Compact wait until all compacted entries are
 	// removed from the etcd server's storage.
 	return err
 }
 
 func (ma *metaAdmin) etcdInfo() interface{} {
-	if ma.etcd == nil {
+	e, cli, _ := ma.etcdHandles()
+	if e == nil || cli == nil {
 		return ErrNotRunning
 	}
 
@@ -1307,9 +1397,9 @@ func (ma *metaAdmin) etcdInfo() interface{} {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(),
-		ma.etcd.Server.Cfg.ReqTimeout())
+		e.Server.Cfg.ReqTimeout())
 	defer cancel()
-	rsp, err := ma.etcdCli.MemberList(ctx)
+	rsp, err := cli.MemberList(ctx)
 
 	var ms []*etcdserverpb.Member
 	if err == nil {
@@ -1323,10 +1413,10 @@ func (ma *metaAdmin) etcdInfo() interface{} {
 	var self, leader *etcdserverpb.Member
 	var members []interface{}
 	for _, i := range ms {
-		if i.ID == uint64(ma.etcd.Server.ID()) {
+		if i.ID == uint64(e.Server.ID()) {
 			self = i
 		}
-		if i.ID == uint64(ma.etcd.Server.Leader()) {
+		if i.ID == uint64(e.Server.Leader()) {
 			leader = i
 		}
 		members = append(members, getMemberInfo(i))
