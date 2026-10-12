@@ -212,7 +212,7 @@ func (q *MsgQ) Unsubscribe(name string) error {
 
 // msgq test
 //
-//nolint:deadcode
+//nolint:unused
 func msgqTest() error {
 	q := NewMsgQ(10, 100)
 
