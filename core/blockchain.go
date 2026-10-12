@@ -295,8 +295,16 @@ type BlockChain struct {
 // init takes effect without a rewind, since the compatibility check does not
 // compare it. A nil head means the chain is not loaded yet; only the missing
 // key can be judged then.
-func feeDelegationOffWarning(c *params.ChainConfig, head *big.Int) string {
+//
+// Mainnet and Testnet are exempt by genesis hash. Their history below
+// applepieBlock carries no type 22 transactions (0.10.x already refused them
+// there), so the advice does not apply, and a node syncing either chain from
+// genesis starts below the fork and would otherwise always print it.
+func feeDelegationOffWarning(c *params.ChainConfig, genesis common.Hash, head *big.Int) string {
 	if c == nil {
+		return ""
+	}
+	if genesis == params.MetadiumMainnetGenesisHash || genesis == params.MetadiumTestnetGenesisHash {
 		return ""
 	}
 	if c.ApplepieBlock == nil {
@@ -393,7 +401,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	// Make sure the state associated with the block is available, or log out
 	// if there is no available state, waiting for state sync.
 	head := bc.CurrentBlock()
-	if msg := feeDelegationOffWarning(chainConfig, head.Number); msg != "" {
+	if msg := feeDelegationOffWarning(chainConfig, bc.genesisBlock.Hash(), head.Number); msg != "" {
 		log.Warn(msg, "chainId", chainConfig.ChainID)
 	}
 	if !bc.HasState(head.Root) {

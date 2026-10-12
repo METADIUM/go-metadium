@@ -21,19 +21,23 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 )
 
 // TestFeeDelegationOffWarning: a chain configuration without applepieBlock
 // produces the startup warning at any head, one whose applepieBlock is still
 // ahead of the head produces it too, and one the head has reached (0
-// included) does not. The public chains and every bundled private
-// configuration set the key in their past, so none of them warns.
+// included) does not. Every bundled private configuration sets the key at 0,
+// so none of them warns. Mainnet and Testnet set it in their past but are
+// exempt by genesis hash at any head, since a node syncing either from
+// genesis starts below the fork; a private genesis with the same fork heights
+// is not exempt.
 func TestFeeDelegationOffWarning(t *testing.T) {
 	missing := *params.TestChainConfig
 	missing.ApplepieBlock = nil
 	for _, head := range []*big.Int{nil, big.NewInt(0), big.NewInt(1_000_000)} {
-		msg := feeDelegationOffWarning(&missing, head)
+		msg := feeDelegationOffWarning(&missing, common.Hash{}, head)
 		if msg == "" {
 			t.Fatalf("head %v: no warning for a config without applepieBlock", head)
 		}
@@ -44,33 +48,43 @@ func TestFeeDelegationOffWarning(t *testing.T) {
 
 	later := *params.TestChainConfig
 	later.ApplepieBlock = big.NewInt(100)
-	msg := feeDelegationOffWarning(&later, big.NewInt(99))
+	msg := feeDelegationOffWarning(&later, common.Hash{}, big.NewInt(99))
 	if msg == "" {
 		t.Fatal("no warning for a head below applepieBlock")
 	}
 	if !strings.Contains(msg, "until applepieBlock 100") || !strings.Contains(msg, "head 99") {
 		t.Fatalf("warning does not name the fork height and the head: %q", msg)
 	}
-	if msg := feeDelegationOffWarning(&later, nil); msg != "" {
+	if msg := feeDelegationOffWarning(&later, common.Hash{}, nil); msg != "" {
 		t.Fatalf("unknown head: unexpected warning %q", msg)
 	}
 
 	type at struct {
-		cfg  *params.ChainConfig
-		head *big.Int
+		cfg     *params.ChainConfig
+		genesis common.Hash
+		head    *big.Int
 	}
 	for name, c := range map[string]at{
-		"zero":           {func() *params.ChainConfig { c := *params.TestChainConfig; c.ApplepieBlock = big.NewInt(0); return &c }(), big.NewInt(0)},
-		"later, reached": {&later, big.NewInt(100)},
-		"later, past":    {&later, big.NewInt(101)},
-		"mainnet":        {params.MetadiumMainnetChainConfig, params.MetadiumMainnetChainConfig.CamelliaBlock},
-		"testnet":        {params.MetadiumTestnetChainConfig, params.MetadiumTestnetChainConfig.CamelliaBlock},
+		"zero":           {func() *params.ChainConfig { c := *params.TestChainConfig; c.ApplepieBlock = big.NewInt(0); return &c }(), common.Hash{}, big.NewInt(0)},
+		"later, reached": {&later, common.Hash{}, big.NewInt(100)},
+		"later, past":    {&later, common.Hash{}, big.NewInt(101)},
+		"mainnet":        {params.MetadiumMainnetChainConfig, params.MetadiumMainnetGenesisHash, params.MetadiumMainnetChainConfig.CamelliaBlock},
+		"testnet":        {params.MetadiumTestnetChainConfig, params.MetadiumTestnetGenesisHash, params.MetadiumTestnetChainConfig.CamelliaBlock},
+		// A node syncing a public chain from genesis starts below applepieBlock.
+		"mainnet, genesis sync": {params.MetadiumMainnetChainConfig, params.MetadiumMainnetGenesisHash, big.NewInt(0)},
+		"testnet, genesis sync": {params.MetadiumTestnetChainConfig, params.MetadiumTestnetGenesisHash, big.NewInt(0)},
 	} {
-		if msg := feeDelegationOffWarning(c.cfg, c.head); msg != "" {
+		if msg := feeDelegationOffWarning(c.cfg, c.genesis, c.head); msg != "" {
 			t.Fatalf("%s: unexpected warning %q", name, msg)
 		}
 	}
-	if msg := feeDelegationOffWarning(nil, big.NewInt(0)); msg != "" {
+	if msg := feeDelegationOffWarning(nil, common.Hash{}, big.NewInt(0)); msg != "" {
 		t.Fatalf("nil config: unexpected warning %q", msg)
+	}
+
+	// The exemption is by genesis, not by configuration: a private network
+	// that copied a public chain's fork heights still warns below them.
+	if msg := feeDelegationOffWarning(params.MetadiumMainnetChainConfig, common.Hash{1}, big.NewInt(0)); msg == "" {
+		t.Fatal("private genesis with a future applepieBlock: no warning")
 	}
 }
