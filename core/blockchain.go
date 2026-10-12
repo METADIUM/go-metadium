@@ -282,20 +282,31 @@ type BlockChain struct {
 }
 
 // feeDelegationOffWarning returns the warning an operator should see at
-// startup when the chain configuration carries no applepieBlock. With the
-// key absent, IsApplepie is false at every height, so the pool refuses
-// fee-delegated (type 22) transactions and buyGas refuses to execute one.
-// The public chains set the key, as do every bundled private configuration
-// and the genesis template; a hand-written genesis without it silently
-// ran without the gate on releases m1.1.1 through m1.2.1. Adding
-// "applepieBlock": 0 and re-running init takes effect without a rewind,
-// since the compatibility check does not compare it.
-func feeDelegationOffWarning(c *params.ChainConfig) string {
-	if c == nil || c.ApplepieBlock != nil {
+// startup when fee delegation (type 22 transactions) is off at the current
+// head: the chain configuration carries no applepieBlock, or sets one the
+// head has not reached. In both cases IsApplepie is false, so the pool
+// refuses fee-delegated transactions and buyGas refuses to execute one.
+// The public chains set the key in their past, as do every bundled private
+// configuration and the genesis template (at 0); a hand-written genesis
+// without it, or with a height still ahead, silently ran without the gate on
+// releases m1.1.1 through m1.2.1. Setting "applepieBlock": 0 and re-running
+// init takes effect without a rewind, since the compatibility check does not
+// compare it. A nil head means the chain is not loaded yet; only the missing
+// key can be judged then.
+func feeDelegationOffWarning(c *params.ChainConfig, head *big.Int) string {
+	if c == nil {
 		return ""
 	}
-	return "fee delegation (type 22) is off: genesis sets no applepieBlock; " +
-		"add \"applepieBlock\": 0 and re-run init to enable it"
+	if c.ApplepieBlock == nil {
+		return "fee delegation (type 22) is off: genesis sets no applepieBlock; " +
+			"add \"applepieBlock\": 0 and re-run init to enable it"
+	}
+	if head != nil && head.Cmp(c.ApplepieBlock) < 0 {
+		return fmt.Sprintf("fee delegation (type 22) is off until applepieBlock %v (head %v); "+
+			"a network that mined type 22 below it on m1.1.1 through m1.2.1 must set "+
+			"\"applepieBlock\": 0 and re-run init, or those blocks stop validating", c.ApplepieBlock, head)
+	}
+	return ""
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -322,9 +333,6 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	}
 	log.Info(strings.Repeat("-", 153))
 	log.Info("")
-	if msg := feeDelegationOffWarning(chainConfig); msg != "" {
-		log.Warn(msg, "chainId", chainConfig.ChainID)
-	}
 
 	bc := &BlockChain{
 		chainConfig: chainConfig,
@@ -383,6 +391,9 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	// Make sure the state associated with the block is available, or log out
 	// if there is no available state, waiting for state sync.
 	head := bc.CurrentBlock()
+	if msg := feeDelegationOffWarning(chainConfig, head.Number); msg != "" {
+		log.Warn(msg, "chainId", chainConfig.ChainID)
+	}
 	if !bc.HasState(head.Root) {
 		if head.Number.Uint64() == 0 {
 			// The genesis state is missing, which is only possible in the path-based
