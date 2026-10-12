@@ -48,8 +48,8 @@ See [docs/camellia-test-report.md](docs/camellia-test-report.md) for full test r
 
 ## Building
 
-Prerequisites: Go 1.22+, C compiler (for RocksDB builds). The floor is set by
-the embedded etcd, whose own `go.mod` declares 1.22; a module cannot declare
+Prerequisites: Go 1.26+, C compiler (for RocksDB builds). The floor is set by
+the embedded etcd, whose own `go.mod` declares 1.26; a module cannot declare
 less than its dependencies.
 
 These are the Makefile targets CI validates. They build against whatever the

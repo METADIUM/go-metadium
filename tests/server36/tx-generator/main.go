@@ -187,11 +187,11 @@ func main() {
 			blob[0] = byte(rand.Intn(64)) // must be < 128 for valid BLS12-381 field element
 			blob[1] = byte(rand.Intn(256))
 
-			commitment, err := kzgCtx.BlobToKZGCommitment(blob, 0)
+			commitment, err := kzgCtx.BlobToKZGCommitment(&blob, 0)
 			if err != nil {
 				res.BlobFail++
 			} else {
-				proof, err := kzgCtx.ComputeBlobKZGProof(blob, commitment, 0)
+				proof, err := kzgCtx.ComputeBlobKZGProof(&blob, commitment, 0)
 				if err != nil {
 					res.BlobFail++
 				} else {
