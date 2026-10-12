@@ -19,8 +19,10 @@ package miner
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -55,7 +57,7 @@ func TestStateReadErrorRefusesBrokenState(t *testing.T) {
 		t.Fatal(err)
 	}
 	healthy.GetBalance(a1)
-	if err := stateReadError(healthy); err != nil {
+	if err := stateReadError(healthy, nil); err != nil {
 		t.Fatalf("healthy state: %v", err)
 	}
 	// Drop every trie node except the root, so resolving an account fails.
@@ -72,7 +74,64 @@ func TestStateReadErrorRefusesBrokenState(t *testing.T) {
 		t.Fatal(err)
 	}
 	broken.GetBalance(a1)
-	if err := stateReadError(broken); !errors.Is(err, errStateReadFailure) {
+	if err := stateReadError(broken, nil); !errors.Is(err, errStateReadFailure) {
 		t.Fatalf("broken state: err = %v, want errStateReadFailure", err)
+	}
+	// The copy that commitEx assembles on must carry the error too.
+	if err := stateReadError(broken.Copy(), nil); !errors.Is(err, errStateReadFailure) {
+		t.Fatalf("copy of broken state: err = %v, want errStateReadFailure", err)
+	}
+}
+
+// TestCommitExRefusesBrokenState goes through commitEx itself, the PoA and
+// BFT block production path, with an environment whose state has recorded a
+// database error, and checks that no block is assembled.
+func TestCommitExRefusesBrokenState(t *testing.T) {
+	w, _ := newTestWorker(t, ethashChainConfig, ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
+	defer w.close()
+	w.start()
+
+	env, err := w.prepareWork(&generateParams{timestamp: uint64(time.Now().Unix()), coinbase: testBankAddress})
+	if err != nil {
+		t.Fatalf("preparing the environment: %v", err)
+	}
+	defer env.discard()
+
+	// Make the state record a database error: hand it a database whose
+	// trie nodes are gone and read an account.
+	db := rawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(db)
+	st, err := state.New(types.EmptyRootHash, sdb, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.AddBalance(testBankAddress, uint256.NewInt(1))
+	st.AddBalance(common.Address{2}, uint256.NewInt(2))
+	root, err := st.Commit(0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.TrieDB().Commit(root, false); err != nil {
+		t.Fatal(err)
+	}
+	it := db.NewIterator(nil, nil)
+	for it.Next() {
+		if key := it.Key(); len(key) == common.HashLength && common.BytesToHash(key) != root {
+			db.Delete(key)
+		}
+	}
+	it.Release()
+	broken, err := state.New(root, state.NewDatabase(db), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken.GetBalance(testBankAddress)
+	if broken.Error() == nil {
+		t.Fatal("test premise: the state did not record an error")
+	}
+	env.state = broken
+
+	if err := w.commitEx(env, nil, false, time.Now()); !errors.Is(err, errStateReadFailure) {
+		t.Fatalf("commitEx on a broken state: err = %v, want errStateReadFailure", err)
 	}
 }

@@ -957,6 +957,21 @@ func TestCall(t *testing.T) {
 			},
 			expectErr: core.ErrTxTypeNotSupported,
 		},
+		// BLOBHASH opcode without blob hashes: the gate is not involved, and the
+		// opcode is disabled before Camellia (CancunTime nil).
+		{
+			blockNumber: rpc.LatestBlockNumber,
+			call: TransactionArgs{
+				From: &accounts[1].addr,
+				To:   &randomAccounts[2].addr,
+			},
+			overrides: StateOverride{
+				randomAccounts[2].addr: {
+					Code: hex2Bytes("60004960005260206000f3"),
+				},
+			},
+			expectErr: errors.New("invalid opcode: BLOBHASH"),
+		},
 	}
 	for i, tc := range testSuite {
 		result, err := api.Call(context.Background(), tc.call, &rpc.BlockNumberOrHash{BlockNumber: &tc.blockNumber}, &tc.overrides, &tc.blockOverrides)
