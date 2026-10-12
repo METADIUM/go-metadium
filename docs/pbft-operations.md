@@ -39,6 +39,18 @@ steps 0–4 and the failure case.
 The genesis fixes the chain ID, the switch height and the PBFT parameters. **None of them can
 change afterwards.**
 
+**Start from `metadium/scripts/genesis-template.json`**, which `gmet metadium genesis` (and
+`gmet.sh init`) fills in from the data file. Do not write the `config` section by hand: the
+template already sets every Ethereum and Metadium fork block to `0`, and some of them matter
+even on a new network. In particular, a genesis without `applepieBlock` runs with fee
+delegation (type 22 transactions) off, and the node warns about it at startup; if such a
+network has already mined fee-delegated transactions, add `"applepieBlock": 0` and re-run
+`init` on every node before upgrading past m1.2.1, or those blocks stop validating. The
+check that guards a re-`init` does not compare `applepieBlock`, so this takes effect without a
+rewind.
+
+On top of the template, set the chain ID, the two heights and the PBFT parameters:
+
 ```json
 "config": {
   "chainId": <this network's own ID, design §9.5>,

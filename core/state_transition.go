@@ -280,6 +280,14 @@ func (st *StateTransition) buyGas() error {
 	}
 	// Metadium fee delegation: FeePayer pays gas
 	if st.msg.FeePayer != nil {
+		// The execution-side fork gate (0.10.x state_transition.go), dropped
+		// in the v1.13.14 rebase and restored for #71. Mainnet and testnet
+		// are long past Applepie, so this changes nothing there; on a chain
+		// whose genesis sets a later applepieBlock, a type-22 transaction
+		// before it is not executable.
+		if !st.evm.ChainConfig().IsApplepie(st.evm.Context.BlockNumber) {
+			return fmt.Errorf("%w: fee delegation is not active before Applepie", ErrTxTypeNotSupported)
+		}
 		feePayer := *st.msg.FeePayer
 		mgvalU256, overflow := uint256.FromBig(mgval)
 		if overflow {
