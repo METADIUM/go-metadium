@@ -750,7 +750,8 @@ func TestEstimateGas(t *testing.T) {
 			expectErr: nil,
 			want:      67595,
 		},
-		// Blobs should have no effect on gas estimate
+		// Blob message before blobs are active (CancunTime nil, no Camellia):
+		// execution refuses it as a type the forks do not allow, as the pool does.
 		{
 			blockNumber: rpc.LatestBlockNumber,
 			call: TransactionArgs{
@@ -760,7 +761,7 @@ func TestEstimateGas(t *testing.T) {
 				BlobHashes: []common.Hash{common.Hash{0x01, 0x22}},
 				BlobFeeCap: (*hexutil.Big)(big.NewInt(1)),
 			},
-			want: 21000,
+			expectErr: core.ErrTxTypeNotSupported,
 		},
 	}
 	for i, tc := range testSuite {
@@ -929,7 +930,9 @@ func TestCall(t *testing.T) {
 			blockOverrides: BlockOverrides{Number: (*hexutil.Big)(big.NewInt(11))},
 			want:           "0x000000000000000000000000000000000000000000000000000000000000000b",
 		},
-		// Invalid blob tx
+		// Blob messages before blobs are active (CancunTime nil, no Camellia):
+		// execution refuses them as a type the forks do not allow, before the
+		// blob-specific checks (create, BLOBHASH) are reached.
 		{
 			blockNumber: rpc.LatestBlockNumber,
 			call: TransactionArgs{
@@ -937,9 +940,8 @@ func TestCall(t *testing.T) {
 				Input:      &hexutil.Bytes{0x00},
 				BlobHashes: []common.Hash{},
 			},
-			expectErr: core.ErrBlobTxCreate,
+			expectErr: core.ErrTxTypeNotSupported,
 		},
-		// BLOBHASH opcode - disabled in Metadium (CancunTime nil, uses Camellia fork)
 		{
 			blockNumber: rpc.LatestBlockNumber,
 			call: TransactionArgs{
@@ -947,6 +949,21 @@ func TestCall(t *testing.T) {
 				To:         &randomAccounts[2].addr,
 				BlobHashes: []common.Hash{common.Hash{0x01, 0x22}},
 				BlobFeeCap: (*hexutil.Big)(big.NewInt(1)),
+			},
+			overrides: StateOverride{
+				randomAccounts[2].addr: {
+					Code: hex2Bytes("60004960005260206000f3"),
+				},
+			},
+			expectErr: core.ErrTxTypeNotSupported,
+		},
+		// BLOBHASH opcode without blob hashes: the gate is not involved, and the
+		// opcode is disabled before Camellia (CancunTime nil).
+		{
+			blockNumber: rpc.LatestBlockNumber,
+			call: TransactionArgs{
+				From: &accounts[1].addr,
+				To:   &randomAccounts[2].addr,
 			},
 			overrides: StateOverride{
 				randomAccounts[2].addr: {
@@ -1033,9 +1050,14 @@ func TestSignBlobTransaction(t *testing.T) {
 		b.SetPoS()
 	})
 	api := NewTransactionAPI(b, nil)
+	// Gas is given, so FillTransaction does not estimate it: estimation would
+	// execute the message, and execution refuses a blob message on a chain
+	// where blobs are not active. The refusal under test is the API's own.
+	gas := hexutil.Uint64(21000)
 	res, err := api.FillTransaction(context.Background(), TransactionArgs{
 		From:       &b.acc.Address,
 		To:         &to,
+		Gas:        &gas,
 		Value:      (*hexutil.Big)(big.NewInt(1)),
 		BlobHashes: []common.Hash{{0x01, 0x22}},
 	})
@@ -1067,9 +1089,14 @@ func TestSendBlobTransaction(t *testing.T) {
 		b.SetPoS()
 	})
 	api := NewTransactionAPI(b, nil)
+	// Gas is given, so FillTransaction does not estimate it: estimation would
+	// execute the message, and execution refuses a blob message on a chain
+	// where blobs are not active. The refusal under test is the API's own.
+	gas := hexutil.Uint64(21000)
 	res, err := api.FillTransaction(context.Background(), TransactionArgs{
 		From:       &b.acc.Address,
 		To:         &to,
+		Gas:        &gas,
 		Value:      (*hexutil.Big)(big.NewInt(1)),
 		BlobHashes: []common.Hash{common.Hash{0x01, 0x22}},
 	})

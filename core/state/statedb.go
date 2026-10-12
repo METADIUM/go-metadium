@@ -690,6 +690,7 @@ func (s *StateDB) Copy() *StateDB {
 		db:                   s.db,
 		trie:                 s.db.CopyTrie(s.trie),
 		originalRoot:         s.originalRoot,
+		dbErr:                s.dbErr,
 		accounts:             make(map[common.Hash][]byte),
 		storages:             make(map[common.Hash]map[common.Hash][]byte),
 		accountsOrigin:       make(map[common.Address][]byte),

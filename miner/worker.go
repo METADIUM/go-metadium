@@ -80,7 +80,25 @@ var (
 	errBlockInterruptedByNewHead  = errors.New("new head arrived while building block")
 	errBlockInterruptedByRecommit = errors.New("recommit interrupt while building block")
 	errBlockInterruptedByTimeout  = errors.New("timeout while building block")
+	errStateReadFailure           = errors.New("state read failed while building block")
 )
+
+// stateReadError reports a database error the state recorded while the block
+// was being built: a missing trie node, a failed flush. The state root and the
+// transaction set computed on top of such a state are not trustworthy, so the
+// block must not be assembled, let alone sealed. It is checked twice: before
+// assembly, for errors raised while the transactions ran, and after it, for
+// errors raised by the reward accumulation and the root computation. The
+// state's Copy carries the recorded error, so the check sees it on the copy
+// the assembly works on. A refusal is logged here because commitEx's caller
+// discards the error.
+func stateReadError(st *state.StateDB, number *big.Int) error {
+	if dbErr := st.Error(); dbErr != nil {
+		log.Error("Refusing to build a block on a state with a database error", "number", number, "err", dbErr)
+		return fmt.Errorf("%w: %v", errStateReadFailure, dbErr)
+	}
+	return nil
+}
 
 // environment is the worker's current environment and holds all
 // information of the sealing block generation.
@@ -1605,8 +1623,14 @@ func (w *worker) generateWork(params *generateParams) *newPayloadResult {
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(w.newpayloadTimeout))
 		}
 	}
+	if err := stateReadError(work.state, work.header.Number); err != nil {
+		return &newPayloadResult{err: err}
+	}
 	block, err := w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, work.txs, nil, work.receipts, params.withdrawals)
 	if err != nil {
+		return &newPayloadResult{err: err}
+	}
+	if err := stateReadError(work.state, work.header.Number); err != nil {
 		return &newPayloadResult{err: err}
 	}
 	return &newPayloadResult{
@@ -1913,8 +1937,14 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			env.header.BlobGasUsed = new(big.Int).SetUint64(uint64(env.blobs) * params.BlobTxBlobGasPerBlob)
 		}
 		// Withdrawals are set to nil here, because this is only called in PoW.
+		if err := stateReadError(env.state, env.header.Number); err != nil {
+			return err
+		}
 		block, err := w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, env.txs, nil, env.receipts, nil)
 		if err != nil {
+			return err
+		}
+		if err := stateReadError(env.state, env.header.Number); err != nil {
 			return err
 		}
 		// If we're post merge, just ignore
@@ -1960,8 +1990,14 @@ func (w *worker) commitEx(env *environment, interval func(), update bool, start 
 		if w.chainConfig.IsCamellia(env.header.Number) {
 			env.header.BlobGasUsed = new(big.Int).SetUint64(uint64(env.blobs) * params.BlobTxBlobGasPerBlob)
 		}
+		if err := stateReadError(env.state, env.header.Number); err != nil {
+			return err
+		}
 		block, err := w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, env.txs, nil, env.receipts, nil)
 		if err != nil {
+			return err
+		}
+		if err := stateReadError(env.state, env.header.Number); err != nil {
 			return err
 		}
 		if w.chainConfig.IsBft(block.Number()) {
