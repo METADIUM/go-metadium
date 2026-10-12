@@ -57,8 +57,8 @@ ENV CXX=g++-11
 # GO_SHA256 belongs to GO_VERSION and both change together. Without it the
 # tarball was piped straight into tar with nothing verifying what arrived.
 # Checksums: https://go.dev/dl/
-ARG GO_VERSION=1.22.5
-ARG GO_SHA256=904b924d435eaea086515bc63235b192ea441bd8c9b198c507e85009e6e4c7f0
+ARG GO_VERSION=1.26.9
+ARG GO_SHA256=42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d
 
 RUN curl -sL -o /tmp/go.tar.gz https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz && \
     echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c - && \

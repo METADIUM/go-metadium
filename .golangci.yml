@@ -1,126 +1,143 @@
-# This file configures github.com/golangci/golangci-lint.
-
+version: "2"
 run:
-  timeout: 20m
   tests: true
-  # default is true. Enables skipping of directories:
-  #   vendor$, third_party$, testdata$, examples$, Godeps$, builtin$
-  skip-dirs-use-default: true
-  skip-files:
-    - core/genesis_alloc.go
-    - metadium/governance_abi.go
-    - metadium/governance_legacy_abi.go
-
 linters:
-  disable-all: true
+  default: none
   enable:
-    - goimports
-    - gosimple
+    - bidichk
+    - durationcheck
     - govet
     - ineffassign
     - misspell
-    - unconvert
-    - typecheck
-    - unused
     - staticcheck
-    - bidichk
-    - durationcheck
-    - exportloopref
+    - unconvert
+    - unused
     - whitespace
-
-    # - structcheck # lots of false positives
-    # - errcheck #lot of false positives
-    # - contextcheck
-    # - errchkjson # lots of false positives
-    # - errorlint # this check crashes
-    # - exhaustive # silly check
-    # - makezero # false positives
-    # - nilerr # several intentional
-
-linters-settings:
-  gofmt:
-    simplify: true
-
-issues:
-  exclude-rules:
-    - path: crypto/bn256/cloudflare/optate.go
-      linters:
-        - deadcode
-        - staticcheck
-    - path: internal/build/pgp.go
-      text: 'SA1019: "golang.org/x/crypto/openpgp" is deprecated: this package is unmaintained except for security fixes.'
-    - path: core/vm/contracts.go
-      text: 'SA1019: "golang.org/x/crypto/ripemd160" is deprecated: RIPEMD-160 is a legacy hash and should not be used for new applications.'
-    - path: accounts/usbwallet/trezor.go
-      text: 'SA1019: "github.com/golang/protobuf/proto" is deprecated: Use the "google.golang.org/protobuf/proto" package instead.'
-    - path: accounts/usbwallet/trezor/
-      text: 'SA1019: "github.com/golang/protobuf/proto" is deprecated: Use the "google.golang.org/protobuf/proto" package instead.'
-    # Deprecations that Go 1.21 introduced and this tree has not migrated.
-    # staticcheck reports a deprecation only once the module's `go` directive
-    # reaches the version that deprecated it, so raising the directive to 1.22
-    # (required by the embedded etcd) turned these on at once, across upstream
-    # go-ethereum code: the crypto/elliptic -> crypto/ecdh migration and
-    # reflect.SliceHeader -> unsafe.Slice in the RLP decoder. Both are real
-    # changes to crypto and RLP internals and do not belong in a dependency
-    # bump; they are deferred deliberately.
-    #
-    # Scoped to these two deprecations rather than disabling SA1019, so any
-    # *other* deprecated API still fails the build. Not pinned per file either:
-    # the same call appears in several places and the list would go stale.
-    - path: (.+)\.go$
-      text: 'SA1019: elliptic\.(Marshal|Unmarshal|GenerateKey) has been deprecated since Go 1.21'
-    - path: (.+)\.go$
-      text: 'SA1019: reflect\.SliceHeader has been deprecated since Go 1.21'
-    # Metadium-specific code paths - keep all unused symbols (intentionally retained)
-    - path: ^metadium/
-      linters:
-        - unused
-        - staticcheck
-        - whitespace
-    - path: ^miner/
-      linters:
-        - unused
-        - staticcheck
-        - whitespace
-    - path: ^msgq/
-      linters:
-        - unused
-    - path: ^cmd/dbbench/
-      linters:
-        - staticcheck
-    - path: ^eth/protocols/eth/metadium_handlers\.go
-      linters:
-        - staticcheck
-    # Upstream go-ethereum code with intentionally-retained helpers
-    - path: ^core/types/hashing\.go
-      linters:
-        - unused
-    - path: ^core/vm/gas_table\.go
-      linters:
-        - unused
-    - path: ^consensus/clique/clique\.go
-      linters:
-        - unused
-    - path: ^internal/ethapi/
-      linters:
-        - unused
-    - path: ^eth/protocols/eth/dispatcher\.go
-      linters:
-        - unused
-    - path: ^eth/peerset\.go
-      linters:
-        - unused
-    - path: ^p2p/discover/table\.go
-      linters:
-        - unused
-    - path: ^core/state/snapshot/dangling\.go
-      linters:
-        - staticcheck
-    - path: ^core/txpool/legacypool/legacypool\.go
-      linters:
-        - unused
-  exclude:
-    - 'SA1019: event.TypeMux is deprecated: use Feed'
-    - 'SA1019: strings.Title is deprecated'
-    - 'SA1019: strings.Title has been deprecated since Go 1.18 and an alternative has been available since Go 1.0: The rule Title uses for word boundaries does not handle Unicode punctuation properly. Use golang.org/x/text/cases instead.'
-    - 'SA1029: should not use built-in type string as key for value'
+  settings:
+    staticcheck:
+      # golangci-lint v2 folds gosimple and stylecheck into staticcheck. The
+      # v1 config enabled staticcheck and gosimple only, so keep that scope:
+      # SA* and S* run, the stylecheck (ST*) and quickfix (QF*) families do not.
+      checks:
+        - all
+        - -ST*
+        - -QF*
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - deadcode
+          - staticcheck
+        path: crypto/bn256/cloudflare/optate.go
+      - path: internal/build/pgp.go
+        text: 'SA1019: golang.org/x/crypto/openpgp is deprecated'
+      - path: core/vm/contracts.go
+        text: 'SA1019: golang.org/x/crypto/ripemd160 is deprecated'
+      - path: accounts/usbwallet/trezor
+        text: 'SA1019: github.com/golang/protobuf/proto is deprecated'
+      # Deprecations this tree has not migrated. staticcheck reports a
+      # deprecation only once the module's `go` directive reaches the version
+      # that deprecated it, so each toolchain bump turns on a new batch across
+      # upstream go-ethereum code: the crypto/elliptic -> crypto/ecdh migration
+      # (Go 1.21), the ecdsa key coordinate fields (Go 1.26), runtime.GOROOT
+      # (Go 1.24) and go/parser.ParseDir (Go 1.25). These are real changes to
+      # crypto, p2p and build internals and do not belong in a toolchain bump;
+      # they are deferred deliberately.
+      #
+      # Scoped to these deprecations rather than disabling SA1019, so any
+      # *other* deprecated API still fails the build. Not pinned per file
+      # either: the same call appears in several places and the list would go
+      # stale.
+      - path: (.+)\.go$
+        text: 'SA1019: crypto/elliptic\.(Marshal|Unmarshal|GenerateKey) has been deprecated since Go 1.21'
+      - path: (.+)\.go$
+        text: 'SA1019: \(crypto/elliptic\.Curve\)\.(IsOnCurve|ScalarMult|ScalarBaseMult|Add|Double) has been deprecated since Go 1.21'
+      - path: (.+)\.go$
+        text: 'SA1019: \(crypto/ecdsa\.(PublicKey|PrivateKey)\)\.(X|Y|D) has been deprecated since Go 1.26'
+      - path: (.+)\.go$
+        text: 'SA1019: runtime\.GOROOT has been deprecated since Go 1.24'
+      - path: (.+)\.go$
+        text: 'SA1019: go/parser\.ParseDir has been deprecated since Go 1.25'
+      - path: (.+)\.go$
+        text: 'SA1019: reflect\.SliceHeader has been deprecated since Go 1.21'
+      - linters:
+          - staticcheck
+          - unused
+          - whitespace
+        path: ^metadium/
+      - linters:
+          - staticcheck
+          - unused
+          - whitespace
+        path: ^miner/
+      - linters:
+          - unused
+        path: ^msgq/
+      - linters:
+          - staticcheck
+        path: ^cmd/dbbench/
+      - linters:
+          - staticcheck
+        path: ^eth/protocols/eth/metadium_handlers\.go
+      - linters:
+          - unused
+        path: ^core/types/hashing\.go
+      - linters:
+          - unused
+        path: ^core/vm/gas_table\.go
+      - linters:
+          - unused
+        path: ^consensus/clique/clique\.go
+      - linters:
+          - unused
+        path: ^internal/ethapi/
+      - linters:
+          - unused
+        path: ^eth/protocols/eth/dispatcher\.go
+      - linters:
+          - unused
+        path: ^eth/peerset\.go
+      - linters:
+          - unused
+        path: ^p2p/discover/table\.go
+      - linters:
+          - staticcheck
+        path: ^core/state/snapshot/dangling\.go
+      - linters:
+          - unused
+        path: ^core/txpool/legacypool/legacypool\.go
+      - path: (.+)\.go$
+        text: 'SA1019: .*event\.TypeMux is deprecated: use Feed'
+      - path: (.+)\.go$
+        text: 'SA1019: strings.Title is deprecated'
+      - path: (.+)\.go$
+        text: 'SA1019: strings.Title has been deprecated since Go 1.18 and an alternative has been available since Go 1.0: The rule Title uses for word boundaries does not handle Unicode punctuation properly. Use golang.org/x/text/cases instead.'
+      - path: (.+)\.go$
+        text: 'SA1029: should not use built-in type string as key for value'
+    paths:
+      - core/genesis_alloc.go
+      - metadium/governance_abi.go
+      - metadium/governance_legacy_abi.go
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+  exclusions:
+    generated: lax
+    paths:
+      - core/genesis_alloc.go
+      - metadium/governance_abi.go
+      - metadium/governance_legacy_abi.go
+      - third_party$
+      - builtin$
+      - examples$
