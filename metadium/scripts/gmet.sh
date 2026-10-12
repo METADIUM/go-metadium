@@ -173,15 +173,25 @@ function start ()
     else
 	DISCOVER=
     fi
-    case $SYNC_MODE in
+    # Metadium networks are full-sync only, so the binary refuses fast and
+    # snap with a Fatalf. Refuse them here as well: start backgrounds the
+    # node through logrot, so without this check `gmet.sh start` returned 0
+    # while the node died in the log. Unrecognized values used to fall
+    # through to archive silently -- a multi-TB node from a typo -- and are
+    # refused for the same reason (issue #71).
+    case "${SYNC_MODE:-archive}" in
     "full")
 	SYNC_MODE="--syncmode full";;
-    "fast")
-	SYNC_MODE="--syncmode fast";;
-    "snap")
-	SYNC_MODE="--syncmode snap";;
-    *)
+    "archive")
 	SYNC_MODE="--syncmode full --gcmode archive";;
+    "fast"|"snap")
+	echo "SYNC_MODE=$SYNC_MODE is not supported: go-metadium runs full sync only." >&2
+	echo "Use SYNC_MODE=full (pruned) or SYNC_MODE=archive (the default when unset)." >&2
+	echo "For fast bring-up, bootstrap from a chain snapshot (docs/sync-policy-and-snapshot-bootstrap.md)." >&2
+	return 1;;
+    *)
+	echo "SYNC_MODE=$SYNC_MODE is not recognized. Use SYNC_MODE=full (pruned) or SYNC_MODE=archive (the default when unset)." >&2
+	return 1;;
     esac
 
     OPTS="$COINBASE $DISCOVER $RPCOPT $BOOT_NODES $NONCE_LIMIT $TESTNET $SYNC_MODE --rpc.txfeecap 0 ${GMET_OPTS}"

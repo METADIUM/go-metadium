@@ -22,8 +22,9 @@ exactly one tier.
       do not, **the producers move first** and the verifiers follow. State which
       case this is, with evidence. A rule that also applies to history needs a
       clean sync over the affected range before it is deployed at all.
-- [ ] **C2 — P2P wire.** Protocol versions or message shapes. `meta/66` must stay
-      advertised; it is the only version shared with the remaining 0.10.x nodes.
+- [ ] **C2 — P2P wire.** Protocol versions or message shapes. Releases from m1.1.1
+      on advertise `meta/69`, `meta/68` and `meta/66`; do not drop one of them,
+      and keep `meta/66` until #181 settles whether anything still uses it.
 - [ ] **C3 — database format.** Breaks the rollback path. Rolling back one minor
       release currently works and must keep working.
 - [ ] **C4 — RPC/API.** Does not break a node that stays put, but breaks its

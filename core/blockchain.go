@@ -269,9 +269,11 @@ type BlockChain struct {
 	futureBlocks *lru.Cache[common.Hash, *types.Block]
 
 	wg            sync.WaitGroup
-	quit          chan struct{} // shutdown signal, closed in Stop.
-	stopping      atomic.Bool   // false if chain is running, true when stopped
-	procInterrupt atomic.Bool   // interrupt signaler for block processing
+	quit          chan struct{}  // shutdown signal, closed in Stop.
+	stopping      atomic.Bool    // false if chain is running, true when stopped
+	procInterrupt atomic.Bool    // interrupt signaler for block processing
+	prefetchLock  sync.Mutex     // Orders prefetcher launches against shutdown
+	prefetchWg    sync.WaitGroup // Tracks running block prefetchers
 
 	engine     consensus.Engine
 	validator  Validator // Block and state validator interface
@@ -279,6 +281,34 @@ type BlockChain struct {
 	processor  Processor // Block transaction processor interface
 	forker     *ForkChoice
 	vmConfig   vm.Config
+}
+
+// feeDelegationOffWarning returns the warning an operator should see at
+// startup when fee delegation (type 22 transactions) is off at the current
+// head: the chain configuration carries no applepieBlock, or sets one the
+// head has not reached. In both cases IsApplepie is false, so the pool
+// refuses fee-delegated transactions and buyGas refuses to execute one.
+// The public chains set the key in their past, as do every bundled private
+// configuration and the genesis template (at 0); a hand-written genesis
+// without it, or with a height still ahead, silently ran without the gate on
+// releases m1.1.1 through m1.2.1. Setting "applepieBlock": 0 and re-running
+// init takes effect without a rewind, since the compatibility check does not
+// compare it. A nil head means the chain is not loaded yet; only the missing
+// key can be judged then.
+func feeDelegationOffWarning(c *params.ChainConfig, head *big.Int) string {
+	if c == nil {
+		return ""
+	}
+	if c.ApplepieBlock == nil {
+		return "fee delegation (type 22) is off: genesis sets no applepieBlock; " +
+			"add \"applepieBlock\": 0 and re-run init to enable it"
+	}
+	if head != nil && head.Cmp(c.ApplepieBlock) < 0 {
+		return fmt.Sprintf("fee delegation (type 22) is off until applepieBlock %v (head %v); "+
+			"a network that mined type 22 below it on m1.1.1 through m1.2.1 must set "+
+			"\"applepieBlock\": 0 and re-run init, or those blocks stop validating", c.ApplepieBlock, head)
+	}
+	return ""
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -363,6 +393,9 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	// Make sure the state associated with the block is available, or log out
 	// if there is no available state, waiting for state sync.
 	head := bc.CurrentBlock()
+	if msg := feeDelegationOffWarning(chainConfig, head.Number); msg != "" {
+		log.Warn(msg, "chainId", chainConfig.ChainID)
+	}
 	if !bc.HasState(head.Root) {
 		if head.Number.Uint64() == 0 {
 			// The genesis state is missing, which is only possible in the path-based
@@ -997,6 +1030,24 @@ func (bc *BlockChain) stopWithoutSaving() {
 	// returned.
 	bc.chainmu.Close()
 	bc.wg.Wait()
+
+	// Wait for the block prefetchers. They run outside chainmu and read the
+	// state database, which the caller closes right after this returns.
+	bc.prefetchLock.Lock()
+	bc.prefetchWg.Wait()
+	bc.prefetchLock.Unlock()
+}
+
+// trackPrefetch registers a block prefetcher, or returns false if the chain is
+// stopping. The caller must call prefetchWg.Done when the prefetcher returns.
+func (bc *BlockChain) trackPrefetch() bool {
+	bc.prefetchLock.Lock()
+	defer bc.prefetchLock.Unlock()
+	if bc.stopping.Load() {
+		return false
+	}
+	bc.prefetchWg.Add(1)
+	return true
 }
 
 // Stop stops the blockchain service. If any imports are currently in progress
@@ -1814,14 +1865,17 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 			if followup, err := it.peek(); followup != nil && err == nil {
 				throwaway, _ := state.New(parent.Root, bc.stateCache, bc.snaps)
 
-				go func(start time.Time, followup *types.Block, throwaway *state.StateDB) {
-					bc.prefetcher.Prefetch(followup, throwaway, bc.vmConfig, &followupInterrupt)
+				if bc.trackPrefetch() {
+					go func(start time.Time, followup *types.Block, throwaway *state.StateDB) {
+						defer bc.prefetchWg.Done()
+						bc.prefetcher.Prefetch(followup, throwaway, bc.vmConfig, &followupInterrupt)
 
-					blockPrefetchExecuteTimer.Update(time.Since(start))
-					if followupInterrupt.Load() {
-						blockPrefetchInterruptMeter.Mark(1)
-					}
-				}(time.Now(), followup, throwaway)
+						blockPrefetchExecuteTimer.Update(time.Since(start))
+						if followupInterrupt.Load() {
+							blockPrefetchInterruptMeter.Mark(1)
+						}
+					}(time.Now(), followup, throwaway)
+				}
 			}
 		}
 

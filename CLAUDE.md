@@ -4,10 +4,10 @@
 Metadium blockchain node implementation (go-ethereum v1.13.14 fork). Camellia fork integrates Shanghai + Cancun EIPs on Metadium PoA.
 
 ## Tech Stack
-- Backend: Go 1.22+ (floor set by the embedded etcd)
+- Backend: Go 1.26+ (floor set by the embedded etcd)
 - DB: LevelDB (default) / RocksDB (`-tags rocksdb`)
 - Consensus: Metadium PoA (ethash placeholder, custom sealing)
-- Version: 1.2.1-stable
+- Version: 1.2.2-stable
 
 ## Directory Structure
 - `cmd/geth/` -- main binary entrypoint
@@ -15,7 +15,7 @@ Metadium blockchain node implementation (go-ethereum v1.13.14 fork). Camellia fo
 - `core/types/` -- block header, transaction types (BlobTx, FeeDelegateTx)
 - `params/` -- chain config (fork blocks, gas params)
 - `internal/ethapi/` -- JSON-RPC API
-- `eth/protocols/eth/` -- P2P protocol (meta/66, meta/68)
+- `eth/protocols/eth/` -- P2P protocol (meta/66, meta/68, meta/69)
 - `metadium/` -- Metadium governance logic
 - `miner/` -- block production (commitTransactionsEx for PoA)
 - `consensus/ethash/` -- consensus engine (PoA sealing + reward distribution)

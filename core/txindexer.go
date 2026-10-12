@@ -22,6 +22,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -49,6 +50,8 @@ type txIndexer struct {
 	progress chan chan TxIndexProgress
 	term     chan chan struct{}
 	closed   chan struct{}
+	headCh   chan ChainHeadEvent // Chain head events, subscribed in newTxIndexer so none is missed before loop runs
+	headSub  event.Subscription
 }
 
 // newTxIndexer initializes the transaction indexer.
@@ -59,7 +62,12 @@ func newTxIndexer(limit uint64, chain *BlockChain) *txIndexer {
 		progress: make(chan chan TxIndexProgress),
 		term:     make(chan chan struct{}),
 		closed:   make(chan struct{}),
+		headCh:   make(chan ChainHeadEvent),
 	}
+	// Subscribe before the loop goroutine starts, so a head imported in the
+	// window between construction and the loop's first iteration is not lost
+	// (upstream #35048).
+	indexer.headSub = chain.SubscribeChainHeadEvent(indexer.headCh)
 	go indexer.loop(chain)
 
 	var msg string
@@ -132,10 +140,9 @@ func (indexer *txIndexer) loop(chain *BlockChain) {
 		lastHead uint64                              // The latest announced chain head (whose tx indexes are assumed created)
 		lastTail = rawdb.ReadTxIndexTail(indexer.db) // The oldest indexed block, nil means nothing indexed
 
-		headCh = make(chan ChainHeadEvent)
-		sub    = chain.SubscribeChainHeadEvent(headCh)
+		headCh = indexer.headCh // subscribed in newTxIndexer
 	)
-	defer sub.Unsubscribe()
+	defer indexer.headSub.Unsubscribe()
 
 	// Launch the initial processing if chain is not empty (head != genesis).
 	// This step is useful in these scenarios that chain has no progress.

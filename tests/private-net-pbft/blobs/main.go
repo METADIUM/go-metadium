@@ -92,11 +92,11 @@ func blobTx(ctx *gokzg4844.Context, key *ecdsa.PrivateKey, chainID, gasPrice *bi
 		for j := 0; j < len(blob); j += 32 {
 			rand.Read(blob[j+1 : j+32])
 		}
-		c, err := ctx.BlobToKZGCommitment(blob, 0)
+		c, err := ctx.BlobToKZGCommitment(&blob, 0)
 		if err != nil {
 			fail(err)
 		}
-		p, err := ctx.ComputeBlobKZGProof(blob, c, 0)
+		p, err := ctx.ComputeBlobKZGProof(&blob, c, 0)
 		if err != nil {
 			fail(err)
 		}

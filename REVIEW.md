@@ -75,8 +75,12 @@ Mis-grades seen most often:
 - **RPC removals and response-shape changes** are C4 even when upstream made
   the same change. Following upstream is not a justification on its own.
 - **Toolchain, cgo flags, or linked library version bumps** are C6.
-- **Wire protocol.** `meta/66` must stay advertised; it is the only version
-  shared with the remaining older nodes.
+- **Wire protocol.** Do not drop a protocol version that releases in the field
+  still advertise. Every release that can follow the chains today (m1.1.1 on)
+  advertises `meta/69`, `meta/68` and `meta/66`. 0.10.x, which spoke only
+  `meta/66`, cannot follow either chain past its Camellia block, so it is no
+  longer the reason to keep `meta/66`. Whether anything else still connects
+  over `meta/66` is open (#181); until that is settled, keep advertising it.
 - **A single branch can span tiers.** Grade the strictest part and say which
   hunk drives it, rather than averaging.
 

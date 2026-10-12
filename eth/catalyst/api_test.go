@@ -111,7 +111,7 @@ func TestEth2AssembleBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error signing transaction, err=%v", err)
 	}
-	ethservice.TxPool().Add([]*types.Transaction{tx}, true, false)
+	ethservice.TxPool().Add([]*types.Transaction{tx}, true, true)
 	blockParams := engine.PayloadAttributes{
 		Timestamp: blocks[9].Time() + 5,
 	}
@@ -188,7 +188,7 @@ func TestEth2PrepareAndGetPayload(t *testing.T) {
 
 	// Put the 10th block's tx in the pool and produce a new block
 	txs := blocks[9].Transactions()
-	ethservice.TxPool().Add(txs, true, false)
+	ethservice.TxPool().Add(txs, true, true)
 	blockParams := engine.PayloadAttributes{
 		Timestamp: blocks[8].Time() + 5,
 	}
@@ -309,7 +309,7 @@ func TestEth2NewBlock(t *testing.T) {
 		statedb, _ := ethservice.BlockChain().StateAt(parent.Root())
 		nonce := statedb.GetNonce(testAddr)
 		tx, _ := types.SignTx(types.NewContractCreation(nonce, new(big.Int), 1000000, big.NewInt(2*params.InitialBaseFee), logCode), types.LatestSigner(ethservice.BlockChain().Config()), testKey)
-		ethservice.TxPool().Add([]*types.Transaction{tx}, true, false)
+		ethservice.TxPool().Add([]*types.Transaction{tx}, true, true)
 
 		execData, err := assembleWithTransactions(api, parent.Hash(), &engine.PayloadAttributes{
 			Timestamp: parent.Time() + 5,
@@ -458,6 +458,13 @@ func startEthService(t *testing.T, genesis *core.Genesis, blocks []*types.Block)
 		n.Close()
 		t.Fatal("can't import test blocks:", err)
 	}
+	// Wait for the pool to catch up with the inserted head. The head reset
+	// runs on the pool's own goroutine; a transaction added before it lands
+	// is judged against the old state and parked as a future transaction.
+	if err := ethservice.TxPool().Sync(); err != nil {
+		n.Close()
+		t.Fatal("can't sync txpool:", err)
+	}
 
 	ethservice.SetEtherbase(testAddr)
 	ethservice.SetSynced()
@@ -478,7 +485,7 @@ func TestFullAPI(t *testing.T) {
 		statedb, _ := ethservice.BlockChain().StateAt(parent.Root)
 		nonce := statedb.GetNonce(testAddr)
 		tx, _ := types.SignTx(types.NewContractCreation(nonce, new(big.Int), 1000000, big.NewInt(2*params.InitialBaseFee), logCode), types.LatestSigner(ethservice.BlockChain().Config()), testKey)
-		ethservice.TxPool().Add([]*types.Transaction{tx}, true, false)
+		ethservice.TxPool().Add([]*types.Transaction{tx}, true, true)
 	}
 
 	setupBlocks(t, ethservice, 10, parent, callback, nil)

@@ -677,7 +677,10 @@ func (t *UDPv4) handlePing(h *packetHandlerV4, from *net.UDPAddr, fromID enode.I
 
 	// Update node database and endpoint predictor.
 	t.db.UpdateLastPingReceived(n.ID(), from.IP, time.Now())
-	t.localNode.UDPEndpointStatement(from, &net.UDPAddr{IP: req.To.IP, Port: int(req.To.UDP)})
+	// Only bonded nodes are allowed to make statements about our endpoint.
+	if t.checkBond(fromID, from.IP) {
+		t.localNode.UDPEndpointStatement(from, &net.UDPAddr{IP: req.To.IP, Port: int(req.To.UDP)})
+	}
 }
 
 // PONG/v4

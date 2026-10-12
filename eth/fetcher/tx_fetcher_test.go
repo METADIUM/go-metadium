@@ -1211,6 +1211,43 @@ func TestTransactionFetcherUnderpricedDedup(t *testing.T) {
 	})
 }
 
+// Tests that transactions the pool rejects as TRS-restricted are not re-fetched
+// on the next announcement, like underpriced ones (Metadium, #71): a peer that
+// does not enforce the list keeps the transaction and keeps announcing it.
+func TestTransactionFetcherTRSRejectDedup(t *testing.T) {
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					errs := make([]error, len(txs))
+					for i := 0; i < len(errs); i++ {
+						errs[i] = txpool.ErrIncludedTRSList
+					}
+					return errs
+				},
+				func(string, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// Deliver two transactions, both rejected as TRS-restricted
+			doTxNotify{peer: "A", hashes: []common.Hash{testTxsHashes[0], testTxsHashes[1]}},
+			doWait{time: txArriveTimeout, step: true},
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[0], testTxs[1]}, direct: true},
+			isScheduled{nil, nil, nil},
+			isUnderpriced(2),
+
+			// Announce them again: only the new hash is scheduled
+			doTxNotify{peer: "A", hashes: []common.Hash{testTxsHashes[0], testTxsHashes[1], testTxsHashes[2]}}, // [2] is needed to force a step in the fetcher
+			isWaiting(map[string][]common.Hash{
+				"A": {testTxsHashes[2]},
+			}),
+			isScheduled{nil, nil, nil},
+		},
+	})
+}
+
 // Tests that underpriced transactions don't get rescheduled after being rejected,
 // but at the same time there's a hard cap on the number of transactions that are
 // tracked.

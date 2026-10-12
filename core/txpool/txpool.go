@@ -75,6 +75,9 @@ type TxPool struct {
 	term chan struct{}           // Termination channel to detect a closed pool
 
 	sync chan chan error // Testing / simulator channel to block until internal reset is done
+
+	newHeadCh  chan core.ChainHeadEvent // Chain head events, subscribed in New so none is missed before loop runs
+	newHeadSub event.Subscription
 }
 
 // New creates a new transaction pool to gather, sort and filter inbound
@@ -91,6 +94,7 @@ func New(gasTip uint64, chain BlockChain, subpools []SubPool) (*TxPool, error) {
 		quit:         make(chan chan error),
 		term:         make(chan struct{}),
 		sync:         make(chan chan error),
+		newHeadCh:    make(chan core.ChainHeadEvent),
 	}
 	for i, subpool := range subpools {
 		if err := subpool.Init(gasTip, head, pool.reserver(i, subpool)); err != nil {
@@ -100,6 +104,11 @@ func New(gasTip uint64, chain BlockChain, subpools []SubPool) (*TxPool, error) {
 			return nil, err
 		}
 	}
+	// Subscribe before the loop goroutine starts, so a head imported in the
+	// window between construction and the loop's first iteration is not lost
+	// (upstream #35048). The channel is unbuffered: the feed blocks until the
+	// loop takes the event, which is what makes the head visible in order.
+	pool.newHeadSub = chain.SubscribeChainHeadEvent(pool.newHeadCh)
 	go pool.loop(head, chain)
 	return pool, nil
 }
@@ -182,12 +191,9 @@ func (p *TxPool) loop(head *types.Header, chain BlockChain) {
 	// Close the termination marker when the pool stops
 	defer close(p.term)
 
-	// Subscribe to chain head events to trigger subpool resets
-	var (
-		newHeadCh  = make(chan core.ChainHeadEvent)
-		newHeadSub = chain.SubscribeChainHeadEvent(newHeadCh)
-	)
-	defer newHeadSub.Unsubscribe()
+	// Chain head events trigger subpool resets; the subscription was made in New.
+	newHeadCh := p.newHeadCh
+	defer p.newHeadSub.Unsubscribe()
 
 	// Track the previous and current head to feed to an idle reset
 	var (

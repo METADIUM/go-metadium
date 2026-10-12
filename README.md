@@ -6,7 +6,7 @@ Metadium blockchain node implementation, forked from [go-ethereum](https://githu
 
 Metadium is a Proof-of-Authority (PoA) blockchain with on-chain governance. It uses a custom consensus layer built on top of go-ethereum's ethash engine, with block signing via node keys and reward distribution through governance smart contracts.
 
-**Current version:** 1.2.1-stable (Camellia fork)
+**Current version:** 1.2.2-stable (Camellia fork)
 
 ## Camellia Fork
 
@@ -39,7 +39,7 @@ See [docs/camellia-test-report.md](docs/camellia-test-report.md) for full test r
 ## Key Differences from go-ethereum
 
 - **Consensus:** Metadium PoA (not PoW/PoS). Block signing via `MinerNodeId`/`MinerNodeSig` header fields.
-- **Protocol:** `meta/66` and `meta/68` (not `eth/68`). Backward compatible with existing mainnet nodes.
+- **Protocol:** the eth protocol is registered as `meta`, and versions `meta/69`, `meta/68` and `meta/66` are advertised (`meta/69` adds blob-sidecar serving). Nodes on m1.1.1 or later negotiate `meta/69` with each other.
 - **Header fields:** Extra fields `Fees`, `Rewards`, `MinerNodeId`, `MinerNodeSig` in block headers.
 - **Governance:** On-chain governance contracts for validator management and reward distribution.
 - **Fee delegation:** Type 22 transactions where a fee payer covers gas costs on behalf of the sender.
@@ -48,8 +48,8 @@ See [docs/camellia-test-report.md](docs/camellia-test-report.md) for full test r
 
 ## Building
 
-Prerequisites: Go 1.22+, C compiler (for RocksDB builds). The floor is set by
-the embedded etcd, whose own `go.mod` declares 1.22; a module cannot declare
+Prerequisites: Go 1.26+, C compiler (for RocksDB builds). The floor is set by
+the embedded etcd, whose own `go.mod` declares 1.26; a module cannot declare
 less than its dependencies.
 
 These are the Makefile targets CI validates. They build against whatever the
@@ -294,7 +294,7 @@ stock layout). Every knob, with its default:
 | `HTTP_ADDR` / `WS_ADDR` | `127.0.0.1` | RPC / WS bind address. Set `0.0.0.0` (or a specific interface) only on nodes that must serve other machines. |
 | `TESTNET` | unset | `1` → `--metadium-testnet`. Anything else is ignored. |
 | `DISCOVER` | unset (on) | `0` → `--nodiscover`. Note **`init`-generated `.rc` files contain `DISCOVER=0`** — remove or change it for ordinary full nodes, or the node dials no one. Mainnet/testnet bootnodes are compiled into the binary, so no `BOOT_NODES` is needed. |
-| `SYNC_MODE` | unset (**archive**) | `full` → pruned full node (recommended for exchange/API nodes, ~600GB-class). **Unset — or any unrecognized value, typos included — means `--syncmode full --gcmode archive`**: a multi-TB archive node. `fast`/`snap` make the node exit at startup (Metadium networks are full-sync only) — and since `gmet.sh start` backgrounds the node, `start` itself still returns 0, so check the log. |
+| `SYNC_MODE` | unset (**archive**) | `full` → pruned full node (recommended for exchange/API nodes, ~600GB-class). `archive`, or unset, → `--syncmode full --gcmode archive`: a multi-TB archive node. **`fast` and `snap` are refused by `gmet.sh start`** with exit status 1 (Metadium networks are full-sync only), and so is any other value, since a typo used to produce an archive node silently. |
 | `BOOT_NODES` | unset | Extra `--bootnodes` enodes (rarely needed, see above). |
 | `GMET_OPTS` | unset | Extra flags appended verbatim to the command line. Private PoA deployments that want sub-second confirmation put `--metadium.block.idleseal <ms>` here — see [docs/enterprise-private-poa.md](docs/enterprise-private-poa.md). The flag is refused on mainnet and testnet: the node exits rather than starting. |
 | `STOP_TIMEOUT` | `200` | Seconds `gmet.sh stop` waits for graceful shutdown before escalating. |
@@ -364,7 +364,7 @@ cmd/geth/           Main binary entrypoint
 core/               Blockchain core (state, transactions, blocks)
 core/types/         Block header, transaction types (BlobTx, FeeDelegateTx)
 consensus/ethash/   Consensus engine (PoA sealing + reward distribution)
-eth/protocols/eth/  P2P protocol handlers (meta/66, meta/68)
+eth/protocols/eth/  P2P protocol handlers (meta/66, meta/68, meta/69)
 internal/ethapi/    JSON-RPC API implementation
 metadium/           Metadium governance logic
 miner/              Block production (commitTransactionsEx for PoA)

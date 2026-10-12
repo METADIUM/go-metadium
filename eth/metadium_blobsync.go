@@ -127,10 +127,15 @@ func (h *handler) fetchBlobSidecars(block *types.Block) {
 			peer.Log().Debug("Blob sidecar request failed", "number", block.NumberU64(), "err", err)
 			continue
 		}
-		if err := validateBlobSidecarsForBlock(blobTxs, sidecars); err != nil {
+		if usable, err := checkBlobSidecarReply(blobTxs, sidecars); err != nil {
 			// Structurally or cryptographically invalid reply: drop the peer (#31219).
 			peer.Log().Warn("Dropping peer for invalid blob sidecars", "number", block.NumberU64(), "err", err)
 			h.removePeer(peer.ID())
+			continue
+		} else if !usable {
+			// The peer does not hold them, which is normal for an older blob
+			// block: try another peer, but do not drop this one (#190).
+			peer.Log().Debug("Peer has no blob sidecars for block", "number", block.NumberU64())
 			continue
 		}
 		rawdb.WriteBlobSidecars(h.database, block.Hash(), block.NumberU64(), sidecars)
@@ -174,13 +179,12 @@ func (h *handler) fetchBlobSidecarsBy(block *types.Block, deadline time.Time) er
 			}
 			continue
 		}
-		if len(sidecars) == 0 {
-			continue // this peer does not have them; the proposer does
-		}
-		if err := validateBlobSidecarsForBlock(blobTxs, sidecars); err != nil {
+		if usable, err := checkBlobSidecarReply(blobTxs, sidecars); err != nil {
 			peer.Log().Warn("Dropping peer for invalid blob sidecars", "number", block.NumberU64(), "err", err)
 			h.removePeer(peer.ID())
 			continue
+		} else if !usable {
+			continue // this peer does not have them; the proposer does
 		}
 		rawdb.WriteBlobSidecars(h.database, block.Hash(), block.NumberU64(), sidecars)
 		h.chain.AddProposalSidecars(block.Hash(), sidecars) // for a re-proposal, and to serve other validators
@@ -251,6 +255,21 @@ func (h *handler) randomBlobSidecarPeer(tried map[string]struct{}) *ethPeer {
 		return p
 	}
 	return nil
+}
+
+// checkBlobSidecarReply classifies a peer's GetBlobSidecars reply for a block
+// with the given blob transactions. An empty reply means the peer does not hold
+// the sidecars, which is normal for an older blob block: it is not usable, but
+// it is not an error, and the peer is kept. A non-empty reply must validate;
+// otherwise the error says why the peer should be dropped.
+func checkBlobSidecarReply(blobTxs []*types.Transaction, sidecars []*types.BlobTxSidecar) (usable bool, err error) {
+	if len(sidecars) == 0 {
+		return false, nil
+	}
+	if err := validateBlobSidecarsForBlock(blobTxs, sidecars); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // validateBlobSidecarsForBlock checks a received sidecar set against the block's

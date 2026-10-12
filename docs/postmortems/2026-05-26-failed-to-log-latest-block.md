@@ -351,6 +351,10 @@ INFO  Metadium - logged the latest block  height=XXXXXXXX hash=... took=...
 
 ### 7.1 `blocksMined` 카운터 조건 개선 (legacy.go:614)
 
+> **적용됨 (#139).** `LogBlock`은 `etcdPut`이 성공한 블록만 `blocksMined`에 세고, 실패한 블록에서는
+> 로테이션 없이 반환한다. etcd가 내려가 있는 동안 리더는 회전하지 않으며(생산은 계속된다),
+> 블록마다 남는 `failed to log the latest block` 에러 줄이 그 상태를 알린다. 재시도(7.2)는 넣지 않았다.
+
 etcd 기록 실패 시 카운터를 증가시키지 않아야 올바른 리더십 로테이션이 가능합니다:
 
 ```go
@@ -403,6 +407,10 @@ func (ma *metaAdmin) etcdPutWithRetry(key, value string, maxRetry int) (int64, e
 ```
 
 ### 7.3 etcdReady 복구 메커니즘 — #140
+
+> **적용됨 (#140).** 별도 워치독 대신 admin 주기 루프가 `running && !ready` 를 세어, 노드별로 6~12틱(30~60초)
+> 연속이면 `etcdRestart` 로 서버를 `Close` 후 재기동한다(리더 포함, `!pbft` 뒤). ready 에 못 미친 재기동마다
+> 한도가 2배(최대 2^5)로 늘고 ready 가 관측되면 초기화된다. `etcdStop` 은 리스너까지 닫고 `etcdReady` 를 지운다.
 
 **워치독을 새로 만들 필요는 없습니다. 복구 경로가 이미 있고, 하필 필요한 상태에서만
 동작을 거부합니다.**
