@@ -44,6 +44,12 @@ const (
 	// nowadays, the practical limit will always be softResponseLimit.
 	maxBodiesServe = 1024
 
+	// maxPooledTxServe is the maximum number of pooled transaction lookups to
+	// perform per request. Lookups for unknown hashes do not contribute to the
+	// response size, so this number is there to bound the work done on requests
+	// stuffed with junk hashes.
+	maxPooledTxServe = 4096
+
 	// maxReceiptsServe is the maximum number of block receipts to serve. This
 	// number is mostly there to limit the number of disk lookups. With block
 	// containing 200+ transactions nowadays, the practical limit will always
