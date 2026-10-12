@@ -392,8 +392,24 @@ func (st *StateTransition) preCheck() error {
 			}
 		}
 	}
+	// Check that the transaction's features are allowed by the active forks.
+	// The pool refuses these on admission, but a block that carries one must
+	// fail to execute rather than run it (upstream #35588). The forks are read
+	// from the chain config directly, as the blob fee check below does, since
+	// Rules() ties Cancun to the merge and Metadium's chains never merged. Fee
+	// delegation has its own gate in buyGas.
+	var (
+		cfg    = st.evm.ChainConfig()
+		number = st.evm.Context.BlockNumber
+	)
+	if msg.AccessList != nil && !cfg.IsBerlin(number) {
+		return fmt.Errorf("%w: access list tx (sender %v)", ErrTxTypeNotSupported, msg.From)
+	}
 	// Check the blob version validity
 	if msg.BlobHashes != nil {
+		if !cfg.IsCancun(number, st.evm.Context.Time) && !cfg.IsCamellia(number) {
+			return fmt.Errorf("%w: blob tx (sender %v)", ErrTxTypeNotSupported, msg.From)
+		}
 		// The to field of a blob tx type is mandatory, and a `BlobTx` transaction internally
 		// has it as a non-nillable value, so any msg derived from blob transaction has it non-nil.
 		// However, messages created through RPC (eth_call) don't have this restriction.

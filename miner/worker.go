@@ -80,7 +80,19 @@ var (
 	errBlockInterruptedByNewHead  = errors.New("new head arrived while building block")
 	errBlockInterruptedByRecommit = errors.New("recommit interrupt while building block")
 	errBlockInterruptedByTimeout  = errors.New("timeout while building block")
+	errStateReadFailure           = errors.New("state read failed while building block")
 )
+
+// stateReadError reports a database error the state recorded while the block
+// was being built: a missing trie node, a failed flush. The state root and the
+// transaction set computed on top of such a state are not trustworthy, so the
+// block must not be assembled, let alone sealed.
+func stateReadError(st *state.StateDB) error {
+	if dbErr := st.Error(); dbErr != nil {
+		return fmt.Errorf("%w: %v", errStateReadFailure, dbErr)
+	}
+	return nil
+}
 
 // environment is the worker's current environment and holds all
 // information of the sealing block generation.
@@ -1605,6 +1617,9 @@ func (w *worker) generateWork(params *generateParams) *newPayloadResult {
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(w.newpayloadTimeout))
 		}
 	}
+	if err := stateReadError(work.state); err != nil {
+		return &newPayloadResult{err: err}
+	}
 	block, err := w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, work.txs, nil, work.receipts, params.withdrawals)
 	if err != nil {
 		return &newPayloadResult{err: err}
@@ -1913,6 +1928,9 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			env.header.BlobGasUsed = new(big.Int).SetUint64(uint64(env.blobs) * params.BlobTxBlobGasPerBlob)
 		}
 		// Withdrawals are set to nil here, because this is only called in PoW.
+		if err := stateReadError(env.state); err != nil {
+			return err
+		}
 		block, err := w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, env.txs, nil, env.receipts, nil)
 		if err != nil {
 			return err
@@ -1959,6 +1977,9 @@ func (w *worker) commitEx(env *environment, interval func(), update bool, start 
 		// EIP-4844: set BlobGasUsed header field before block assembly (must be explicit, even when 0).
 		if w.chainConfig.IsCamellia(env.header.Number) {
 			env.header.BlobGasUsed = new(big.Int).SetUint64(uint64(env.blobs) * params.BlobTxBlobGasPerBlob)
+		}
+		if err := stateReadError(env.state); err != nil {
+			return err
 		}
 		block, err := w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, env.txs, nil, env.receipts, nil)
 		if err != nil {
