@@ -72,8 +72,12 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	if !opts.Config.IsCancun(head.Number, head.Time) && !opts.Config.IsCamellia(head.Number) && tx.Type() == types.BlobTxType {
 		return fmt.Errorf("%w: type %d rejected, pool not yet in Cancun or Camellia", core.ErrTxTypeNotSupported, tx.Type())
 	}
+	// Camellia activates Shanghai by block number, without a ShanghaiTime, and
+	// Rules() reports IsShanghai for it. The pool has to agree with execution on
+	// the EIP-3860 initcode rules, or it admits creations the miner then drops.
+	isShanghai := opts.Config.IsShanghai(head.Number, head.Time) || opts.Config.IsCamellia(head.Number)
 	// Check whether the init code size has been exceeded
-	if opts.Config.IsShanghai(head.Number, head.Time) && tx.To() == nil && len(tx.Data()) > params.MaxInitCodeSize {
+	if isShanghai && tx.To() == nil && len(tx.Data()) > params.MaxInitCodeSize {
 		return fmt.Errorf("%w: code size %v, limit %v", core.ErrMaxInitCodeSizeExceeded, len(tx.Data()), params.MaxInitCodeSize)
 	}
 	// Transactions can't be negative. This may never happen using RLP decoded
@@ -102,7 +106,7 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	}
 	// Ensure the transaction has more gas than the bare minimum needed to cover
 	// the transaction metadata
-	intrGas, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.To() == nil, true, opts.Config.IsIstanbul(head.Number), opts.Config.IsShanghai(head.Number, head.Time))
+	intrGas, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.To() == nil, true, opts.Config.IsIstanbul(head.Number), isShanghai)
 	if err != nil {
 		return err
 	}
