@@ -17,6 +17,7 @@
 package tests
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -122,6 +123,7 @@ type stTransaction struct {
 	Sender               *common.Address     `json:"sender"`
 	BlobVersionedHashes  []common.Hash       `json:"blobVersionedHashes,omitempty"`
 	BlobGasFeeCap        *big.Int            `json:"maxFeePerBlobGas,omitempty"`
+	AuthorizationList    []*stAuthorization  `json:"authorizationList,omitempty"`
 }
 
 type stTransactionMarshaling struct {
@@ -132,6 +134,28 @@ type stTransactionMarshaling struct {
 	GasLimit             []math.HexOrDecimal64
 	PrivateKey           hexutil.Bytes
 	BlobGasFeeCap        *math.HexOrDecimal256
+}
+
+//go:generate go run github.com/fjl/gencodec -type stAuthorization -field-override stAuthorizationMarshaling -out gen_stauthorization.go
+
+// stAuthorization is an EIP-7702 authorization from an account to run the
+// code at Address in its place.
+type stAuthorization struct {
+	ChainID *big.Int       `json:"chainId" gencodec:"required"`
+	Address common.Address `json:"address" gencodec:"required"`
+	Nonce   uint64         `json:"nonce" gencodec:"required"`
+	V       uint8          `json:"v" gencodec:"required"`
+	R       *big.Int       `json:"r" gencodec:"required"`
+	S       *big.Int       `json:"s" gencodec:"required"`
+}
+
+// field type overrides for gencodec
+type stAuthorizationMarshaling struct {
+	ChainID *math.HexOrDecimal256
+	Nonce   math.HexOrDecimal64
+	V       math.HexOrDecimal64
+	R       *math.HexOrDecimal256
+	S       *math.HexOrDecimal256
 }
 
 // GetChainConfig takes a fork definition and returns a chain config.
@@ -298,7 +322,10 @@ func (t *StateTest) RunNoVerify(subtest StateSubtest, vmconfig vm.Config, snapsh
 	snapshot := state.StateDB.Snapshot()
 	gaspool := new(core.GasPool)
 	gaspool.AddGas(block.GasLimit())
-	_, err = core.ApplyMessage(evm, msg, gaspool)
+	result, err := core.ApplyMessage(evm, msg, gaspool)
+	if err == nil {
+		state.GasUsed = result.UsedGas
+	}
 	if err != nil {
 		state.StateDB.RevertToSnapshot(snapshot)
 	}
@@ -312,6 +339,20 @@ func (t *StateTest) RunNoVerify(subtest StateSubtest, vmconfig vm.Config, snapsh
 	// Commit state mutations into database.
 	root, _ = state.StateDB.Commit(block.NumberU64(), config.IsEIP158(block.Number()))
 	return state, root, err
+}
+
+// floorDataGas is the EIP-7623 floor for the subtest's calldata: 21000 plus
+// 10 gas per token, a zero byte one token and any other byte four. Doraji does
+// not charge it; dorajiSkipReason uses it to recognise upstream expectations
+// that do.
+func (t *StateTest) floorDataGas(subtest StateSubtest) uint64 {
+	data, err := hex.DecodeString(strings.TrimPrefix(t.json.Tx.Data[t.json.Post[subtest.Fork][subtest.Index].Indexes.Data], "0x"))
+	if err != nil {
+		return 0
+	}
+	zeros := uint64(bytes.Count(data, []byte{0}))
+	tokens := zeros + (uint64(len(data))-zeros)*4
+	return params.TxGas + tokens*10
 }
 
 func (t *StateTest) gasLimit(subtest StateSubtest) uint64 {
@@ -406,6 +447,20 @@ func (tx *stTransaction) toMessage(ps stPostState, baseFee *big.Int) (*core.Mess
 	if gasPrice == nil {
 		return nil, errors.New("no gas price provided")
 	}
+	var authList []types.SetCodeAuthorization
+	if tx.AuthorizationList != nil {
+		authList = make([]types.SetCodeAuthorization, len(tx.AuthorizationList))
+		for i, auth := range tx.AuthorizationList {
+			authList[i] = types.SetCodeAuthorization{
+				ChainID: *uint256.MustFromBig(auth.ChainID),
+				Address: auth.Address,
+				Nonce:   auth.Nonce,
+				V:       auth.V,
+				R:       *uint256.MustFromBig(auth.R),
+				S:       *uint256.MustFromBig(auth.S),
+			}
+		}
+	}
 
 	msg := &core.Message{
 		From:          from,
@@ -420,6 +475,8 @@ func (tx *stTransaction) toMessage(ps stPostState, baseFee *big.Int) (*core.Mess
 		AccessList:    accessList,
 		BlobHashes:    tx.BlobVersionedHashes,
 		BlobGasFeeCap: tx.BlobGasFeeCap,
+
+		SetCodeAuthorizations: authList,
 	}
 	return msg, nil
 }
@@ -440,6 +497,7 @@ type StateTestState struct {
 	StateDB   *state.StateDB
 	TrieDB    *triedb.Database
 	Snapshots *snapshot.Tree
+	GasUsed   uint64 // gas used by the transaction, 0 if it was not executed
 }
 
 // MakePreState creates a state containing the given allocation.
@@ -476,7 +534,7 @@ func MakePreState(db ethdb.Database, accounts types.GenesisAlloc, snapshotter bo
 		snaps, _ = snapshot.New(snapconfig, db, triedb, root)
 	}
 	statedb, _ = state.New(root, sdb, snaps)
-	return StateTestState{statedb, triedb, snaps}
+	return StateTestState{StateDB: statedb, TrieDB: triedb, Snapshots: snaps}
 }
 
 // Close should be called when the state is no longer needed, ie. after running the test.
