@@ -72,6 +72,9 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	if !opts.Config.IsCancun(head.Number, head.Time) && !opts.Config.IsCamellia(head.Number) && tx.Type() == types.BlobTxType {
 		return fmt.Errorf("%w: type %d rejected, pool not yet in Cancun or Camellia", core.ErrTxTypeNotSupported, tx.Type())
 	}
+	if !opts.Config.IsDoraji(head.Number) && tx.Type() == types.SetCodeTxType {
+		return fmt.Errorf("%w: type %d rejected, pool not yet in Doraji", core.ErrTxTypeNotSupported, tx.Type())
+	}
 	// Camellia activates Shanghai by block number, without a ShanghaiTime, and
 	// Rules() reports IsShanghai for it. The pool has to agree with execution on
 	// the EIP-3860 initcode rules, or it admits creations the miner then drops.
@@ -139,6 +142,19 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 		if err := validateBlobSidecar(hashes, sidecar); err != nil {
 			return err
 		}
+	}
+	if err := validateSetCode(tx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateSetCode checks the EIP-7702 shape of a set-code transaction: at
+// least one authorization. Creation is impossible by construction, since the
+// type's recipient is not a pointer.
+func validateSetCode(tx *types.Transaction) error {
+	if tx.Type() == types.SetCodeTxType && len(tx.SetCodeAuthorizations()) == 0 {
+		return fmt.Errorf("%w: set code tx must have at least one authorization tuple", core.ErrEmptyAuthList)
 	}
 	return nil
 }

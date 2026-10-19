@@ -275,12 +275,13 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if config.BlobPool.Datadir != "" {
 		config.BlobPool.Datadir = stack.ResolvePath(config.BlobPool.Datadir)
 	}
-	blobPool := blobpool.New(config.BlobPool, eth.blockchain)
-
 	if config.TxPool.Journal != "" {
 		config.TxPool.Journal = stack.ResolvePath(config.TxPool.Journal)
 	}
+	// The blob pool asks the legacy pool for pending EIP-7702 authorizations,
+	// so the legacy pool is created first.
 	legacyPool := legacypool.New(config.TxPool, eth.blockchain)
+	blobPool := blobpool.New(config.BlobPool, eth.blockchain, legacyPool.HasPendingAuth)
 
 	eth.txPool, err = txpool.New(config.TxPool.PriceLimit, eth.blockchain, []txpool.SubPool{legacyPool, blobPool})
 	if err != nil {
