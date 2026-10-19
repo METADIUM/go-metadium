@@ -192,6 +192,8 @@ const (
 
 	P256VerifyGas uint64 = 6900 // secp256r1 elliptic curve signature verifier gas price
 
+	TxAuthTupleGas uint64 = 12500 // Per auth tuple code specified in EIP-7702
+
 	VrfVerifyGas uint64 = 50000 // @lukepark327: VRF Verify gas price
 
 	// EIP-3860: Initcode size limit
