@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - dev
+      - feature/doraji
   pull_request:
     branches:
       - dev
+      - feature/doraji
 
 jobs:
   ci:
     # Pipeline in .github/workflows/ci.yml. Pull requests run the short test
-    # target; dev-cron runs the full one nightly.
+    # target; dev-cron runs the full one nightly. feature/doraji is the
+    # integration branch for the Doraji fork and carries the same tree, so it
+    # runs the same pipeline.
     uses: ./.github/workflows/ci.yml
