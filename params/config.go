@@ -441,6 +441,7 @@ type ChainConfig struct {
 	ApplepieBlock *big.Int `json:"applepieBlock,omitempty"` // Applepie switch block (nil = no fork, 0 = already on applepie)
 	BokbunjaBlock *big.Int `json:"bokbunjaBlock,omitempty"` // Bokbunja switch block (nil = no fork, 0 = already on bokbunja)
 	CamelliaBlock *big.Int `json:"camelliaBlock,omitempty"` // Camellia (Shanghai + Cancun) switch block (nil = no fork, 0 = already on camellia)
+	DorajiBlock   *big.Int `json:"dorajiBlock,omitempty"`   // Doraji (Prague + Osaka subset) switch block (nil = no fork, 0 = already on doraji)
 
 	// PBFT (docs/pbft-consensus-design.md). A private network bootstraps on
 	// PoA and switches to PBFT at BftBlock; nil means PoA forever. Bft holds the
@@ -586,6 +587,9 @@ func (c *ChainConfig) Description() string {
 	if c.CamelliaBlock != nil {
 		banner += fmt.Sprintf(" - Camellia Fork:               #%-8v\n", c.CamelliaBlock)
 	}
+	if c.DorajiBlock != nil {
+		banner += fmt.Sprintf(" - Doraji Fork:                 #%-8v\n", c.DorajiBlock)
+	}
 	if c.BftBlock != nil {
 		banner += fmt.Sprintf(" - PBFT switch:                 #%-8v (%v)\n", c.BftBlock, c.Bft)
 	}
@@ -721,6 +725,14 @@ func (c *ChainConfig) IsCamellia(num *big.Int) bool {
 	return isForked(c.CamelliaBlock, num)
 }
 
+// IsDoraji returns whether num is either equal to the Doraji fork block or greater.
+// Doraji activates the Prague and Osaka EIPs that apply to a proof-of-authority
+// chain (docs/doraji-scope.md); the EVM, precompile and transaction changes
+// that read this rule land with their own changes.
+func (c *ChainConfig) IsDoraji(num *big.Int) bool {
+	return isForked(c.DorajiBlock, num)
+}
+
 // IsBft returns whether num is either equal to the PBFT switch block or greater.
 func (c *ChainConfig) IsBft(num *big.Int) bool {
 	return isForked(c.BftBlock, num)
@@ -796,8 +808,29 @@ func (c *ChainConfig) CheckCompatible(newcfg *ChainConfig, height uint64, time u
 // The PBFT settings are the exception and are enforced: they only exist on
 // networks created for PBFT, so no stored config written by an earlier release
 // can carry them, and a wrong value there is a consensus fault from block one.
+// The Doraji block is enforced for the same reason.
 func (c *ChainConfig) CheckConfigForkOrder() error {
+	if err := c.checkDoraji(); err != nil {
+		return err
+	}
 	return c.checkBft()
+}
+
+// checkDoraji validates the Doraji scheduling. Doraji builds on the Cancun
+// EVM, so it needs Camellia and cannot come before it. Like the PBFT settings,
+// it is enforced at startup: no stored config written by an earlier release
+// carries a dorajiBlock, so this cannot refuse an existing datadir.
+func (c *ChainConfig) checkDoraji() error {
+	if c.DorajiBlock == nil {
+		return nil
+	}
+	if c.CamelliaBlock == nil {
+		return fmt.Errorf("invalid Doraji config: dorajiBlock (%v) set without camelliaBlock", c.DorajiBlock)
+	}
+	if c.CamelliaBlock.Cmp(c.DorajiBlock) > 0 {
+		return fmt.Errorf("invalid Doraji config: dorajiBlock (%v) before camelliaBlock (%v)", c.DorajiBlock, c.CamelliaBlock)
+	}
+	return nil
 }
 
 // checkBft validates the PBFT settings (docs/pbft-consensus-design.md §8.1).
@@ -870,6 +903,7 @@ func (c *ChainConfig) checkForkOrder() error {
 		{name: "applepieBlock", block: c.ApplepieBlock, optional: true},
 		{name: "bokbunjaBlock", block: c.BokbunjaBlock, optional: true},
 		{name: "camelliaBlock", block: c.CamelliaBlock, optional: true},
+		{name: "dorajiBlock", block: c.DorajiBlock, optional: true},
 		{name: "shanghaiTime", timestamp: c.ShanghaiTime},
 		{name: "cancunTime", timestamp: c.CancunTime, optional: true},
 		{name: "pragueTime", timestamp: c.PragueTime, optional: true},
@@ -982,6 +1016,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	}
 	if isForkBlockIncompatible(c.CamelliaBlock, newcfg.CamelliaBlock, headNumber) {
 		return newBlockCompatError("Camellia fork block", c.CamelliaBlock, newcfg.CamelliaBlock)
+	}
+	if isForkBlockIncompatible(c.DorajiBlock, newcfg.DorajiBlock, headNumber) {
+		return newBlockCompatError("Doraji fork block", c.DorajiBlock, newcfg.DorajiBlock)
 	}
 	if isForkBlockIncompatible(c.BftBlock, newcfg.BftBlock, headNumber) {
 		return newBlockCompatError("PBFT switch block", c.BftBlock, newcfg.BftBlock)
@@ -1171,6 +1208,7 @@ type Rules struct {
 	IsPangyo, IsApplepie bool
 	IsBokbunja           bool
 	IsCamellia           bool // Shanghai + Cancun EIPs
+	IsDoraji             bool // Prague + Osaka EIPs, the proof-of-authority subset
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1182,6 +1220,7 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 	// disallow setting Merge out of order
 	isMerge = isMerge && c.IsLondon(num)
 	isCamellia := c.IsCamellia(num)
+	isDoraji := c.IsDoraji(num)
 	return Rules{
 		ChainID:          new(big.Int).Set(chainID),
 		IsHomestead:      c.IsHomestead(num),
@@ -1204,5 +1243,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsApplepie:       c.IsApplepie(num),
 		IsBokbunja:       c.IsBokbunja(num),
 		IsCamellia:       isCamellia,
+		IsDoraji:         isDoraji,
 	}
 }
