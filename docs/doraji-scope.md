@@ -22,8 +22,9 @@ Scope was fixed on 2026-10-19 and is changed only by a revision of this document
 ## Excluded
 
 These three change what a block or transaction is allowed to cost or carry.
-Metadium accepts large transactions on purpose (a 254 KB transaction uses about
-52M gas against a 105M block limit), and the reasons upstream added the limits —
+Metadium accepts large transactions on purpose (a 254 KB contract creation uses
+about 52M gas against a 105M block limit, most of it the code deposit; the
+calldata alone is about 4M), and the reasons upstream added the limits —
 block validation time under PeerDAS — do not apply to this chain. They are not
 ported; the upstream test vectors that exercise them are skipped.
 
