@@ -247,3 +247,34 @@ func TestDorajiIntrinsicGas(t *testing.T) {
 		t.Fatalf("intrinsic gas: base %d, one %d, three %d", base, one, three)
 	}
 }
+
+// TestDorajiSetCodeSelfDestructKeepsAuthority: an authority that did not
+// exist before the transaction, delegated to code that runs SELFDESTRUCT,
+// survives. EIP-6780 deletes only contracts created by CREATE in the same
+// transaction; an authorization gives the account code without a CREATE.
+// (execution-spec-tests test_set_code_to_self_destruct, balance_0.)
+func TestDorajiSetCodeSelfDestructKeepsAuthority(t *testing.T) {
+	e := newSetCodeEnv(t, dorajiTestConfig())
+	destructor := common.HexToAddress("0x00000000000000000000000000000000000000dd")
+	e.state.SetCode(destructor, common.Hex2Bytes("30ff")) // ADDRESS, SELFDESTRUCT
+	freshKey, _ := crypto.GenerateKey()
+	fresh := crypto.PubkeyToAddress(freshKey.PublicKey)
+	if e.state.Exist(fresh) {
+		t.Fatal("fresh authority already exists")
+	}
+	auth := e.authorization(freshKey, e.cfg.ChainID.Uint64(), destructor, 0)
+	res, err := e.apply(e.setCodeTx(0, fresh, []types.SetCodeAuthorization{auth}))
+	if err != nil || res.Err != nil {
+		t.Fatalf("set-code tx: err %v, vm err %v", err, res.Err)
+	}
+	e.state.Finalise(true)
+	if !e.state.Exist(fresh) {
+		t.Fatal("SELFDESTRUCT deleted an authority that was not created by CREATE")
+	}
+	if code := e.state.GetCode(fresh); !bytes.Equal(code, types.AddressToDelegation(destructor)) {
+		t.Fatalf("authority code %x, want the delegation designator", code)
+	}
+	if n := e.state.GetNonce(fresh); n != 1 {
+		t.Fatalf("authority nonce %d, want 1", n)
+	}
+}
