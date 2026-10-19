@@ -2,6 +2,7 @@
 # setup.sh - go-metadium PoA private 3-node network initialization
 # Usage: ./setup.sh
 # Options: GMET_BIN=/path/to/gmet ./setup.sh
+#          DORAJI_BLOCK=200 ./setup.sh   (schedule the Doraji fork; see doraji-test.sh)
 #
 # Phase 1: only node1(bootnode) produces blocks, node2/3 sync only
 # Phase 2: deploy governance contract and add other nodes (separate step)
@@ -13,6 +14,8 @@ cd "$SCRIPT_DIR"
 
 GMET_BIN="${GMET_BIN:-$SCRIPT_DIR/../../geth}"
 USE_ROCKSDB="${USE_ROCKSDB:-0}"
+DORAJI_BLOCK="${DORAJI_BLOCK:-}"
+[[ -z "$DORAJI_BLOCK" || "$DORAJI_BLOCK" =~ ^[0-9]+$ ]] || { echo "[ERROR] DORAJI_BLOCK must be a block number" >&2; exit 1; }
 NETWORKID=1337
 PASSWORD="privatenet123"
 
@@ -21,7 +24,7 @@ err()  { echo "[ERROR] $*" >&2; exit 1; }
 
 [[ -x "$GMET_BIN" ]] || err "gmet binary not found: $GMET_BIN"
 
-log "=== PoA private network initialization started (chainId=$NETWORKID, CamelliaFork=100) ==="
+log "=== PoA private network initialization started (chainId=$NETWORKID, CamelliaFork=100${DORAJI_BLOCK:+, DorajiFork=$DORAJI_BLOCK}) ==="
 
 # The nodes run as whoever ran this script, because that is who owns data/.
 # docker compose reads .env from this directory, so a bare `docker compose up`
@@ -106,6 +109,9 @@ log "static-nodes.json created"
 # Generate PoA genesis.json
 # extraData = "0x" + node1_id (128 hex chars) → bootnode identifier
 log "Generating genesis.json (extraData=node1_id)..."
+DORAJI_FIELD=""
+[[ -n "$DORAJI_BLOCK" ]] && DORAJI_FIELD=",
+    \"dorajiBlock\": $DORAJI_BLOCK"
 cat > genesis.json <<EOF
 {
   "alloc": {
@@ -137,7 +143,7 @@ cat > genesis.json <<EOF
     "pangyoBlock": 0,
     "applepieBlock": 0,
     "bokbunjaBlock": 0,
-    "camelliaBlock": 100
+    "camelliaBlock": 100${DORAJI_FIELD}
   },
   "difficulty": "0x1",
   "extraData": "0x${NODE1_ID}",
