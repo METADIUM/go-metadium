@@ -220,9 +220,18 @@ func TestDorajiSetCodeInvalidAuthorizations(t *testing.T) {
 }
 
 // TestDorajiSetCodeGates: a set-code transaction is refused before Doraji,
-// and with an empty authorization list after it.
+// and with an empty authorization list after it; before Doraji an account
+// whose code looks like a designator is a contract, not a sender.
 func TestDorajiSetCodeGates(t *testing.T) {
 	pre := newSetCodeEnv(t, params.AllEthashProtocolChanges)
+	pre.state.SetCode(pre.authority, types.AddressToDelegation(pre.target))
+	plain := types.MustSignNewTx(pre.authKey, pre.signer(), &types.LegacyTx{
+		Nonce: 0, GasPrice: big.NewInt(1e9), Gas: 100_000, To: &pre.target, Value: big.NewInt(0),
+	})
+	if _, err := pre.apply(plain); !errors.Is(err, ErrSenderNoEOA) {
+		t.Fatalf("designator-coded sender before Doraji: err = %v, want ErrSenderNoEOA", err)
+	}
+	pre.state.SetCode(pre.authority, nil)
 	auth := pre.authorization(pre.authKey, pre.cfg.ChainID.Uint64(), pre.target, 0)
 	if _, err := pre.apply(pre.setCodeTx(0, pre.authority, []types.SetCodeAuthorization{auth})); !errors.Is(err, ErrTxTypeNotSupported) {
 		t.Fatalf("set-code tx before Doraji: err = %v, want ErrTxTypeNotSupported", err)
@@ -276,5 +285,55 @@ func TestDorajiSetCodeSelfDestructKeepsAuthority(t *testing.T) {
 	}
 	if n := e.state.GetNonce(fresh); n != 1 {
 		t.Fatalf("authority nonce %d, want 1", n)
+	}
+}
+
+// TestDorajiDelegationTargetWarming: a transaction to a delegated account
+// warms the delegation target before execution, so the target's code touching
+// its own address pays a warm access; the same code at a plain contract pays
+// a cold one. Before Doraji nothing is warmed.
+func TestDorajiDelegationTargetWarming(t *testing.T) {
+	// PUSH20 target, EXTCODESIZE, POP, STOP: one access to the target's
+	// address, from whichever account the code runs in.
+	target := common.HexToAddress("0x00000000000000000000000000000000000000cc")
+	code := append(append([]byte{0x73}, target.Bytes()...), 0x3b, 0x50, 0x00)
+	plain := common.HexToAddress("0x00000000000000000000000000000000000000ee")
+
+	e := newSetCodeEnv(t, dorajiTestConfig())
+	e.state.SetCode(e.target, code)
+	e.state.SetCode(plain, code)
+	e.state.SetCode(e.authority, types.AddressToDelegation(e.target))
+	e.state.SetNonce(e.authority, 1)
+	tx := func(nonce uint64, to common.Address) *types.Transaction {
+		return types.MustSignNewTx(e.senderKey, e.signer(), &types.LegacyTx{
+			Nonce: nonce, GasPrice: big.NewInt(1e9), Gas: 100_000, To: &to, Value: big.NewInt(0),
+		})
+	}
+	resPlain, err := e.apply(tx(0, plain))
+	if err != nil || resPlain.Err != nil {
+		t.Fatalf("plain: err %v, vm err %v", err, resPlain.Err)
+	}
+	resDeleg, err := e.apply(tx(1, e.authority))
+	if err != nil || resDeleg.Err != nil {
+		t.Fatalf("delegated: err %v, vm err %v", err, resDeleg.Err)
+	}
+	if diff := resPlain.UsedGas - resDeleg.UsedGas; diff != params.ColdAccountAccessCostEIP2929-params.WarmStorageReadCostEIP2929 {
+		t.Fatalf("gas: plain %d, delegated %d, diff %d, want the cold-warm difference %d",
+			resPlain.UsedGas, resDeleg.UsedGas, diff, params.ColdAccountAccessCostEIP2929-params.WarmStorageReadCostEIP2929)
+	}
+
+	// Before Doraji the designator is ordinary code: it runs (and fails on
+	// 0xef) and the target is not warmed.
+	pre := newSetCodeEnv(t, params.AllEthashProtocolChanges)
+	pre.state.SetCode(pre.authority, types.AddressToDelegation(target))
+	pre.state.SetNonce(pre.authority, 1)
+	preTx := types.MustSignNewTx(pre.senderKey, pre.signer(), &types.LegacyTx{
+		Nonce: 0, GasPrice: big.NewInt(1e9), Gas: 100_000, To: &pre.authority, Value: big.NewInt(0),
+	})
+	if res, err := pre.apply(preTx); err != nil || res.Err == nil {
+		t.Fatalf("before Doraji: err %v, vm err %v, want the designator to fail as code", err, res.Err)
+	}
+	if pre.state.AddressInAccessList(target) {
+		t.Fatal("before Doraji: the target was warmed")
 	}
 }

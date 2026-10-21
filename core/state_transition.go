@@ -370,12 +370,16 @@ func (st *StateTransition) preCheck() error {
 			return fmt.Errorf("%w: address %v, nonce: %d", ErrNonceMax,
 				msg.From.Hex(), stNonce)
 		}
-		// Make sure the sender is an EOA. An account whose code is an EIP-7702
-		// delegation designator still is one.
-		code := st.state.GetCode(msg.From)
-		if _, delegated := types.ParseDelegation(code); len(code) > 0 && !delegated {
-			return fmt.Errorf("%w: address %v, codehash: %s", ErrSenderNoEOA,
-				msg.From.Hex(), st.state.GetCodeHash(msg.From))
+		// Make sure the sender is an EOA. From Doraji, an account whose code is
+		// an EIP-7702 delegation designator still is one; before the fork no
+		// account can have been delegated, and code that merely looks like a
+		// designator is a contract.
+		if code := st.state.GetCode(msg.From); len(code) > 0 {
+			_, delegated := types.ParseDelegation(code)
+			if !delegated || !st.evm.ChainConfig().IsDoraji(st.evm.Context.BlockNumber) {
+				return fmt.Errorf("%w: address %v, codehash: %s", ErrSenderNoEOA,
+					msg.From.Hex(), st.state.GetCodeHash(msg.From))
+			}
 		}
 	}
 	// Make sure that transaction gasFeeCap is greater than the baseFee (post london)
@@ -554,13 +558,18 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 			}
 		}
 
-		// Perform convenience warming of sender's delegation target. Although the
-		// sender is already warmed in Prepare(..), it's possible a delegation to
-		// the account was deployed during this transaction. To handle correctly,
-		// simply wait until the final state of delegations is determined before
-		// performing the resolution and warming.
-		if addr, ok := types.ParseDelegation(st.state.GetCode(*msg.To)); ok {
-			st.state.AddAddressToAccessList(addr)
+		// Perform convenience warming of the recipient's delegation target.
+		// Although the recipient is already warmed in Prepare(..), it's possible
+		// a delegation to the account was deployed during this transaction. To
+		// handle correctly, simply wait until the final state of delegations is
+		// determined before performing the resolution and warming. Gated on the
+		// fork: before Doraji no account is delegated, and warming the target of
+		// code that merely looks like a designator would change gas used on
+		// pre-fork blocks.
+		if rules.IsDoraji {
+			if addr, ok := types.ParseDelegation(st.state.GetCode(*msg.To)); ok {
+				st.state.AddAddressToAccessList(addr)
+			}
 		}
 
 		ret, st.gasRemaining, vmerr = st.evm.Call(sender, st.to(), msg.Data, st.gasRemaining, value)
