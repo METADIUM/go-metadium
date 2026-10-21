@@ -104,17 +104,30 @@ type crashList struct {
 
 const crashesToKeep = 10
 
+// readCrashList reads the unclean-shutdown marker list. A key that is absent
+// and a key with an empty value both mean "no markers yet": the RocksDB
+// backend answers a missing key with (nil, nil) rather than an error, and an
+// empty value does not RLP-decode.
+func readCrashList(db ethdb.KeyValueStore) (crashList, error) {
+	var uncleanShutdowns crashList
+	data, err := db.Get(uncleanShutdownKey)
+	if err != nil || len(data) == 0 {
+		return uncleanShutdowns, nil
+	}
+	if err := rlp.DecodeBytes(data, &uncleanShutdowns); err != nil {
+		return crashList{}, err
+	}
+	return uncleanShutdowns, nil
+}
+
 // PushUncleanShutdownMarker appends a new unclean shutdown marker and returns
 // the previous data
 // - a list of timestamps
 // - a count of how many old unclean-shutdowns have been discarded
 func PushUncleanShutdownMarker(db ethdb.KeyValueStore) ([]uint64, uint64, error) {
-	var uncleanShutdowns crashList
-	// Read old data
-	if data, err := db.Get(uncleanShutdownKey); err == nil {
-		if err := rlp.DecodeBytes(data, &uncleanShutdowns); err != nil {
-			return nil, 0, err
-		}
+	uncleanShutdowns, err := readCrashList(db)
+	if err != nil {
+		return nil, 0, err
 	}
 	var discarded = uncleanShutdowns.Discarded
 	var previous = make([]uint64, len(uncleanShutdowns.Recent))
@@ -137,11 +150,8 @@ func PushUncleanShutdownMarker(db ethdb.KeyValueStore) ([]uint64, uint64, error)
 
 // PopUncleanShutdownMarker removes the last unclean shutdown marker
 func PopUncleanShutdownMarker(db ethdb.KeyValueStore) {
-	var uncleanShutdowns crashList
-	// Read old data
-	if data, err := db.Get(uncleanShutdownKey); err != nil {
-		log.Warn("Error reading unclean shutdown markers", "error", err)
-	} else if err := rlp.DecodeBytes(data, &uncleanShutdowns); err != nil {
+	uncleanShutdowns, err := readCrashList(db)
+	if err != nil {
 		log.Error("Error decoding unclean shutdown markers", "error", err) // Should mos def _not_ happen
 	}
 	if l := len(uncleanShutdowns.Recent); l > 0 {
@@ -155,11 +165,8 @@ func PopUncleanShutdownMarker(db ethdb.KeyValueStore) {
 
 // UpdateUncleanShutdownMarker updates the last marker's timestamp to now.
 func UpdateUncleanShutdownMarker(db ethdb.KeyValueStore) {
-	var uncleanShutdowns crashList
-	// Read old data
-	if data, err := db.Get(uncleanShutdownKey); err != nil {
-		log.Warn("Error reading unclean shutdown markers", "error", err)
-	} else if err := rlp.DecodeBytes(data, &uncleanShutdowns); err != nil {
+	uncleanShutdowns, err := readCrashList(db)
+	if err != nil {
 		log.Warn("Error decoding unclean shutdown markers", "error", err)
 	}
 	// This shouldn't happen because we push a marker on Backend instantiation
