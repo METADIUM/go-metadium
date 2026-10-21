@@ -1202,13 +1202,14 @@ type Rules struct {
 	IsByzantium, IsConstantinople, IsPetersburg, IsIstanbul bool
 	IsBerlin, IsLondon                                      bool
 	IsMerge, IsShanghai, IsCancun, IsPrague                 bool
+	IsOsaka                                                 bool
 	IsVerkle                                                bool
 	// Metadium-specific rules
 	IsAvocado            bool
 	IsPangyo, IsApplepie bool
 	IsBokbunja           bool
 	IsCamellia           bool // Shanghai + Cancun EIPs
-	IsDoraji             bool // Prague + Osaka EIPs, the proof-of-authority subset
+	IsDoraji             bool // Prague + Osaka EIPs, the proof-of-authority subset; sets IsPrague and IsOsaka
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1236,7 +1237,8 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsMerge:          isMerge,
 		IsShanghai:       (isMerge && c.IsShanghai(num, timestamp)) || isCamellia,
 		IsCancun:         (isMerge && c.IsCancun(num, timestamp)) || isCamellia,
-		IsPrague:         isMerge && c.IsPrague(num, timestamp),
+		IsPrague:         (isMerge && c.IsPrague(num, timestamp)) || isDoraji,
+		IsOsaka:          isDoraji,
 		IsVerkle:         isMerge && c.IsVerkle(num, timestamp),
 		IsAvocado:        c.IsAvocado(num),
 		IsPangyo:         c.IsPangyo(num),

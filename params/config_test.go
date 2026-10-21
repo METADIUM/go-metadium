@@ -209,6 +209,14 @@ func TestDorajiScheduling(t *testing.T) {
 	if r := c.Rules(big.NewInt(100), false, 0); !r.IsDoraji || !r.IsCamellia {
 		t.Fatalf("block 100: rules = doraji %v camellia %v", r.IsDoraji, r.IsCamellia)
 	}
+	// Doraji stands in for the upstream forks it takes its rules from, the
+	// way Camellia stands in for Shanghai and Cancun.
+	if r := c.Rules(big.NewInt(99), false, 0); r.IsPrague || r.IsOsaka {
+		t.Fatalf("block 99: rules = prague %v osaka %v", r.IsPrague, r.IsOsaka)
+	}
+	if r := c.Rules(big.NewInt(100), false, 0); !r.IsPrague || !r.IsOsaka {
+		t.Fatalf("block 100: rules = prague %v osaka %v", r.IsPrague, r.IsOsaka)
+	}
 	if !strings.Contains(c.Description(), "Doraji Fork:                 #100") {
 		t.Fatalf("banner does not show the fork block:\n%s", c.Description())
 	}

@@ -928,3 +928,41 @@ func TestOpMCopy(t *testing.T) {
 		}
 	}
 }
+
+// TestOpCLZ: EIP-7939, the count of leading zero bits of the top stack item,
+// 256 for zero.
+func TestOpCLZ(t *testing.T) {
+	var (
+		env            = NewEVM(BlockContext{}, TxContext{}, nil, params.TestChainConfig, Config{})
+		stack          = newstack()
+		pc             = uint64(0)
+		evmInterpreter = env.interpreter
+	)
+	for _, tc := range []struct {
+		inputHex string
+		want     uint64
+	}{
+		{"0x0", 256},
+		{"0x1", 255},
+		{"0x6ff", 245},        // 11 bits
+		{"0xffffffffff", 216}, // 40 bits
+		{"0x4000000000000000000000000000000000000000000000000000000000000000", 1},
+		{"0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 1},
+		{"0x8000000000000000000000000000000000000000000000000000000000000000", 0},
+		{"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 0},
+	} {
+		val := new(uint256.Int)
+		if err := val.SetFromHex(tc.inputHex); err != nil {
+			t.Fatalf("invalid hex uint256 %q: %v", tc.inputHex, err)
+		}
+		stack.push(val)
+		opCLZ(&pc, evmInterpreter, &ScopeContext{nil, stack, nil})
+		if got := stack.len(); got != 1 {
+			t.Fatalf("clz(%s): stack length %d, want 1", tc.inputHex, got)
+		}
+		res := stack.pop()
+		if got := res.Uint64(); got != tc.want {
+			t.Fatalf("clz(%s) = %d, want %d", tc.inputHex, got, tc.want)
+		}
+	}
+}
