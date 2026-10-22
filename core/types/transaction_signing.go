@@ -40,6 +40,8 @@ type sigCache struct {
 func MakeSigner(config *params.ChainConfig, blockNumber *big.Int, blockTime uint64) Signer {
 	var signer Signer
 	switch {
+	case config.IsDoraji(blockNumber):
+		signer = NewDorajiSigner(config.ChainID)
 	case config.IsLondon(blockNumber):
 		signer = NewLondonSigner(config.ChainID)
 	case config.IsBerlin(blockNumber):
@@ -63,6 +65,9 @@ func MakeSigner(config *params.ChainConfig, blockNumber *big.Int, blockTime uint
 // have the current block number available, use MakeSigner instead.
 func LatestSigner(config *params.ChainConfig) Signer {
 	if config.ChainID != nil {
+		if config.DorajiBlock != nil {
+			return NewDorajiSigner(config.ChainID)
+		}
 		if config.LondonBlock != nil {
 			return NewLondonSigner(config.ChainID)
 		}
@@ -87,7 +92,7 @@ func LatestSignerForChainID(chainID *big.Int) Signer {
 	if chainID == nil {
 		return HomesteadSigner{}
 	}
-	return NewLondonSigner(chainID)
+	return NewDorajiSigner(chainID)
 }
 
 // SignTx signs the transaction using the given signer and private key.
@@ -223,6 +228,64 @@ type Signer interface {
 }
 
 // fee delegation
+// dorajiSigner accepts the set-code transaction type (EIP-7702) on top of
+// everything the London signer accepts.
+type dorajiSigner struct{ londonSigner }
+
+// NewDorajiSigner returns a signer that accepts
+// - EIP-7702 set code transactions
+// - EIP-4844 blob transactions
+// - EIP-1559 dynamic fee transactions
+// - EIP-2930 access list transactions,
+// - EIP-155 replay protected transactions, and
+// - legacy Homestead transactions.
+func NewDorajiSigner(chainId *big.Int) Signer {
+	return dorajiSigner{londonSigner{eip2930Signer{NewEIP155Signer(chainId)}}}
+}
+
+func (s dorajiSigner) Sender(tx *Transaction) (common.Address, error) {
+	if tx.Type() != SetCodeTxType {
+		return s.londonSigner.Sender(tx)
+	}
+	V, R, S := tx.RawSignatureValues()
+	// Set-code txs are defined to use 0 and 1 as their recovery
+	// id, add 27 to become equivalent to unprotected Homestead signatures.
+	V = new(big.Int).Add(V, big.NewInt(27))
+	if tx.ChainId().Cmp(s.chainId) != 0 {
+		return common.Address{}, ErrInvalidChainId
+	}
+	return recoverPlain(s.Hash(tx), R, S, V, true)
+}
+
+func (s dorajiSigner) Equal(s2 Signer) bool {
+	x, ok := s2.(dorajiSigner)
+	return ok && x.chainId.Cmp(s.chainId) == 0
+}
+
+func (s dorajiSigner) SignatureValues(tx *Transaction, sig []byte) (R, S, V *big.Int, err error) {
+	txdata, ok := tx.inner.(*SetCodeTx)
+	if !ok {
+		return s.londonSigner.SignatureValues(tx, sig)
+	}
+	// Check that chain ID of tx matches the signer. We also accept ID zero here,
+	// because it indicates that the chain ID was not specified in the tx.
+	if txdata.ChainID != nil && txdata.ChainID.Sign() != 0 && txdata.ChainID.ToBig().Cmp(s.chainId) != 0 {
+		return nil, nil, nil, ErrInvalidChainId
+	}
+	R, S, _ = decodeSignature(sig)
+	V = big.NewInt(int64(sig[64]))
+	return R, S, V, nil
+}
+
+// Hash returns the hash to be signed by the sender.
+// It does not uniquely identify the transaction.
+func (s dorajiSigner) Hash(tx *Transaction) common.Hash {
+	if tx.Type() != SetCodeTxType {
+		return s.londonSigner.Hash(tx)
+	}
+	return tx.inner.(*SetCodeTx).sigHash(s.chainId)
+}
+
 type feeDelegateSigner struct{ londonSigner }
 
 func NewFeeDelegateSigner(chainId *big.Int) Signer {

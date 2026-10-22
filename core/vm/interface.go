@@ -57,6 +57,10 @@ type StateDB interface {
 
 	Selfdestruct6780(common.Address)
 
+	// CreateContract marks an account created by CREATE / CREATE2 in the
+	// current transaction (EIP-6780).
+	CreateContract(common.Address)
+
 	// Exist reports whether the given account exists in state.
 	// Notably this should also return true for self-destructed accounts.
 	Exist(common.Address) bool

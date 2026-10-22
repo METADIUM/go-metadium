@@ -38,6 +38,7 @@ var activators = map[int]func(*JumpTable){
 	1344: enable1344,
 	1153: enable1153,
 	7939: enable7939,
+	7702: enable7702,
 }
 
 // EnableEIP enables the given EIP on the config.
@@ -325,6 +326,14 @@ func enable7939(jt *JumpTable) {
 		minStack:    minStack(1, 1),
 		maxStack:    maxStack(1, 1),
 	}
+}
+
+// enable7702 the EIP-7702 changes to support delegation designators.
+func enable7702(jt *JumpTable) {
+	jt[CALL].dynamicGas = gasCallEIP7702
+	jt[CALLCODE].dynamicGas = gasCallCodeEIP7702
+	jt[STATICCALL].dynamicGas = gasStaticCallEIP7702
+	jt[DELEGATECALL].dynamicGas = gasDelegateCallEIP7702
 }
 
 // enable6780 applies EIP-6780 (deactivate SELFDESTRUCT)

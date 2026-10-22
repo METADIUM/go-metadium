@@ -96,11 +96,11 @@ func validateCreation(t *testing.T, cfg *params.ChainConfig, data []byte, gas ui
 // admitted and propagated but could never execute.
 func TestValidateTransactionCamelliaInitcodeGas(t *testing.T) {
 	data := bytes.Repeat([]byte{0x01}, 64) // 2 initcode words, all non-zero bytes
-	preShanghai, err := core.IntrinsicGas(data, nil, true, true, true, false)
+	preShanghai, err := core.IntrinsicGas(data, nil, nil, true, true, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	withInitcode, err := core.IntrinsicGas(data, nil, true, true, true, true)
+	withInitcode, err := core.IntrinsicGas(data, nil, nil, true, true, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}

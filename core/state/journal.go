@@ -88,6 +88,9 @@ type (
 	createObjectChange struct {
 		account *common.Address
 	}
+	createContractChange struct {
+		account *common.Address
+	}
 	resetObjectChange struct {
 		account      *common.Address
 		prev         *stateObject
@@ -158,6 +161,14 @@ func (ch createObjectChange) revert(s *StateDB) {
 
 func (ch createObjectChange) dirtied() *common.Address {
 	return ch.account
+}
+
+func (ch createContractChange) revert(s *StateDB) {
+	s.getStateObject(*ch.account).newContract = false
+}
+
+func (ch createContractChange) dirtied() *common.Address {
+	return nil
 }
 
 func (ch resetObjectChange) revert(s *StateDB) {
