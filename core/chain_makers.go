@@ -345,6 +345,13 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 		if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(b.header.Number) == 0 {
 			misc.ApplyDAOHardFork(statedb)
 		}
+		if config.IsDoraji(b.header.Number) {
+			// EIP-2935, as the state processor does it.
+			blockContext := NewEVMBlockContext(b.header, cm, &b.header.Coinbase)
+			vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, config, vm.Config{})
+			InstallHistoryStorage(statedb)
+			ProcessParentBlockHash(b.header.ParentHash, vmenv, statedb)
+		}
 		// Execute any user modifications to the block
 		if gen != nil {
 			gen(i, b)

@@ -192,6 +192,8 @@ const (
 
 	P256VerifyGas uint64 = 6900 // secp256r1 elliptic curve signature verifier gas price
 
+	HistoryServeWindow = 8191 // Number of blocks to serve historical block hashes for, EIP-2935.
+
 	TxAuthTupleGas uint64 = 12500 // Per auth tuple code specified in EIP-7702
 
 	VrfVerifyGas uint64 = 50000 // @lukepark327: VRF Verify gas price
@@ -238,6 +240,12 @@ var (
 
 	// BeaconRootsStorageAddress is the address where historical beacon roots are stored as per EIP-4788
 	BeaconRootsStorageAddress = common.HexToAddress("0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02")
+	// HistoryStorageAddress is where the historical block hashes are stored as per EIP-2935.
+	HistoryStorageAddress = common.HexToAddress("0x0000F90827F1C53a10cb7A02335B175320002935")
+	// HistoryStorageCode is the code of the EIP-2935 history storage contract. On
+	// Ethereum it is deployed by a transaction before the fork; on Metadium it is
+	// written into the state at the Doraji fork block (docs/doraji-scope.md).
+	HistoryStorageCode = common.FromHex("3373fffffffffffffffffffffffffffffffffffffffe14604657602036036042575f35600143038111604257611fff81430311604257611fff9006545f5260205ff35b5f5ffd5b5f35611fff60014303065500")
 	// SystemAddress is where the system-transaction is sent from as per EIP-4788
 	SystemAddress common.Address = common.HexToAddress("0xfffffffffffffffffffffffffffffffffffffffe")
 )
