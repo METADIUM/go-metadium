@@ -133,7 +133,7 @@ func TestLimboSurrogateEndToEnd(t *testing.T) {
 	}
 	defer os.RemoveAll(poolDir)
 
-	pool := New(DefaultConfig, chain)
+	pool := New(DefaultConfig, chain, nil)
 	if err := pool.Init(params.InitialBaseFee, chain.CurrentBlock(), makeAddressReserver()); err != nil {
 		t.Fatalf("pool.Init: %v", err)
 	}

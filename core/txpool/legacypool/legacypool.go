@@ -21,6 +21,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -66,6 +67,15 @@ var (
 	// ErrTxPoolOverflow is returned if the transaction pool is full and can't accept
 	// another remote transaction.
 	ErrTxPoolOverflow = errors.New("txpool is full")
+
+	// ErrOutOfOrderTxFromDelegated is returned when the transaction with gapped
+	// nonce received from the accounts with delegation or pending delegation.
+	ErrOutOfOrderTxFromDelegated = errors.New("gapped-nonce tx from delegated accounts")
+
+	// ErrAuthorityReserved is returned if a transaction has an authorization
+	// signed by an address which already has in-flight transactions known to the
+	// pool.
+	ErrAuthorityReserved = errors.New("authority already reserved")
 )
 
 var (
@@ -302,11 +312,11 @@ func New(config Config, chain BlockChain) *LegacyPool {
 }
 
 // Filter returns whether the given transaction can be consumed by the legacy
-// pool, specifically, whether it is a Legacy, AccessList, Dynamic or
+// pool, specifically, whether it is a Legacy, AccessList, Dynamic, SetCode or
 // Metadium FeeDelegateDynamicFee (Type 22) transaction.
 func (pool *LegacyPool) Filter(tx *types.Transaction) bool {
 	switch tx.Type() {
-	case types.LegacyTxType, types.AccessListTxType, types.DynamicFeeTxType, types.FeeDelegateDynamicFeeTxType:
+	case types.LegacyTxType, types.AccessListTxType, types.DynamicFeeTxType, types.SetCodeTxType, types.FeeDelegateDynamicFeeTxType:
 		return true
 	default:
 		return false
@@ -666,6 +676,7 @@ func (pool *LegacyPool) validateTxBasics(tx *types.Transaction, local bool) erro
 			1<<types.LegacyTxType |
 			1<<types.AccessListTxType |
 			1<<types.DynamicFeeTxType |
+			1<<types.SetCodeTxType |
 			1<<types.FeeDelegateDynamicFeeTxType, // Metadium Type 22
 		MaxSize: txMaxSize,
 		MinTip:  pool.gasTip.Load().ToBig(),
@@ -739,7 +750,77 @@ func (pool *LegacyPool) validateTx(tx *types.Transaction, local bool) error {
 			return txpool.ErrIncludedTRSList
 		}
 	}
+	return pool.validateAuth(tx)
+}
+
+// checkDelegationLimit determines if the tx sender is delegated or has a
+// pending delegation, and if so, ensures they have at most one in-flight
+// **executable** transaction, e.g. disallow stacked and gapped transactions
+// from the account.
+func (pool *LegacyPool) checkDelegationLimit(tx *types.Transaction) error {
+	from, _ := types.Sender(pool.signer, tx) // validated
+
+	// Short circuit if the sender has neither delegation nor pending delegation.
+	if pool.currentState.GetCodeHash(from) == types.EmptyCodeHash && !pool.all.hasAuth(from) {
+		return nil
+	}
+	pending := pool.pending[from]
+	if pending == nil {
+		// Transaction with gapped nonce is not supported for delegated accounts
+		if pool.pendingNonces.get(from) != tx.Nonce() {
+			return ErrOutOfOrderTxFromDelegated
+		}
+		return nil
+	}
+	// Transaction replacement is supported
+	if pending.Contains(tx.Nonce()) {
+		return nil
+	}
+	return txpool.ErrInflightTxLimitReached
+}
+
+// validateAuth verifies that the transaction complies with code authorization
+// restrictions brought by SetCode transaction type (EIP-7702). Any account
+// with a deployed delegation, or an in-flight authorization to deploy one, is
+// allowed a single transaction slot instead of the standard number, since the
+// account may be swept by an unrelated transaction.
+//
+// Authorizations are not validated against the state here: as long as the
+// enclosing transaction is valid, they are accepted and tracked, and the pool
+// then refuses standard in-flight transactions from those authorities.
+func (pool *LegacyPool) validateAuth(tx *types.Transaction) error {
+	// Allow at most one in-flight tx for delegated accounts or those with a
+	// pending authorization.
+	if err := pool.checkDelegationLimit(tx); err != nil {
+		return err
+	}
+	// For symmetry, allow at most one in-flight tx for any authority with a
+	// pending transaction.
+	//
+	// The blob pool is not consulted: the address reserver this tree shares
+	// between the pools reserves, it does not answer whether an account is
+	// held, and a blob transaction from an authority is the rarer case.
+	if auths := tx.SetCodeAuthorities(); len(auths) > 0 {
+		for _, auth := range auths {
+			var count int
+			if pending := pool.pending[auth]; pending != nil {
+				count += pending.Len()
+			}
+			if queue := pool.queue[auth]; queue != nil {
+				count += queue.Len()
+			}
+			if count > 1 {
+				return ErrAuthorityReserved
+			}
+		}
+	}
 	return nil
+}
+
+// HasPendingAuth returns a flag indicating whether there are pending
+// authorizations from the specific address cached in the pool.
+func (pool *LegacyPool) HasPendingAuth(addr common.Address) bool {
+	return pool.all.hasAuth(addr)
 }
 
 // add validates a transaction and inserts it into the non-executable queue for later
@@ -2062,6 +2143,8 @@ type lookup struct {
 	lock    sync.RWMutex
 	locals  map[common.Hash]*types.Transaction
 	remotes map[common.Hash]*types.Transaction
+
+	auths map[common.Address][]common.Hash // All accounts with a pooled authorization (EIP-7702)
 }
 
 // newLookup returns a new lookup structure.
@@ -2069,6 +2152,7 @@ func newLookup() *lookup {
 	return &lookup{
 		locals:  make(map[common.Hash]*types.Transaction),
 		remotes: make(map[common.Hash]*types.Transaction),
+		auths:   make(map[common.Address][]common.Hash),
 	}
 }
 
@@ -2167,6 +2251,7 @@ func (t *lookup) Add(tx *types.Transaction, local bool) {
 	} else {
 		t.remotes[tx.Hash()] = tx
 	}
+	t.addAuthorities(tx)
 }
 
 // Remove removes a transaction from the lookup.
@@ -2185,8 +2270,55 @@ func (t *lookup) Remove(hash common.Hash) {
 	t.slots -= numSlots(tx)
 	slotsGauge.Update(int64(t.slots))
 
+	t.removeAuthorities(tx)
 	delete(t.locals, hash)
 	delete(t.remotes, hash)
+}
+
+// addAuthorities tracks the supplied tx in relation to each authority it
+// specifies. The caller holds the lock.
+func (t *lookup) addAuthorities(tx *types.Transaction) {
+	for _, addr := range tx.SetCodeAuthorities() {
+		list, ok := t.auths[addr]
+		if !ok {
+			list = []common.Hash{}
+		}
+		if slices.Contains(list, tx.Hash()) {
+			// Don't add duplicates.
+			continue
+		}
+		list = append(list, tx.Hash())
+		t.auths[addr] = list
+	}
+}
+
+// removeAuthorities stops tracking the supplied tx in relation to its
+// authorities. The caller holds the lock.
+func (t *lookup) removeAuthorities(tx *types.Transaction) {
+	hash := tx.Hash()
+	for _, addr := range tx.SetCodeAuthorities() {
+		list := t.auths[addr]
+		// Remove tx from tracker.
+		if i := slices.Index(list, hash); i >= 0 {
+			list = append(list[:i], list[i+1:]...)
+		} else {
+			log.Error("Authority with untracked tx", "addr", addr, "hash", hash)
+		}
+		if len(list) == 0 {
+			// If list is newly empty, delete it entirely.
+			delete(t.auths, addr)
+			continue
+		}
+		t.auths[addr] = list
+	}
+}
+
+// hasAuth returns a flag indicating whether there are pending authorizations
+// from the specified address.
+func (t *lookup) hasAuth(addr common.Address) bool {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+	return len(t.auths[addr]) > 0
 }
 
 // RemoteToLocals migrates the transactions belongs to the given locals to locals

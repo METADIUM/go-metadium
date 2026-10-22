@@ -299,6 +299,8 @@ type BlobPool struct {
 	config  Config                 // Pool configuration
 	reserve txpool.AddressReserver // Address reserver to ensure exclusivity across subpools
 
+	hasPendingAuth func(common.Address) bool // Determine whether the specified address has a pending 7702-auth
+
 	store  billy.Database // Persistent data store for the tx metadata and blobs
 	stored uint64         // Useful data size of all transactions on disk
 	limbo  *limbo         // Persistent data store for the non-finalized blobs
@@ -326,19 +328,57 @@ type BlobPool struct {
 
 // New creates a new blob transaction pool to gather, sort and filter inbound
 // blob transactions from the network.
-func New(config Config, chain BlockChain) *BlobPool {
+//
+// hasPendingAuth, when non-nil, answers whether the legacy pool holds an
+// EIP-7702 authorization for an address; such an address is allowed a single
+// in-flight blob transaction. nil disables the check.
+func New(config Config, chain BlockChain, hasPendingAuth func(common.Address) bool) *BlobPool {
 	// Sanitize the input to ensure no vulnerable gas prices are set
 	config = (&config).sanitize()
 
 	// Create the transaction pool with its initial settings
 	return &BlobPool{
-		config: config,
-		signer: types.LatestSigner(chain.Config()),
-		chain:  chain,
-		lookup: make(map[common.Hash]uint64),
-		index:  make(map[common.Address][]*blobTxMeta),
-		spent:  make(map[common.Address]*uint256.Int),
+		config:         config,
+		signer:         types.LatestSigner(chain.Config()),
+		chain:          chain,
+		hasPendingAuth: hasPendingAuth,
+		lookup:         make(map[common.Hash]uint64),
+		index:          make(map[common.Address][]*blobTxMeta),
+		spent:          make(map[common.Address]*uint256.Int),
 	}
+}
+
+// checkDelegationLimit determines if the tx sender is delegated or has a
+// pending delegation, and if so, ensures they have at most one in-flight
+// **executable** transaction, e.g. disallow stacked and gapped transactions
+// from the account (EIP-7702).
+func (p *BlobPool) checkDelegationLimit(tx *types.Transaction) error {
+	from, _ := types.Sender(p.signer, tx) // validated
+
+	// Short circuit if the sender has neither delegation nor pending delegation.
+	if p.state.GetCodeHash(from) == types.EmptyCodeHash {
+		// Because there is no exclusive lock held between different subpools
+		// when processing transactions, a blob transaction may be accepted
+		// while other SetCode transactions with pending authorities from the
+		// same address are also accepted simultaneously.
+		//
+		// This scenario is considered acceptable, as the rule primarily ensures
+		// that attackers cannot easily and endlessly stack blob transactions
+		// with a delegated or pending delegated sender.
+		if p.hasPendingAuth == nil || !p.hasPendingAuth(from) {
+			return nil
+		}
+	}
+	// Allow a single in-flight pending transaction.
+	pending := p.index[from]
+	if len(pending) == 0 {
+		return nil
+	}
+	// Transaction replacement is supported
+	if pending[0].nonce == tx.Nonce() {
+		return nil
+	}
+	return txpool.ErrInflightTxLimitReached
 }
 
 // Filter returns whether the given transaction can be consumed by the blob pool.
@@ -1222,6 +1262,9 @@ func (p *BlobPool) validateTx(tx *types.Transaction) error {
 		},
 	}
 	if err := txpool.ValidateTransactionWithState(tx, p.signer, stateOpts); err != nil {
+		return err
+	}
+	if err := p.checkDelegationLimit(tx); err != nil {
 		return err
 	}
 	// If the transaction replaces an existing one, ensure that price bumps are
