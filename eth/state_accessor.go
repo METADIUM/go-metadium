@@ -233,6 +233,13 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 	if err != nil {
 		return nil, vm.BlockContext{}, nil, nil, err
 	}
+	// The block's pre-transaction system calls (EIP-4788, EIP-2935) come
+	// before its first transaction, so they come before any state returned.
+	context := core.NewEVMBlockContext(block.Header(), eth.blockchain, nil)
+	{
+		vmenv := vm.NewEVM(context, vm.TxContext{}, statedb, eth.blockchain.Config(), vm.Config{})
+		core.ProcessBlockPrologue(eth.blockchain.Config(), block.Header(), vmenv, statedb)
+	}
 	if txIndex == 0 && len(block.Transactions()) == 0 {
 		return nil, vm.BlockContext{}, statedb, release, nil
 	}
@@ -242,7 +249,6 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 		// Assemble the transaction call message and return if the requested offset
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		txContext := core.NewEVMTxContext(msg)
-		context := core.NewEVMBlockContext(block.Header(), eth.blockchain, nil)
 		if idx == txIndex {
 			return msg, context, statedb, release, nil
 		}
