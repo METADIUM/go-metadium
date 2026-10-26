@@ -1486,6 +1486,14 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, w.chainConfig, vm.Config{})
 		core.ProcessBeaconBlockRoot(*header.ParentBeaconRoot, vmenv, env.state)
 	}
+	// EIP-2935: record the parent block hash in the history contract (Doraji),
+	// as the state processor does for every block it verifies.
+	if w.chainConfig.IsDoraji(header.Number) {
+		context := core.NewEVMBlockContext(header, w.chain, nil)
+		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, w.chainConfig, vm.Config{})
+		core.InstallHistoryStorage(env.state)
+		core.ProcessParentBlockHash(header.ParentHash, vmenv, env.state)
+	}
 	return env, nil
 }
 
