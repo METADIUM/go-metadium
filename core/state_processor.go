@@ -77,15 +77,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		vmenv   = vm.NewEVM(context, vm.TxContext{}, statedb, p.config, cfg)
 		signer  = types.MakeSigner(p.config, header.Number, header.Time)
 	)
-	// EIP-4788: process parent beacon block root if present (Cancun).
-	if header.ParentBeaconRoot != nil {
-		ProcessBeaconBlockRoot(*header.ParentBeaconRoot, vmenv, statedb)
-	}
-	// EIP-2935: record the parent block hash in the history contract (Doraji).
-	if p.config.IsDoraji(header.Number) {
-		InstallHistoryStorage(statedb)
-		ProcessParentBlockHash(header.ParentHash, vmenv, statedb)
-	}
+	ProcessBlockPrologue(p.config, header, vmenv, statedb)
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
@@ -178,6 +170,23 @@ func ApplyTransaction(config *params.ChainConfig, bc ChainContext, author *commo
 	txContext := NewEVMTxContext(msg)
 	vmenv := vm.NewEVM(blockContext, txContext, statedb, config, cfg)
 	return applyTransaction(msg, config, gp, statedb, header.Number, header.Hash(), tx, usedGas, fees, vmenv)
+}
+
+// ProcessBlockPrologue applies the system calls that a block runs before its
+// first transaction: the EIP-4788 beacon root call when the header carries a
+// parent beacon root (Cancun), and from Doraji the EIP-2935 history storage
+// install and parent-hash call. It is the one place these calls live, so
+// that block processing, block production, the chain maker and every path
+// that re-executes a block (state at a transaction, the tracers, t8n) apply
+// the same state before the transactions and agree on the roots.
+func ProcessBlockPrologue(config *params.ChainConfig, header *types.Header, vmenv *vm.EVM, statedb *state.StateDB) {
+	if header.ParentBeaconRoot != nil {
+		ProcessBeaconBlockRoot(*header.ParentBeaconRoot, vmenv, statedb)
+	}
+	if config.IsDoraji(header.Number) {
+		InstallHistoryStorage(statedb)
+		ProcessParentBlockHash(header.ParentHash, vmenv, statedb)
+	}
 }
 
 // InstallHistoryStorage writes the EIP-2935 history storage contract into the

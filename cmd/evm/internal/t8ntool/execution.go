@@ -188,9 +188,18 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig,
 		chainConfig.DAOForkBlock.Cmp(new(big.Int).SetUint64(pre.Env.Number)) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
+	// The pre-transaction system calls, as StateProcessor.Process runs them.
+	// t8n has no header, so the two are applied by hand from the environment;
+	// the parent hash is the supplied block hash of the previous number, as
+	// upstream does, and without block hashes nothing is recorded.
+	evm := vm.NewEVM(vmContext, vm.TxContext{}, statedb, chainConfig, vmConfig)
 	if beaconRoot := pre.Env.ParentBeaconBlockRoot; beaconRoot != nil {
-		evm := vm.NewEVM(vmContext, vm.TxContext{}, statedb, chainConfig, vmConfig)
 		core.ProcessBeaconBlockRoot(*beaconRoot, evm, statedb)
+	}
+	if pre.Env.BlockHashes != nil && pre.Env.Number > 0 && chainConfig.IsDoraji(new(big.Int).SetUint64(pre.Env.Number)) {
+		prevHash := pre.Env.BlockHashes[math.HexOrDecimal64(pre.Env.Number-1)]
+		core.InstallHistoryStorage(statedb)
+		core.ProcessParentBlockHash(prevHash, evm, statedb)
 	}
 
 	for i := 0; txIt.Next(); i++ {
