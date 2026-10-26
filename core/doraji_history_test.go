@@ -132,3 +132,34 @@ func TestDorajiHistoryFromGenesis(t *testing.T) {
 		t.Fatal("history contract in the genesis state")
 	}
 }
+
+// TestDorajiHistoryServeWindowInCode: the contract's ring buffer size is baked
+// into its bytecode as PUSH2 operands; params.HistoryServeWindow must be that
+// value, or a node answering a serve-window question from the constant would
+// disagree with the contract.
+func TestDorajiHistoryServeWindowInCode(t *testing.T) {
+	code := params.HistoryStorageCode
+	var push2 []uint64
+	for pc := 0; pc < len(code); pc++ {
+		op := vm.OpCode(code[pc])
+		if !op.IsPush() {
+			continue
+		}
+		size := int(op - vm.PUSH1 + 1)
+		if pc+size >= len(code) {
+			t.Fatalf("push at %d runs past the end of the code", pc)
+		}
+		if op == vm.PUSH2 {
+			push2 = append(push2, uint64(code[pc+1])<<8|uint64(code[pc+2]))
+		}
+		pc += size
+	}
+	if len(push2) == 0 {
+		t.Fatal("no PUSH2 in the history contract code")
+	}
+	for i, v := range push2 {
+		if v != params.HistoryServeWindow {
+			t.Fatalf("PUSH2 operand %d = %d, want HistoryServeWindow %d", i, v, params.HistoryServeWindow)
+		}
+	}
+}

@@ -57,3 +57,44 @@ ported; the upstream test vectors that exercise them are skipped.
 - The public chains get their fork blocks once the rule set is complete and
   verified on the testnet. Private networks that start after that set
   `"dorajiBlock": 0`.
+
+## For wallets, SDKs and explorers
+
+| What | Where | Notes |
+|---|---|---|
+| Set-code transaction | type `0x04` | Fields as on Ethereum (`authorizationList` of `chainId`, `address`, `nonce`, `yParity`, `r`, `s`). A transaction is either type `0x04` or fee-delegated type `0x16`, never both |
+| Delegated account code | `0xef0100` ‖ address | What `eth_getCode` returns for an account that has delegated |
+| BLS12-381 | `0x0b`–`0x11` | G1ADD, G1MSM, G2ADD, G2MSM, PAIRING, MAP_FP_TO_G1, MAP_FP2_TO_G2, Ethereum's gas schedule |
+| P256VERIFY | `0x100` | 6,900 gas |
+| History storage | `0x0000F90827F1C53a10cb7A02335B175320002935` | Holds the last 8,191 block hashes. The code is written at the fork block, so the contract has no creation transaction |
+| CLZ | opcode `0x1e` | |
+| VRF (Metadium) | `0x13` | Unchanged |
+
+Transactions keep the limits they have today: no per-transaction gas cap, no
+calldata floor, no block size cap beyond the gas limit.
+
+## Verification
+
+**Upstream vectors.** The state tests of
+[execution-spec-tests](https://github.com/ethereum/execution-spec-tests) v5.4.0
+(the final Osaka release; `build/checksums.txt`) run in CI (`TestExecutionSpecState`).
+Their `Osaka` vectors run under the Doraji rule set, as do `Prague` vectors
+that have no Osaka counterpart. A vector is skipped, with its reason in the
+test output, when:
+
+- it is a `Prague` vector of something Osaka changed — the Osaka variant is the
+  one Doraji follows;
+- its expected result includes the EIP-7623 calldata floor (the test runs the
+  vector once and compares gas used with the floor), or it exercises 7825,
+  7623 or the PeerDAS blob limit directly.
+
+Vectors that differ because of Metadium policy on every fork — the VRF
+precompile at `0x13`, and the 253,952 / 507,904-byte code and initcode limits
+— are marked as expected failures, so a change to that policy shows up. The
+block tests are skipped as before: the Metadium header differs from Ethereum's.
+
+**Private network.** `tests/private-net-poa/doraji-test.sh` checks each EIP on
+a three-node network across the fork block (`DORAJI_BLOCK=<n> ./setup.sh`):
+absent before it, working after it, including a delegation through a set-code
+transaction and the hash history contract; then it sends a 254 KB contract
+creation to show the transaction limits are unchanged.

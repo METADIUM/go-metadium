@@ -48,11 +48,24 @@ func TestDorajiModExpSet(t *testing.T) {
 	if !ok || !cancun.eip2565 || cancun.eip7883 || cancun.eip7823 {
 		t.Fatalf("cancun 0x05 = %#v, want bigModExp with eip2565 only", PrecompiledContractsCancun[addr])
 	}
+	// The sets that price pre-Camellia history keep their flags: Berlin
+	// (EIP-2565) and Istanbul (EIP-198 pricing).
+	berlin, ok := PrecompiledContractsBerlin[addr].(*bigModExp)
+	if !ok || !berlin.eip2565 || berlin.eip7883 || berlin.eip7823 {
+		t.Fatalf("berlin 0x05 = %#v, want bigModExp with eip2565 only", PrecompiledContractsBerlin[addr])
+	}
+	istanbul, ok := PrecompiledContractsIstanbul[addr].(*bigModExp)
+	if !ok || istanbul.eip2565 || istanbul.eip7883 || istanbul.eip7823 {
+		t.Fatalf("istanbul 0x05 = %#v, want bigModExp with no flags", PrecompiledContractsIstanbul[addr])
+	}
 
 	// EIP-7883 raises the minimum from 200 to 500 and reprices the rest.
 	small := modExpInput(32)
 	if g := cancun.RequiredGas(small); g != 200 {
 		t.Fatalf("cancun gas for a small input %d, want 200 (EIP-2565 minimum)", g)
+	}
+	if g := berlin.RequiredGas(small); g != 200 {
+		t.Fatalf("berlin gas for a small input %d, want 200 (EIP-2565 minimum)", g)
 	}
 	if g := doraji.RequiredGas(small); g != 500 {
 		t.Fatalf("doraji gas for a small input %d, want 500 (EIP-7883 minimum)", g)
