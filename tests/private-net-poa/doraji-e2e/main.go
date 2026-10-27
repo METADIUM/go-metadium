@@ -234,6 +234,12 @@ func checkHistoryStorage(ec *ethclient.Client, gc *gethclient.Client, rc *rpc.Cl
 	} else {
 		bad("at the fork block: code %d bytes, err %v", len(code), err)
 	}
+	// The contract serves the last HistoryServeWindow blocks and reverts for
+	// anything older; BLOCKHASH answers for the last 256. Both windows are
+	// taken from the head at the time of the call, so what is expected of a
+	// block depends on how far the chain has moved on: right after the fork
+	// the fork's parent is in both windows, hours later in neither. The
+	// checks below say which case they are in rather than assume the first.
 	head, _ := ec.BlockNumber(ctx)
 	probe := common.HexToAddress("0x000000000000000000000000000000000000c12b")
 	for _, n := range []uint64{forkBlock - 1, head - 1} {
@@ -245,21 +251,48 @@ func checkHistoryStorage(ec *ethclient.Client, gc *gethclient.Client, rc *rpc.Cl
 			continue
 		}
 		num := common.LeftPadBytes(new(big.Int).SetUint64(n).Bytes(), 32)
+		out, err := call(ec, addr, num, nil)
+		if head-n > params.HistoryServeWindow {
+			if err != nil {
+				ok("block %d is %d blocks behind the head, outside the window: the contract reverts", n, head-n)
+			} else {
+				bad("block %d, outside the window: contract returned %x, want a revert", n, out)
+			}
+			continue
+		}
+		if err != nil || common.BytesToHash(out) != block.Hash {
+			bad("block %d: contract %x, node %x, err %v", n, out, block.Hash, err)
+			continue
+		}
+		if head-n > 256 {
+			ok("the contract returns the hash of block %d, beyond BLOCKHASH's reach", n)
+			continue
+		}
 		// PUSH32 n, BLOCKHASH, MSTORE, RETURN 32
 		code := append(append([]byte{0x7f}, num...), common.FromHex("0x4060005260206000f3")...)
 		ov := map[common.Address]gethclient.OverrideAccount{probe: {Code: code}}
-		opcode, err1 := gc.CallContract(ctx, ethereum.CallMsg{To: &probe, Gas: 100_000}, nil, &ov)
-		out, err2 := call(ec, addr, num, nil)
-		if err1 == nil && err2 == nil && common.BytesToHash(out) == block.Hash && common.BytesToHash(opcode) == block.Hash {
+		if opcode, err := gc.CallContract(ctx, ethereum.CallMsg{To: &probe, Gas: 100_000}, nil, &ov); err == nil && common.BytesToHash(opcode) == block.Hash {
 			ok("the contract returns the hash of block %d, as BLOCKHASH does", n)
 		} else {
-			bad("block %d: contract %x, BLOCKHASH %x, node %x, errs %v %v", n, out, opcode, block.Hash, err2, err1)
+			bad("block %d: BLOCKHASH %x, node %x, err %v", n, opcode, block.Hash, err)
 		}
 	}
-	if out, err := call(ec, addr, common.LeftPadBytes(new(big.Int).SetUint64(forkBlock-2).Bytes(), 32), nil); err == nil && common.BytesToHash(out) == (common.Hash{}) {
-		ok("block %d, before the fork's parent, was never recorded", forkBlock-2)
-	} else {
-		bad("block %d: contract returned %x, err %v", forkBlock-2, out, err)
+	// The block before the fork's parent was never recorded: inside the
+	// window the contract returns the empty slot for it, outside it reverts
+	// like for any other old block.
+	unrecorded := forkBlock - 2
+	out, err := call(ec, addr, common.LeftPadBytes(new(big.Int).SetUint64(unrecorded).Bytes(), 32), nil)
+	switch {
+	case head-unrecorded > params.HistoryServeWindow:
+		if err != nil {
+			ok("block %d, never recorded and outside the window: the contract reverts", unrecorded)
+		} else {
+			bad("block %d, outside the window: contract returned %x, want a revert", unrecorded, out)
+		}
+	case err == nil && common.BytesToHash(out) == (common.Hash{}):
+		ok("block %d, before the fork's parent, was never recorded", unrecorded)
+	default:
+		bad("block %d: contract returned %x, err %v", unrecorded, out, err)
 	}
 }
 
