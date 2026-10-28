@@ -7,7 +7,7 @@ Metadium blockchain node implementation (go-ethereum v1.13.14 fork). Camellia fo
 - Backend: Go 1.26+ (floor set by the embedded etcd)
 - DB: LevelDB (default) / RocksDB (`-tags rocksdb`)
 - Consensus: Metadium PoA (ethash placeholder, custom sealing)
-- Version: 1.3.0-unstable (feature/doraji; release line is 1.2.3-stable)
+- Version: 1.3.0-stable (Doraji fork; the previous release is m1.2.3)
 
 ## Directory Structure
 - `cmd/geth/` -- main binary entrypoint

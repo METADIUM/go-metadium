@@ -209,6 +209,7 @@ var (
 		ApplepieBlock:    big.NewInt(44_671_396),
 		BokbunjaBlock:    big.NewInt(44_671_396),
 		CamelliaBlock:    big.NewInt(86_449_000), // 2026-05-20 12:00 KST testnet activation
+		DorajiBlock:      big.NewInt(93_963_908), // 2026-11-10 11:00 KST testnet activation
 		Ethash:           new(EthashConfig),
 	}
 

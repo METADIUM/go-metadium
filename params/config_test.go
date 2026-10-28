@@ -225,14 +225,23 @@ func TestDorajiScheduling(t *testing.T) {
 		t.Fatal("banner shows an unscheduled fork")
 	}
 
-	// The public chains schedule the fork in a later change, once the rules
-	// it activates are in the tree.
-	for name, pc := range map[string]*ChainConfig{"mainnet": MetadiumMainnetChainConfig, "testnet": MetadiumTestnetChainConfig} {
-		if pc.DorajiBlock != nil {
-			t.Fatalf("%s: dorajiBlock scheduled at %v", name, pc.DorajiBlock)
-		}
-		if pc.IsDoraji(new(big.Int).Lsh(big.NewInt(1), 62)) {
-			t.Fatalf("%s: doraji active with no fork block", name)
-		}
+	// The testnet schedules the fork (m1.3.0); the mainnet gets its block in
+	// a later release, once the testnet has run past its fork.
+	tn := MetadiumTestnetChainConfig
+	if tn.DorajiBlock == nil || tn.DorajiBlock.Cmp(big.NewInt(93_963_908)) != 0 {
+		t.Fatalf("testnet: dorajiBlock = %v, want 93963908", tn.DorajiBlock)
+	}
+	if tn.IsDoraji(big.NewInt(93_963_907)) || !tn.IsDoraji(big.NewInt(93_963_908)) {
+		t.Fatal("testnet: doraji does not activate exactly at the fork block")
+	}
+	if tn.CamelliaBlock.Cmp(tn.DorajiBlock) >= 0 {
+		t.Fatalf("testnet: camelliaBlock %v is not before dorajiBlock %v", tn.CamelliaBlock, tn.DorajiBlock)
+	}
+	mn := MetadiumMainnetChainConfig
+	if mn.DorajiBlock != nil {
+		t.Fatalf("mainnet: dorajiBlock scheduled at %v", mn.DorajiBlock)
+	}
+	if mn.IsDoraji(new(big.Int).Lsh(big.NewInt(1), 62)) {
+		t.Fatal("mainnet: doraji active with no fork block")
 	}
 }

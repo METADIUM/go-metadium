@@ -12361,6 +12361,7 @@ var (
     "applepieBlock": 44671396,
     "bokbunjaBlock": 44671396,
     "camelliaBlock": 86449000,
+    "dorajiBlock": 93963908,
     "ethash": {}
   },
   "difficulty": "0x1",
