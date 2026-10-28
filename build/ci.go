@@ -354,7 +354,9 @@ func downloadSpecTestFixtures(csdb *build.ChecksumDB, cachedir string) string {
 	if err := csdb.DownloadFile(url, archivePath); err != nil {
 		log.Fatal(err)
 	}
-	if err := build.ExtractArchive(archivePath, executionSpecTestsDir); err != nil {
+	// Only the state tests run here (the block tests are skipped: Metadium's
+	// header differs from Ethereum's), and they are under 1 GB of the 8 GB.
+	if err := build.ExtractTarballPrefix(archivePath, executionSpecTestsDir, "fixtures/state_tests/"); err != nil {
 		log.Fatal(err)
 	}
 	return filepath.Join(cachedir, base)

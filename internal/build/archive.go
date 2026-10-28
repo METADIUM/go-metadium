@@ -207,6 +207,21 @@ func ExtractArchive(archive string, dest string) error {
 
 // extractTarball unpacks a .tar.gz file.
 func extractTarball(ar io.Reader, dest string) error {
+	return extractTarballPrefix(ar, dest, "")
+}
+
+// ExtractTarballPrefix unpacks the members of a .tar.gz archive whose path
+// starts with prefix, and skips the rest.
+func ExtractTarballPrefix(archive, dest, prefix string) error {
+	ar, err := os.Open(archive)
+	if err != nil {
+		return err
+	}
+	defer ar.Close()
+	return extractTarballPrefix(ar, dest, prefix)
+}
+
+func extractTarballPrefix(ar io.Reader, dest, prefix string) error {
 	gzr, err := gzip.NewReader(ar)
 	if err != nil {
 		return err
@@ -225,7 +240,7 @@ func extractTarball(ar io.Reader, dest string) error {
 		}
 		// We only care about regular files, directory modes
 		// and special file types are not supported.
-		if header.Typeflag == tar.TypeReg {
+		if header.Typeflag == tar.TypeReg && strings.HasPrefix(header.Name, prefix) {
 			armode := header.FileInfo().Mode()
 			err := extractFile(header.Name, armode, tr, dest)
 			if err != nil {

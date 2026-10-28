@@ -263,6 +263,24 @@ var Forks = map[string]*params.ChainConfig{
 		MergeNetsplitBlock:      big.NewInt(0),
 		TerminalTotalDifficulty: big.NewInt(0),
 	},
+	// Paris is the execution-spec-tests name for the Merge rule set.
+	"Paris": {
+		ChainID:                 big.NewInt(1),
+		HomesteadBlock:          big.NewInt(0),
+		EIP150Block:             big.NewInt(0),
+		EIP155Block:             big.NewInt(0),
+		EIP158Block:             big.NewInt(0),
+		ByzantiumBlock:          big.NewInt(0),
+		ConstantinopleBlock:     big.NewInt(0),
+		PetersburgBlock:         big.NewInt(0),
+		IstanbulBlock:           big.NewInt(0),
+		MuirGlacierBlock:        big.NewInt(0),
+		BerlinBlock:             big.NewInt(0),
+		LondonBlock:             big.NewInt(0),
+		ArrowGlacierBlock:       big.NewInt(0),
+		MergeNetsplitBlock:      big.NewInt(0),
+		TerminalTotalDifficulty: big.NewInt(0),
+	},
 	"Shanghai": {
 		ChainID:                 big.NewInt(1),
 		HomesteadBlock:          big.NewInt(0),
@@ -318,6 +336,13 @@ var Forks = map[string]*params.ChainConfig{
 		ShanghaiTime:            u64(0),
 		CancunTime:              u64(0),
 	},
+	// Metadium has no Prague-only or Osaka-only rule set: the Doraji fork
+	// enables the proof-of-authority subset of both at once (docs/doraji-scope.md).
+	// The upstream Prague and Osaka fixtures therefore both run under the Doraji
+	// rules; the vectors for the EIPs Doraji does not include are skipped by name
+	// in state_test.go.
+	"Prague": dorajiTestConfig(),
+	"Osaka":  dorajiTestConfig(),
 	"ShanghaiToCancunAtTime15k": {
 		ChainID:                 big.NewInt(1),
 		HomesteadBlock:          big.NewInt(0),
@@ -337,6 +362,34 @@ var Forks = map[string]*params.ChainConfig{
 		ShanghaiTime:            u64(0),
 		CancunTime:              u64(15_000),
 	},
+}
+
+// dorajiTestConfig is the Cancun test config with Camellia and Doraji active
+// from genesis, the shape the public chains have once Doraji is scheduled
+// (Camellia maps Shanghai+Cancun and Doraji maps Prague+Osaka onto block
+// numbers; see params.ChainConfig.Rules).
+func dorajiTestConfig() *params.ChainConfig {
+	return &params.ChainConfig{
+		ChainID:                 big.NewInt(1),
+		HomesteadBlock:          big.NewInt(0),
+		EIP150Block:             big.NewInt(0),
+		EIP155Block:             big.NewInt(0),
+		EIP158Block:             big.NewInt(0),
+		ByzantiumBlock:          big.NewInt(0),
+		ConstantinopleBlock:     big.NewInt(0),
+		PetersburgBlock:         big.NewInt(0),
+		IstanbulBlock:           big.NewInt(0),
+		MuirGlacierBlock:        big.NewInt(0),
+		BerlinBlock:             big.NewInt(0),
+		LondonBlock:             big.NewInt(0),
+		ArrowGlacierBlock:       big.NewInt(0),
+		MergeNetsplitBlock:      big.NewInt(0),
+		TerminalTotalDifficulty: big.NewInt(0),
+		ShanghaiTime:            u64(0),
+		CancunTime:              u64(0),
+		CamelliaBlock:           big.NewInt(0),
+		DorajiBlock:             big.NewInt(0),
+	}
 }
 
 // AvailableForks returns the set of defined fork names

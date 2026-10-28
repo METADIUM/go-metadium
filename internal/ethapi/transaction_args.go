@@ -75,6 +75,9 @@ type TransactionArgs struct {
 	// This configures whether blobs are allowed to be passed.
 	blobSidecarAllowed bool
 
+	// For SetCodeTxType (EIP-7702)
+	AuthorizationList []types.SetCodeAuthorization `json:"authorizationList,omitempty"`
+
 	// For FeeDelegateDynamicFeeTxType (Metadium Type 22)
 	FeePayer *common.Address `json:"feePayer,omitempty"`
 
@@ -133,6 +136,11 @@ func (args *TransactionArgs) setDefaults(ctx context.Context, b Backend, skipGas
 		return fmt.Errorf(`too many blobs in transaction (have=%d, max=%d)`, len(args.BlobHashes), maxBlobsPerTransaction)
 	}
 
+	// SetCodeTx fields
+	if err := args.checkSetCode(); err != nil {
+		return err
+	}
+
 	// create check
 	if args.To == nil {
 		if args.BlobHashes != nil {
@@ -165,6 +173,7 @@ func (args *TransactionArgs) setDefaults(ctx context.Context, b Backend, skipGas
 				AccessList:           args.AccessList,
 				BlobFeeCap:           args.BlobFeeCap,
 				BlobHashes:           args.BlobHashes,
+				AuthorizationList:    args.AuthorizationList,
 			}
 			latestBlockNr := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
 			estimated, err := DoEstimateGas(ctx, b, callArgs, latestBlockNr, nil, b.RPCGasCap())
@@ -185,6 +194,29 @@ func (args *TransactionArgs) setDefaults(ctx context.Context, b Backend, skipGas
 		}
 	} else {
 		args.ChainID = (*hexutil.Big)(want)
+	}
+	return nil
+}
+
+// checkSetCode checks the shape of the EIP-7702 fields: a set-code
+// transaction has a recipient and at least one authorization, and is one or
+// the other — it carries no fee delegation (Metadium type 22) and no blobs
+// (docs/doraji-scope.md).
+func (args *TransactionArgs) checkSetCode() error {
+	if args.AuthorizationList == nil {
+		return nil
+	}
+	if len(args.AuthorizationList) == 0 {
+		return errors.New(`need at least 1 authorization in a set-code transaction`)
+	}
+	if args.To == nil {
+		return errors.New(`missing "to" in set-code transaction`)
+	}
+	if args.FeePayer != nil {
+		return errors.New(`a set-code transaction cannot carry a fee payer`)
+	}
+	if args.BlobHashes != nil {
+		return errors.New(`a set-code transaction cannot carry blobs`)
 	}
 	return nil
 }
@@ -445,18 +477,19 @@ func (args *TransactionArgs) ToMessage(globalGasCap uint64, baseFee *big.Int) (*
 		accessList = *args.AccessList
 	}
 	msg := &core.Message{
-		From:              addr,
-		To:                args.To,
-		Value:             value,
-		GasLimit:          gas,
-		GasPrice:          gasPrice,
-		GasFeeCap:         gasFeeCap,
-		GasTipCap:         gasTipCap,
-		Data:              data,
-		AccessList:        accessList,
-		BlobGasFeeCap:     blobFeeCap,
-		BlobHashes:        args.BlobHashes,
-		SkipAccountChecks: true,
+		From:                  addr,
+		To:                    args.To,
+		Value:                 value,
+		GasLimit:              gas,
+		GasPrice:              gasPrice,
+		GasFeeCap:             gasFeeCap,
+		GasTipCap:             gasTipCap,
+		Data:                  data,
+		AccessList:            accessList,
+		BlobGasFeeCap:         blobFeeCap,
+		BlobHashes:            args.BlobHashes,
+		SetCodeAuthorizations: args.AuthorizationList,
+		SkipAccountChecks:     true,
 	}
 	return msg, nil
 }
@@ -466,6 +499,23 @@ func (args *TransactionArgs) ToMessage(globalGasCap uint64, baseFee *big.Int) (*
 func (args *TransactionArgs) toTransaction() *types.Transaction {
 	var data types.TxData
 	switch {
+	case args.AuthorizationList != nil:
+		al := types.AccessList{}
+		if args.AccessList != nil {
+			al = *args.AccessList
+		}
+		data = &types.SetCodeTx{
+			To:         *args.To,
+			ChainID:    uint256.MustFromBig(args.ChainID.ToInt()),
+			Nonce:      uint64(*args.Nonce),
+			Gas:        uint64(*args.Gas),
+			GasFeeCap:  uint256.MustFromBig((*big.Int)(args.MaxFeePerGas)),
+			GasTipCap:  uint256.MustFromBig((*big.Int)(args.MaxPriorityFeePerGas)),
+			Value:      uint256.MustFromBig((*big.Int)(args.Value)),
+			Data:       args.data(),
+			AccessList: al,
+			AuthList:   args.AuthorizationList,
+		}
 	case args.BlobHashes != nil:
 		al := types.AccessList{}
 		if args.AccessList != nil {

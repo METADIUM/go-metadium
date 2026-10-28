@@ -51,6 +51,7 @@ const (
 	AccessListTxType
 	DynamicFeeTxType
 	BlobTxType                  = 3  // EIP-4844
+	SetCodeTxType               = 4  // EIP-7702
 	FeeDelegateDynamicFeeTxType = 22 // fee delegation
 )
 
@@ -227,6 +228,10 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		var inner BlobTx
 		err := rlp.DecodeBytes(b[1:], &inner)
 		return &inner, err
+	case SetCodeTxType:
+		var inner SetCodeTx
+		err := rlp.DecodeBytes(b[1:], &inner)
+		return &inner, err
 	// fee delegation
 	case FeeDelegateDynamicFeeTxType:
 		var inner FeeDelegateDynamicFeeTx
@@ -377,6 +382,38 @@ func (tx *Transaction) MaxFeePerBlobGas() *big.Int {
 // BlobGasFeeCap is an alias for MaxFeePerBlobGas.
 func (tx *Transaction) BlobGasFeeCap() *big.Int {
 	return tx.MaxFeePerBlobGas()
+}
+
+// SetCodeAuthorizations returns the authorizations list of the transaction.
+func (tx *Transaction) SetCodeAuthorizations() []SetCodeAuthorization {
+	setcodetx, ok := tx.inner.(*SetCodeTx)
+	if !ok {
+		return nil
+	}
+	return setcodetx.AuthList
+}
+
+// SetCodeAuthorities returns a list of unique authorities from the
+// authorization list.
+func (tx *Transaction) SetCodeAuthorities() []common.Address {
+	setcodetx, ok := tx.inner.(*SetCodeTx)
+	if !ok {
+		return nil
+	}
+	var (
+		marks = make(map[common.Address]bool)
+		auths = make([]common.Address, 0, len(setcodetx.AuthList))
+	)
+	for _, auth := range setcodetx.AuthList {
+		if addr, err := auth.Authority(); err == nil {
+			if marks[addr] {
+				continue
+			}
+			marks[addr] = true
+			auths = append(auths, addr)
+		}
+	}
+	return auths
 }
 
 // Cost returns gas * gasPrice + value + blob gas cost.

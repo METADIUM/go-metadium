@@ -89,6 +89,14 @@ type stateObject struct {
 
 	// Flag whether the object was created in the current transaction
 	created bool
+
+	// Flag whether the object was created as a contract (CREATE / CREATE2) in
+	// the current transaction. This, and not created, is what EIP-6780 checks:
+	// an account can be brought into existence without a CREATE (by a value
+	// transfer, or by an EIP-7702 authorization that gives it code), and such
+	// an account must survive SELFDESTRUCT. Before EIP-7702 the two flags agree
+	// whenever SELFDESTRUCT can run, because code only arrived through CREATE.
+	newContract bool
 }
 
 // empty returns whether the account is considered empty.
@@ -455,6 +463,7 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 	obj.pendingStorage = s.pendingStorage.Copy()
 	obj.selfDestructed = s.selfDestructed
 	obj.dirtyCode = s.dirtyCode
+	obj.newContract = s.newContract
 	obj.deleted = s.deleted
 	return obj
 }

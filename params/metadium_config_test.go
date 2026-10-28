@@ -3,9 +3,11 @@
 // Every fork block in the built-in Metadium chain configs is consensus- or
 // upgrade-critical state that a go-ethereum rebase can silently revert (the
 // v1.13.14 rebase nil'd testnet PetersburgBlock, which rewinds upgrading
-// 0.10.x nodes by ~80M blocks, and CheckConfigForkOrder is stubbed out in
-// this fork). This table pins every field to its historical value so the
-// next such drift is a CI failure instead of a production discovery.
+// 0.10.x nodes by ~80M blocks, and CheckConfigForkOrder enforces only the
+// PBFT and Doraji settings at startup, not upstream's fork ordering, which
+// runs only in these tests). This table pins every field to its historical
+// value so the next such drift is a CI failure instead of a production
+// discovery.
 
 package params
 
