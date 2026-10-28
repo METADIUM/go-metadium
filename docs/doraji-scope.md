@@ -54,9 +54,10 @@ ported; the upstream test vectors that exercise them are skipped.
   to Doraji, the way Camellia maps `IsShanghai` and `IsCancun`. That mapping
   lands with the EVM and precompile changes, not before, so that a Doraji rule
   set never selects an instruction set this tree does not define.
-- The public chains get their fork blocks once the rule set is complete and
-  verified on the testnet. Private networks that start after that set
-  `"dorajiBlock": 0`.
+- The testnet activates Doraji at block 93,963,908 (2026-11-10 11:00 KST,
+  m1.3.0). The mainnet gets its fork block in a later release, once the
+  testnet has run past its fork. Private networks that start after the fork
+  set `"dorajiBlock": 0`.
 
 ## For wallets, SDKs and explorers
 

@@ -71,6 +71,7 @@ func TestMetadiumChainConfigsPinned(t *testing.T) {
 				"ApplepieBlock":       big.NewInt(44_671_396),
 				"BokbunjaBlock":       big.NewInt(44_671_396),
 				"CamelliaBlock":       big.NewInt(86_449_000),
+				"DorajiBlock":         big.NewInt(93_963_908),
 			},
 			daoFork: true,
 		},
@@ -95,6 +96,7 @@ func TestMetadiumChainConfigsPinned(t *testing.T) {
 			"ApplepieBlock":       c.ApplepieBlock,
 			"BokbunjaBlock":       c.BokbunjaBlock,
 			"CamelliaBlock":       c.CamelliaBlock,
+			"DorajiBlock":         c.DorajiBlock,
 		}
 		for field, want := range network.forks {
 			g := got[field]
