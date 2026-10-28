@@ -97,11 +97,11 @@ func TestEIP3860InitCodeGas(t *testing.T) {
 	}
 
 	// IntrinsicGas with isEIP3860=true (Camellia/Shanghai) should charge extra word gas.
-	gasWithEIP3860, err := core.IntrinsicGas(initcode, nil, true, true, true, true)
+	gasWithEIP3860, err := core.IntrinsicGas(initcode, nil, nil, true, true, true, true)
 	if err != nil {
 		t.Fatalf("T-03: IntrinsicGas (eip3860=true) error: %v", err)
 	}
-	gasWithoutEIP3860, err := core.IntrinsicGas(initcode, nil, true, true, true, false)
+	gasWithoutEIP3860, err := core.IntrinsicGas(initcode, nil, nil, true, true, true, false)
 	if err != nil {
 		t.Fatalf("T-03: IntrinsicGas (eip3860=false) error: %v", err)
 	}

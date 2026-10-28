@@ -80,7 +80,7 @@ func TestBlobPoolDropRestricted(t *testing.T) {
 		blobfee: uint256.NewInt(105),
 		statedb: statedb,
 	}
-	pool := New(Config{Datadir: storage}, chain)
+	pool := New(Config{Datadir: storage}, chain, nil)
 	if err := pool.Init(1, chain.CurrentBlock(), makeAddressReserver()); err != nil {
 		t.Fatalf("failed to create blob pool: %v", err)
 	}

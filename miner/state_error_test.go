@@ -89,6 +89,11 @@ func TestStateReadErrorRefusesBrokenState(t *testing.T) {
 func TestCommitExRefusesBrokenState(t *testing.T) {
 	w, _ := newTestWorker(t, ethashChainConfig, ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
 	defer w.close()
+	// The worker has to be running for commitEx to reach the state check, but
+	// a running worker also builds blocks of its own in the background and
+	// hands them to the engine. Under the unit tests' PoW default the ethash
+	// Seal panics, so skip sealing, as the other ethash tests do.
+	w.skipSealHook = func(*task) bool { return true }
 	w.start()
 
 	env, err := w.prepareWork(&generateParams{timestamp: uint64(time.Now().Unix()), coinbase: testBankAddress})

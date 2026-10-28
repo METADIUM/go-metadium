@@ -55,6 +55,11 @@ var (
 	// making the transaction invalid, rather a DOS protection.
 	ErrOversizedData = errors.New("oversized data")
 
+	// ErrInflightTxLimitReached is returned when the maximum number of in-flight
+	// transactions is reached for specific accounts (EIP-7702 delegated accounts
+	// and accounts with a pending authorization).
+	ErrInflightTxLimitReached = errors.New("in-flight transaction limit reached for delegated accounts")
+
 	// ErrInvalidBlob is returned when a blob transaction's sidecar fails
 	// validation (blob/commitment/proof counts or KZG proof verification). It
 	// marks a cryptographic protocol violation by the sending peer, which should

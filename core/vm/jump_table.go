@@ -57,6 +57,7 @@ var (
 	mergeInstructionSet            = newMergeInstructionSet()
 	shanghaiInstructionSet         = newShanghaiInstructionSet()
 	cancunInstructionSet           = newCancunInstructionSet()
+	dorajiInstructionSet           = newDorajiInstructionSet()
 )
 
 // JumpTable contains the EVM opcodes supported at a given fork.
@@ -78,6 +79,16 @@ func validate(jt JumpTable) JumpTable {
 		}
 	}
 	return jt
+}
+
+// newDorajiInstructionSet returns the Cancun instruction set with the Doraji
+// opcodes: the Prague and Osaka additions that apply to a proof-of-authority
+// chain (docs/doraji-scope.md).
+func newDorajiInstructionSet() JumpTable {
+	instructionSet := newCancunInstructionSet()
+	enable7702(&instructionSet) // EIP-7702 Setcode transaction type
+	enable7939(&instructionSet) // EIP-7939 (CLZ opcode)
+	return validate(instructionSet)
 }
 
 func newCancunInstructionSet() JumpTable {

@@ -77,10 +77,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		vmenv   = vm.NewEVM(context, vm.TxContext{}, statedb, p.config, cfg)
 		signer  = types.MakeSigner(p.config, header.Number, header.Time)
 	)
-	// EIP-4788: process parent beacon block root if present (Cancun).
-	if header.ParentBeaconRoot != nil {
-		ProcessBeaconBlockRoot(*header.ParentBeaconRoot, vmenv, statedb)
-	}
+	ProcessBlockPrologue(p.config, header, vmenv, statedb)
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
@@ -173,6 +170,59 @@ func ApplyTransaction(config *params.ChainConfig, bc ChainContext, author *commo
 	txContext := NewEVMTxContext(msg)
 	vmenv := vm.NewEVM(blockContext, txContext, statedb, config, cfg)
 	return applyTransaction(msg, config, gp, statedb, header.Number, header.Hash(), tx, usedGas, fees, vmenv)
+}
+
+// ProcessBlockPrologue applies the system calls that a block runs before its
+// first transaction: the EIP-4788 beacon root call when the header carries a
+// parent beacon root (Cancun), and from Doraji the EIP-2935 history storage
+// install and parent-hash call. It is the one place these calls live, so
+// that block processing, block production, the chain maker and every path
+// that re-executes a block (state at a transaction, the tracers, t8n) apply
+// the same state before the transactions and agree on the roots.
+func ProcessBlockPrologue(config *params.ChainConfig, header *types.Header, vmenv *vm.EVM, statedb *state.StateDB) {
+	if header.ParentBeaconRoot != nil {
+		ProcessBeaconBlockRoot(*header.ParentBeaconRoot, vmenv, statedb)
+	}
+	if config.IsDoraji(header.Number) {
+		InstallHistoryStorage(statedb)
+		ProcessParentBlockHash(header.ParentHash, vmenv, statedb)
+	}
+}
+
+// InstallHistoryStorage writes the EIP-2935 history storage contract into the
+// state if it is not there. On Ethereum the contract is deployed by a
+// transaction before the fork; Metadium writes it at the fork, as the first
+// step of the first Doraji block, so that no deployment transaction and no
+// external deployer is needed (docs/doraji-scope.md). The account is given
+// nonce 1, as a deployed contract has. This is part of the state transition
+// and runs on the producer and on every verifier alike.
+func InstallHistoryStorage(statedb *state.StateDB) {
+	if statedb.GetCodeSize(params.HistoryStorageAddress) > 0 {
+		return
+	}
+	statedb.SetCode(params.HistoryStorageAddress, params.HistoryStorageCode)
+	if statedb.GetNonce(params.HistoryStorageAddress) == 0 {
+		statedb.SetNonce(params.HistoryStorageAddress, 1)
+	}
+	statedb.Finalise(true)
+}
+
+// ProcessParentBlockHash stores the parent block hash in the history storage
+// contract as per EIP-2935. This method is exported to be used in tests.
+func ProcessParentBlockHash(prevHash common.Hash, vmenv *vm.EVM, statedb *state.StateDB) {
+	msg := &Message{
+		From:      params.SystemAddress,
+		GasLimit:  30_000_000,
+		GasPrice:  common.Big0,
+		GasFeeCap: common.Big0,
+		GasTipCap: common.Big0,
+		To:        &params.HistoryStorageAddress,
+		Data:      prevHash.Bytes(),
+	}
+	vmenv.Reset(NewEVMTxContext(msg), statedb)
+	statedb.AddAddressToAccessList(params.HistoryStorageAddress)
+	_, _, _ = vmenv.Call(vm.AccountRef(msg.From), *msg.To, msg.Data, 30_000_000, common.U2560)
+	statedb.Finalise(true)
 }
 
 // ProcessBeaconBlockRoot applies the EIP-4788 system call to the beacon block root

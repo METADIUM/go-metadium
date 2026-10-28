@@ -19,6 +19,7 @@ package params
 import (
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,6 +94,40 @@ func TestCheckCompatible(t *testing.T) {
 			},
 		},
 		{
+			stored:    &ChainConfig{CamelliaBlock: big.NewInt(30), DorajiBlock: big.NewInt(30)},
+			new:       &ChainConfig{CamelliaBlock: big.NewInt(30), DorajiBlock: big.NewInt(30)},
+			headBlock: 40,
+			wantErr:   nil,
+		},
+		{
+			stored:    &ChainConfig{CamelliaBlock: big.NewInt(30)},
+			new:       &ChainConfig{CamelliaBlock: big.NewInt(30), DorajiBlock: big.NewInt(50)},
+			headBlock: 40,
+			wantErr:   nil,
+		},
+		{
+			stored:    &ChainConfig{CamelliaBlock: big.NewInt(30)},
+			new:       &ChainConfig{CamelliaBlock: big.NewInt(30), DorajiBlock: big.NewInt(31)},
+			headBlock: 40,
+			wantErr: &ConfigCompatError{
+				What:          "Doraji fork block",
+				StoredBlock:   nil,
+				NewBlock:      big.NewInt(31),
+				RewindToBlock: 30,
+			},
+		},
+		{
+			stored:    &ChainConfig{CamelliaBlock: big.NewInt(30), DorajiBlock: big.NewInt(35)},
+			new:       &ChainConfig{CamelliaBlock: big.NewInt(30), DorajiBlock: big.NewInt(36)},
+			headBlock: 40,
+			wantErr: &ConfigCompatError{
+				What:          "Doraji fork block",
+				StoredBlock:   big.NewInt(35),
+				NewBlock:      big.NewInt(36),
+				RewindToBlock: 34,
+			},
+		},
+		{
 			stored:        &ChainConfig{ShanghaiTime: newUint64(10)},
 			new:           &ChainConfig{ShanghaiTime: newUint64(20)},
 			headTimestamp: 9,
@@ -135,5 +170,78 @@ func TestConfigRules(t *testing.T) {
 	stamp = math.MaxInt64
 	if r := c.Rules(big.NewInt(0), true, stamp); !r.IsShanghai {
 		t.Errorf("expected %v to be shanghai", stamp)
+	}
+}
+
+// TestDorajiScheduling: Doraji must come at or after Camellia, cannot be set
+// without it, is reported by the rules and the banner, and is not scheduled
+// on either public chain yet.
+func TestDorajiScheduling(t *testing.T) {
+	base := func() *ChainConfig {
+		c := *TestChainConfig
+		c.CamelliaBlock = big.NewInt(100)
+		return &c
+	}
+	c := base()
+	c.DorajiBlock = big.NewInt(100)
+	if err := c.CheckConfigForkOrder(); err != nil {
+		t.Fatalf("doraji at camellia: unexpected error %v", err)
+	}
+	c.DorajiBlock = big.NewInt(99)
+	if err := c.CheckConfigForkOrder(); err == nil || !strings.Contains(err.Error(), "before camelliaBlock") {
+		t.Fatalf("doraji before camellia: want an ordering error, got %v", err)
+	}
+	if err := c.checkForkOrder(); err == nil || !strings.Contains(err.Error(), "dorajiBlock") {
+		t.Fatalf("doraji before camellia: upstream ordering check did not name dorajiBlock: %v", err)
+	}
+	c = base()
+	c.CamelliaBlock = nil
+	c.DorajiBlock = big.NewInt(100)
+	if err := c.CheckConfigForkOrder(); err == nil || !strings.Contains(err.Error(), "without camelliaBlock") {
+		t.Fatalf("doraji without camellia: want an error, got %v", err)
+	}
+
+	c = base()
+	c.DorajiBlock = big.NewInt(100)
+	if r := c.Rules(big.NewInt(99), false, 0); r.IsDoraji {
+		t.Fatal("block 99: doraji before the fork block")
+	}
+	if r := c.Rules(big.NewInt(100), false, 0); !r.IsDoraji || !r.IsCamellia {
+		t.Fatalf("block 100: rules = doraji %v camellia %v", r.IsDoraji, r.IsCamellia)
+	}
+	// Doraji stands in for the upstream forks it takes its rules from, the
+	// way Camellia stands in for Shanghai and Cancun.
+	if r := c.Rules(big.NewInt(99), false, 0); r.IsPrague || r.IsOsaka {
+		t.Fatalf("block 99: rules = prague %v osaka %v", r.IsPrague, r.IsOsaka)
+	}
+	if r := c.Rules(big.NewInt(100), false, 0); !r.IsPrague || !r.IsOsaka {
+		t.Fatalf("block 100: rules = prague %v osaka %v", r.IsPrague, r.IsOsaka)
+	}
+	if !strings.Contains(c.Description(), "Doraji Fork:                 #100") {
+		t.Fatalf("banner does not show the fork block:\n%s", c.Description())
+	}
+	c.DorajiBlock = nil
+	if strings.Contains(c.Description(), "Doraji") {
+		t.Fatal("banner shows an unscheduled fork")
+	}
+
+	// The testnet schedules the fork (m1.3.0); the mainnet gets its block in
+	// a later release, once the testnet has run past its fork.
+	tn := MetadiumTestnetChainConfig
+	if tn.DorajiBlock == nil || tn.DorajiBlock.Cmp(big.NewInt(93_963_908)) != 0 {
+		t.Fatalf("testnet: dorajiBlock = %v, want 93963908", tn.DorajiBlock)
+	}
+	if tn.IsDoraji(big.NewInt(93_963_907)) || !tn.IsDoraji(big.NewInt(93_963_908)) {
+		t.Fatal("testnet: doraji does not activate exactly at the fork block")
+	}
+	if tn.CamelliaBlock.Cmp(tn.DorajiBlock) >= 0 {
+		t.Fatalf("testnet: camelliaBlock %v is not before dorajiBlock %v", tn.CamelliaBlock, tn.DorajiBlock)
+	}
+	mn := MetadiumMainnetChainConfig
+	if mn.DorajiBlock != nil {
+		t.Fatalf("mainnet: dorajiBlock scheduled at %v", mn.DorajiBlock)
+	}
+	if mn.IsDoraji(new(big.Int).Lsh(big.NewInt(1), 62)) {
+		t.Fatal("mainnet: doraji active with no fork block")
 	}
 }

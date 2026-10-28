@@ -164,6 +164,12 @@ func (b *testBackend) StateAtTransaction(ctx context.Context, block *types.Block
 	if err != nil {
 		return nil, vm.BlockContext{}, nil, nil, errStateNotFound
 	}
+	// As eth/state_accessor.go: the block's pre-transaction system calls first.
+	context := core.NewEVMBlockContext(block.Header(), b.chain, nil)
+	{
+		vmenv := vm.NewEVM(context, vm.TxContext{}, statedb, b.chainConfig, vm.Config{})
+		core.ProcessBlockPrologue(b.chainConfig, block.Header(), vmenv, statedb)
+	}
 	if txIndex == 0 && len(block.Transactions()) == 0 {
 		return nil, vm.BlockContext{}, statedb, release, nil
 	}
@@ -172,7 +178,6 @@ func (b *testBackend) StateAtTransaction(ctx context.Context, block *types.Block
 	for idx, tx := range block.Transactions() {
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		txContext := core.NewEVMTxContext(msg)
-		context := core.NewEVMBlockContext(block.Header(), b.chain, nil)
 		if idx == txIndex {
 			return msg, context, statedb, release, nil
 		}

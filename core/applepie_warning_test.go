@@ -17,12 +17,18 @@
 package core
 
 import (
+	"bytes"
 	"math/big"
 	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"golang.org/x/exp/slog"
 )
 
 // TestFeeDelegationOffWarning: a chain configuration without applepieBlock
@@ -86,5 +92,42 @@ func TestFeeDelegationOffWarning(t *testing.T) {
 	// that copied a public chain's fork heights still warns below them.
 	if msg := feeDelegationOffWarning(params.MetadiumMainnetChainConfig, common.Hash{1}, big.NewInt(0)); msg == "" {
 		t.Fatal("private genesis with a future applepieBlock: no warning")
+	}
+}
+
+// TestFeeDelegationOffWarningWiring opens a chain through NewBlockChain and
+// checks what reaches the log, so the call site is covered as well as the
+// helper: a fresh Mainnet or Testnet node at head 0 must not print the
+// warning, and the same genesis with any other hash must.
+func TestFeeDelegationOffWarningWiring(t *testing.T) {
+	old := params.ConsensusMethod
+	params.ConsensusMethod = params.ConsensusPoA
+	t.Cleanup(func() { params.ConsensusMethod = old })
+
+	logged := func(g *Genesis) string {
+		var buf bytes.Buffer
+		prev := log.Root()
+		log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(&buf, slog.LevelWarn, false)))
+		defer log.SetDefault(prev)
+
+		bc, err := NewBlockChain(rawdb.NewMemoryDatabase(), nil, g, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
+		if err != nil {
+			t.Fatalf("NewBlockChain: %v", err)
+		}
+		bc.Stop()
+		return buf.String()
+	}
+	for name, g := range map[string]*Genesis{
+		"mainnet": DefaultGenesisBlock(),
+		"testnet": DefaultTestnetGenesisBlock(),
+	} {
+		if out := logged(g); strings.Contains(out, "type 22") {
+			t.Fatalf("%s from genesis: unexpected warning\n%s", name, out)
+		}
+		private := *g
+		private.ExtraData = append([]byte("private"), g.ExtraData...)
+		if out := logged(&private); !strings.Contains(out, "type 22") {
+			t.Fatalf("%s fork heights on a private genesis: no warning\n%s", name, out)
+		}
 	}
 }

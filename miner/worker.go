@@ -1481,10 +1481,12 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	env.blockGasLimit = blockGasLimit
 	env.baseFeeMaxChangeRate = baseFeeMaxChangeRate
 	env.gasTargetPercentage = gasTargetPercentage
-	if header.ParentBeaconRoot != nil {
+	// The pre-transaction system calls (EIP-4788, EIP-2935), as the state
+	// processor runs them for every block it verifies.
+	{
 		context := core.NewEVMBlockContext(header, w.chain, nil)
 		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, w.chainConfig, vm.Config{})
-		core.ProcessBeaconBlockRoot(*header.ParentBeaconRoot, vmenv, env.state)
+		core.ProcessBlockPrologue(w.chainConfig, header, vmenv, env.state)
 	}
 	return env, nil
 }

@@ -462,7 +462,7 @@ func (s *StateDB) Selfdestruct6780(addr common.Address) {
 		return
 	}
 
-	if stateObject.created {
+	if stateObject.newContract {
 		s.SelfDestruct(addr)
 	}
 }
@@ -682,6 +682,17 @@ func (s *StateDB) CreateAccount(addr common.Address) {
 	}
 }
 
+// CreateContract marks the account at addr as a contract created in the
+// current transaction, the condition EIP-6780 uses to let SELFDESTRUCT delete
+// it. It is called by the EVM's CREATE path right after CreateAccount.
+func (s *StateDB) CreateContract(addr common.Address) {
+	obj := s.getStateObject(addr)
+	if obj != nil && !obj.newContract {
+		obj.newContract = true
+		s.journal.append(createContractChange{account: &addr})
+	}
+}
+
 // Copy creates a deep, independent copy of the state.
 // Snapshots of the copied state cannot be applied to the copy.
 func (s *StateDB) Copy() *StateDB {
@@ -852,6 +863,7 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 			obj.finalise(true) // Prefetch slots in the background
 		}
 		obj.created = false
+		obj.newContract = false
 		s.stateObjectsPending[addr] = struct{}{}
 		s.stateObjectsDirty[addr] = struct{}{}
 

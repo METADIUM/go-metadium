@@ -3,9 +3,11 @@
 // Every fork block in the built-in Metadium chain configs is consensus- or
 // upgrade-critical state that a go-ethereum rebase can silently revert (the
 // v1.13.14 rebase nil'd testnet PetersburgBlock, which rewinds upgrading
-// 0.10.x nodes by ~80M blocks, and CheckConfigForkOrder is stubbed out in
-// this fork). This table pins every field to its historical value so the
-// next such drift is a CI failure instead of a production discovery.
+// 0.10.x nodes by ~80M blocks, and CheckConfigForkOrder enforces only the
+// PBFT and Doraji settings at startup, not upstream's fork ordering, which
+// runs only in these tests). This table pins every field to its historical
+// value so the next such drift is a CI failure instead of a production
+// discovery.
 
 package params
 
@@ -69,6 +71,7 @@ func TestMetadiumChainConfigsPinned(t *testing.T) {
 				"ApplepieBlock":       big.NewInt(44_671_396),
 				"BokbunjaBlock":       big.NewInt(44_671_396),
 				"CamelliaBlock":       big.NewInt(86_449_000),
+				"DorajiBlock":         big.NewInt(93_963_908),
 			},
 			daoFork: true,
 		},
@@ -93,6 +96,7 @@ func TestMetadiumChainConfigsPinned(t *testing.T) {
 			"ApplepieBlock":       c.ApplepieBlock,
 			"BokbunjaBlock":       c.BokbunjaBlock,
 			"CamelliaBlock":       c.CamelliaBlock,
+			"DorajiBlock":         c.DorajiBlock,
 		}
 		for field, want := range network.forks {
 			g := got[field]
