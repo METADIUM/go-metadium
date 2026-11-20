@@ -56,7 +56,8 @@ func (bc *BlockChain) CurrentSnapBlock() *types.Header {
 // CurrentFinalBlock retrieves the current finalized block of the canonical
 // chain. The block is retrieved from the blockchain's internal cache; on
 // Metadium PoA (which has no engine-API finality source), it falls back to
-// a synthesized header at head minus (governance node count + 1).
+// a synthesized header at head minus (governance node count / 2 + 1), the
+// BFT majority lookback; on a PBFT chain it is the head itself.
 func (bc *BlockChain) CurrentFinalBlock() *types.Header {
 	if h := bc.currentFinalBlock.Load(); h != nil {
 		return h
